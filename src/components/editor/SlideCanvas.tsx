@@ -13,6 +13,35 @@ import type { Slide, SlideElement } from "../../types/presentation";
 const SLIDE_WIDTH = 1280;
 const SLIDE_HEIGHT = 720;
 
+type ResizeDirection = "nw" | "ne" | "sw" | "se";
+
+const resizeHandleConfigs: Array<{
+  direction: ResizeDirection;
+  className: string;
+  label: string;
+}> = [
+  {
+    direction: "nw",
+    className: "-left-1.5 -top-1.5 cursor-nwse-resize",
+    label: "左上角调整尺寸",
+  },
+  {
+    direction: "ne",
+    className: "-right-1.5 -top-1.5 cursor-nesw-resize",
+    label: "右上角调整尺寸",
+  },
+  {
+    direction: "sw",
+    className: "-bottom-1.5 -left-1.5 cursor-nesw-resize",
+    label: "左下角调整尺寸",
+  },
+  {
+    direction: "se",
+    className: "-bottom-1.5 -right-1.5 cursor-nwse-resize",
+    label: "右下角调整尺寸",
+  },
+];
+
 type SlideCanvasProps = {
   slide: Slide;
   scale?: number;
@@ -21,6 +50,10 @@ type SlideCanvasProps = {
   onMoveElement?: (
     elementId: string,
     position: { x: number; y: number },
+  ) => void;
+  onResizeElement?: (
+    elementId: string,
+    style: Partial<SlideElement["style"]>,
   ) => void;
   onUpdateElementContent?: (
     elementId: string,
@@ -40,6 +73,7 @@ export function SlideCanvas({
   selectedElementId,
   onSelectElement,
   onMoveElement,
+  onResizeElement,
   onUpdateElementContent,
   slideSurfaceRef,
   animationPreviewKey = 0,
@@ -90,6 +124,7 @@ export function SlideCanvas({
             isEditing={element.id === editingElementId}
             onSelect={onSelectElement}
             onMove={onMoveElement}
+            onResize={onResizeElement}
             onStartEditing={setEditingElementId}
             onStopEditing={() => setEditingElementId(null)}
             onUpdateContent={onUpdateElementContent}
@@ -180,6 +215,7 @@ function SlideElementView({
   isEditing,
   onSelect,
   onMove,
+  onResize,
   onStartEditing,
   onStopEditing,
   onUpdateContent,
@@ -190,6 +226,7 @@ function SlideElementView({
   isEditing: boolean;
   onSelect?: (elementId: string) => void;
   onMove?: (elementId: string, position: { x: number; y: number }) => void;
+  onResize?: (elementId: string, style: Partial<SlideElement["style"]>) => void;
   onStartEditing?: (elementId: string) => void;
   onStopEditing?: () => void;
   onUpdateContent?: (
@@ -208,6 +245,15 @@ function SlideElementView({
     startClientY: number;
     startX: number;
     startY: number;
+  } | null>(null);
+
+  const resizeStateRef = useRef<{
+    startClientX: number;
+    startClientY: number;
+    startX: number;
+    startY: number;
+    startWidth: number;
+    startHeight: number;
   } | null>(null);
 
   useEffect(() => {
@@ -324,9 +370,100 @@ function SlideElementView({
     window.addEventListener("pointerup", handlePointerUp);
   }
 
+  function handleResizePointerDown(
+    direction: ResizeDirection,
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) {
+    const resizeElement = onResize;
+
+    if (!resizeElement || isEditing || event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    resizeStateRef.current = {
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startX: style.x,
+      startY: style.y,
+      startWidth: style.width,
+      startHeight: style.height,
+    };
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      const resizeState = resizeStateRef.current;
+
+      if (!resizeState) {
+        return;
+      }
+
+      const deltaX = (moveEvent.clientX - resizeState.startClientX) / scale;
+      const deltaY = (moveEvent.clientY - resizeState.startClientY) / scale;
+      const minWidth = element.type === "text" ? 48 : 40;
+      const minHeight = element.type === "text" ? 32 : 40;
+
+      let nextX = resizeState.startX;
+      let nextY = resizeState.startY;
+      let nextWidth = resizeState.startWidth;
+      let nextHeight = resizeState.startHeight;
+
+      if (direction.includes("e")) {
+        nextWidth = resizeState.startWidth + deltaX;
+      }
+
+      if (direction.includes("s")) {
+        nextHeight = resizeState.startHeight + deltaY;
+      }
+
+      if (direction.includes("w")) {
+        nextWidth = resizeState.startWidth - deltaX;
+        nextX = resizeState.startX + deltaX;
+      }
+
+      if (direction.includes("n")) {
+        nextHeight = resizeState.startHeight - deltaY;
+        nextY = resizeState.startY + deltaY;
+      }
+
+      if (nextWidth < minWidth) {
+        nextWidth = minWidth;
+
+        if (direction.includes("w")) {
+          nextX = resizeState.startX + resizeState.startWidth - minWidth;
+        }
+      }
+
+      if (nextHeight < minHeight) {
+        nextHeight = minHeight;
+
+        if (direction.includes("n")) {
+          nextY = resizeState.startY + resizeState.startHeight - minHeight;
+        }
+      }
+
+      resizeElement?.(element.id, {
+        x: Math.round(nextX),
+        y: Math.round(nextY),
+        width: Math.round(nextWidth),
+        height: Math.round(nextHeight),
+      });
+    }
+
+    function handlePointerUp() {
+      resizeStateRef.current = null;
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  }
+
   return (
     <div
-      className={`absolute border-0 bg-transparent p-0 text-center transition ${
+      className={`absolute border-0 bg-transparent p-0 text-center ${
         selected ? "ring-2 ring-violet-500 ring-offset-2" : ""
       } ${onMove && !isEditing ? "cursor-move touch-none" : ""}`}
       style={outerStyle}
@@ -361,6 +498,24 @@ function SlideElementView({
           {element.content}
         </span>
       )}
+
+      {selected && onResize && !isEditing ? (
+        <>
+          {resizeHandleConfigs.map((handle) => (
+            <button
+              key={handle.direction}
+              type="button"
+              className={`absolute z-20 h-3 w-3 rounded-full border-2 border-white bg-violet-500 shadow-md ${handle.className}`}
+              aria-label={handle.label}
+              title={handle.label}
+              onPointerDown={(event) =>
+                handleResizePointerDown(handle.direction, event)
+              }
+              onClick={(event) => event.stopPropagation()}
+            />
+          ))}
+        </>
+      ) : null}
     </div>
   );
 }

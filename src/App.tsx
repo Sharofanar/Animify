@@ -1185,6 +1185,11 @@ function App() {
                       style: position,
                     })
                   }
+                  onResizeElement={(elementId, style) =>
+                    handleUpdateElement(elementId, {
+                      style,
+                    })
+                  }
                   onUpdateElementContent={(elementId, content, style) =>
                     handleUpdateElement(elementId, {
                       content,

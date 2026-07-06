@@ -15,6 +15,19 @@ const SLIDE_HEIGHT = 720;
 
 type ResizeDirection = "nw" | "ne" | "sw" | "se";
 
+function getPointerAngle(
+  clientX: number,
+  clientY: number,
+  centerX: number,
+  centerY: number,
+) {
+  return (Math.atan2(clientY - centerY, clientX - centerX) * 180) / Math.PI;
+}
+
+function normalizeRotate(value: number) {
+  return Math.round(((value % 360) + 360) % 360);
+}
+
 const resizeHandleConfigs: Array<{
   direction: ResizeDirection;
   className: string;
@@ -55,6 +68,7 @@ type SlideCanvasProps = {
     elementId: string,
     style: Partial<SlideElement["style"]>,
   ) => void;
+  onRotateElement?: (elementId: string, rotate: number) => void;
   onUpdateElementContent?: (
     elementId: string,
     content: string,
@@ -74,6 +88,7 @@ export function SlideCanvas({
   onSelectElement,
   onMoveElement,
   onResizeElement,
+  onRotateElement,
   onUpdateElementContent,
   slideSurfaceRef,
   animationPreviewKey = 0,
@@ -125,6 +140,7 @@ export function SlideCanvas({
             onSelect={onSelectElement}
             onMove={onMoveElement}
             onResize={onResizeElement}
+            onRotate={onRotateElement}
             onStartEditing={setEditingElementId}
             onStopEditing={() => setEditingElementId(null)}
             onUpdateContent={onUpdateElementContent}
@@ -216,6 +232,7 @@ function SlideElementView({
   onSelect,
   onMove,
   onResize,
+  onRotate,
   onStartEditing,
   onStopEditing,
   onUpdateContent,
@@ -227,6 +244,7 @@ function SlideElementView({
   onSelect?: (elementId: string) => void;
   onMove?: (elementId: string, position: { x: number; y: number }) => void;
   onResize?: (elementId: string, style: Partial<SlideElement["style"]>) => void;
+  onRotate?: (elementId: string, rotate: number) => void;
   onStartEditing?: (elementId: string) => void;
   onStopEditing?: () => void;
   onUpdateContent?: (
@@ -238,6 +256,7 @@ function SlideElementView({
   const style = element.style;
   const animation = element.animations[0];
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const elementNodeRef = useRef<HTMLDivElement | null>(null);
   const [draftContent, setDraftContent] = useState(element.content);
 
   const dragStateRef = useRef<{
@@ -254,6 +273,13 @@ function SlideElementView({
     startY: number;
     startWidth: number;
     startHeight: number;
+  } | null>(null);
+
+  const rotateStateRef = useRef<{
+    centerX: number;
+    centerY: number;
+    startPointerAngle: number;
+    startRotate: number;
   } | null>(null);
 
   useEffect(() => {
@@ -461,8 +487,68 @@ function SlideElementView({
     window.addEventListener("pointerup", handlePointerUp);
   }
 
+  function handleRotatePointerDown(
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) {
+    const rotateElement = onRotate;
+    const rect = elementNodeRef.current?.getBoundingClientRect();
+
+    if (!rotateElement || !rect || isEditing || event.button !== 0) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const startPointerAngle = getPointerAngle(
+      event.clientX,
+      event.clientY,
+      centerX,
+      centerY,
+    );
+
+    rotateStateRef.current = {
+      centerX,
+      centerY,
+      startPointerAngle,
+      startRotate: style.rotate,
+    };
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      const rotateState = rotateStateRef.current;
+
+      if (!rotateState) {
+        return;
+      }
+
+      const currentPointerAngle = getPointerAngle(
+        moveEvent.clientX,
+        moveEvent.clientY,
+        rotateState.centerX,
+        rotateState.centerY,
+      );
+
+      const deltaRotate = currentPointerAngle - rotateState.startPointerAngle;
+      const nextRotate = normalizeRotate(rotateState.startRotate + deltaRotate);
+
+      rotateElement?.(element.id, nextRotate);
+    }
+
+    function handlePointerUp() {
+      rotateStateRef.current = null;
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  }
+
   return (
     <div
+      ref={elementNodeRef}
       className={`absolute border-0 bg-transparent p-0 text-center ${
         selected ? "ring-2 ring-violet-500 ring-offset-2" : ""
       } ${onMove && !isEditing ? "cursor-move touch-none" : ""}`}
@@ -514,6 +600,23 @@ function SlideElementView({
               onClick={(event) => event.stopPropagation()}
             />
           ))}
+        </>
+      ) : null}
+
+      {selected && onRotate && !isEditing ? (
+        <>
+          <div className="absolute left-1/2 top-0 z-10 h-0 w-px -translate-x-1/2 -translate-y-8 border-l border-dashed border-violet-400" />
+
+          <button
+            type="button"
+            className="absolute left-1/2 top-0 z-20 flex h-4 w-4 -translate-x-1/2 -translate-y-10 items-center justify-center rounded-full border-2 border-white bg-violet-500 shadow-md cursor-grab active:cursor-grabbing"
+            aria-label="拖拽旋转"
+            title="拖拽旋转"
+            onPointerDown={handleRotatePointerDown}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-white" />
+          </button>
         </>
       ) : null}
     </div>

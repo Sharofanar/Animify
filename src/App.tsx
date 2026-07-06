@@ -431,89 +431,89 @@ function App() {
     };
   }, []);
 
-    useEffect(() => {
-      if (mode === "present" || !selectedElementId) {
+  useEffect(() => {
+    if (mode === "present" || !selectedElementId) {
+      return;
+    }
+
+    function handleElementNudge(event: KeyboardEvent) {
+      const target = event.target;
+
+      const isTyping =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target instanceof HTMLElement && target.isContentEditable);
+
+      if (isTyping) {
         return;
       }
 
-      function handleElementNudge(event: KeyboardEvent) {
-        const target = event.target;
+      const step = event.shiftKey ? 10 : 1;
+      let deltaX = 0;
+      let deltaY = 0;
 
-        const isTyping =
-          target instanceof HTMLInputElement ||
-          target instanceof HTMLTextAreaElement ||
-          target instanceof HTMLSelectElement ||
-          (target instanceof HTMLElement && target.isContentEditable);
+      if (event.key === "ArrowLeft") {
+        deltaX = -step;
+      } else if (event.key === "ArrowRight") {
+        deltaX = step;
+      } else if (event.key === "ArrowUp") {
+        deltaY = -step;
+      } else if (event.key === "ArrowDown") {
+        deltaY = step;
+      } else {
+        return;
+      }
 
-        if (isTyping) {
-          return;
-        }
+      event.preventDefault();
 
-        const step = event.shiftKey ? 10 : 1;
-        let deltaX = 0;
-        let deltaY = 0;
+      setProject((currentProject) => {
+        let moved = false;
 
-        if (event.key === "ArrowLeft") {
-          deltaX = -step;
-        } else if (event.key === "ArrowRight") {
-          deltaX = step;
-        } else if (event.key === "ArrowUp") {
-          deltaY = -step;
-        } else if (event.key === "ArrowDown") {
-          deltaY = step;
-        } else {
-          return;
-        }
-
-        event.preventDefault();
-
-        setProject((currentProject) => {
-          let moved = false;
-
-          const nextSlides = currentProject.slides.map((slide) => {
-            if (slide.id !== currentProject.activeSlideId) {
-              return slide;
-            }
-
-            return {
-              ...slide,
-              elements: slide.elements.map((element) => {
-                if (element.id !== selectedElementId) {
-                  return element;
-                }
-
-                moved = true;
-
-                return {
-                  ...element,
-                  style: {
-                    ...element.style,
-                    x: element.style.x + deltaX,
-                    y: element.style.y + deltaY,
-                  },
-                };
-              }),
-            };
-          });
-
-          if (!moved) {
-            return currentProject;
+        const nextSlides = currentProject.slides.map((slide) => {
+          if (slide.id !== currentProject.activeSlideId) {
+            return slide;
           }
 
           return {
-            ...currentProject,
-            updatedAt: new Date().toISOString(),
-            slides: nextSlides,
+            ...slide,
+            elements: slide.elements.map((element) => {
+              if (element.id !== selectedElementId) {
+                return element;
+              }
+
+              moved = true;
+
+              return {
+                ...element,
+                style: {
+                  ...element.style,
+                  x: element.style.x + deltaX,
+                  y: element.style.y + deltaY,
+                },
+              };
+            }),
           };
         });
-      }
 
-      window.addEventListener("keydown", handleElementNudge);
+        if (!moved) {
+          return currentProject;
+        }
 
-      return () => {
-        window.removeEventListener("keydown", handleElementNudge);
-      };
-    }, [mode, selectedElementId]);
+        return {
+          ...currentProject,
+          updatedAt: new Date().toISOString(),
+          slides: nextSlides,
+        };
+      });
+    }
+
+    window.addEventListener("keydown", handleElementNudge);
+
+    return () => {
+      window.removeEventListener("keydown", handleElementNudge);
+    };
+  }, [mode, selectedElementId]);
 
   if (!activeSlide) {
     return (
@@ -1188,6 +1188,13 @@ function App() {
                   onResizeElement={(elementId, style) =>
                     handleUpdateElement(elementId, {
                       style,
+                    })
+                  }
+                  onRotateElement={(elementId, rotate) =>
+                    handleUpdateElement(elementId, {
+                      style: {
+                        rotate,
+                      },
                     })
                   }
                   onUpdateElementContent={(elementId, content, style) =>

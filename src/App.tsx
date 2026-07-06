@@ -416,6 +416,90 @@ function App() {
     };
   }, []);
 
+    useEffect(() => {
+      if (mode === "present" || !selectedElementId) {
+        return;
+      }
+
+      function handleElementNudge(event: KeyboardEvent) {
+        const target = event.target;
+
+        const isTyping =
+          target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          target instanceof HTMLSelectElement ||
+          (target instanceof HTMLElement && target.isContentEditable);
+
+        if (isTyping) {
+          return;
+        }
+
+        const step = event.shiftKey ? 10 : 1;
+        let deltaX = 0;
+        let deltaY = 0;
+
+        if (event.key === "ArrowLeft") {
+          deltaX = -step;
+        } else if (event.key === "ArrowRight") {
+          deltaX = step;
+        } else if (event.key === "ArrowUp") {
+          deltaY = -step;
+        } else if (event.key === "ArrowDown") {
+          deltaY = step;
+        } else {
+          return;
+        }
+
+        event.preventDefault();
+
+        setProject((currentProject) => {
+          let moved = false;
+
+          const nextSlides = currentProject.slides.map((slide) => {
+            if (slide.id !== currentProject.activeSlideId) {
+              return slide;
+            }
+
+            return {
+              ...slide,
+              elements: slide.elements.map((element) => {
+                if (element.id !== selectedElementId) {
+                  return element;
+                }
+
+                moved = true;
+
+                return {
+                  ...element,
+                  style: {
+                    ...element.style,
+                    x: element.style.x + deltaX,
+                    y: element.style.y + deltaY,
+                  },
+                };
+              }),
+            };
+          });
+
+          if (!moved) {
+            return currentProject;
+          }
+
+          return {
+            ...currentProject,
+            updatedAt: new Date().toISOString(),
+            slides: nextSlides,
+          };
+        });
+      }
+
+      window.addEventListener("keydown", handleElementNudge);
+
+      return () => {
+        window.removeEventListener("keydown", handleElementNudge);
+      };
+    }, [mode, selectedElementId]);
+
   if (!activeSlide) {
     return (
       <main

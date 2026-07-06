@@ -1,7 +1,11 @@
 import { useDroppable } from "@dnd-kit/core";
 import {
+  useEffect,
   useRef,
+  useState,
   type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import type { Slide, SlideElement } from "../../types/presentation";
@@ -18,6 +22,11 @@ type SlideCanvasProps = {
     elementId: string,
     position: { x: number; y: number },
   ) => void;
+  onUpdateElementContent?: (
+    elementId: string,
+    content: string,
+    style?: Partial<SlideElement["style"]>,
+  ) => void;
   slideSurfaceRef?: { current: HTMLDivElement | null };
   animationPreviewKey?: number;
   chrome?: boolean;
@@ -31,12 +40,15 @@ export function SlideCanvas({
   selectedElementId,
   onSelectElement,
   onMoveElement,
+  onUpdateElementContent,
   slideSurfaceRef,
   animationPreviewKey = 0,
   chrome = true,
   clipOverflow = false,
   bare = false,
 }: SlideCanvasProps) {
+  const [editingElementId, setEditingElementId] = useState<string | null>(null);
+
   const { isOver, setNodeRef } = useDroppable({
     id: "slide-canvas-droppable",
   });
@@ -75,8 +87,12 @@ export function SlideCanvas({
             element={element}
             scale={scale}
             selected={element.id === selectedElementId}
+            isEditing={element.id === editingElementId}
             onSelect={onSelectElement}
             onMove={onMoveElement}
+            onStartEditing={setEditingElementId}
+            onStopEditing={() => setEditingElementId(null)}
+            onUpdateContent={onUpdateElementContent}
           />
         );
       })}
@@ -121,27 +137,87 @@ export function SlideCanvas({
   );
 }
 
+function measureTextElementSize(element: SlideElement, content: string) {
+  if (element.type !== "text") {
+    return undefined;
+  }
+
+  const style = element.style;
+  const fontSize = style.fontSize ?? 16;
+  const fontWeight = style.fontWeight ?? 400;
+  const lines = content.split(/\r?\n/);
+  const canvas = document.createElement("canvas");
+  const context = canvas.getContext("2d");
+
+  if (!context) {
+    return undefined;
+  }
+
+  context.font = `${fontWeight} ${fontSize}px Inter, ui-sans-serif, system-ui, sans-serif`;
+
+  const maxLineWidth = Math.max(
+    ...lines.map((line) => context.measureText(line || " ").width),
+  );
+
+  const nextWidth = Math.max(48, Math.ceil(maxLineWidth + 28));
+  const nextHeight = Math.max(
+    32,
+    Math.ceil(lines.length * fontSize * 1.25 + 18),
+  );
+
+  return {
+    x: Math.round(style.x + (style.width - nextWidth) / 2),
+    y: Math.round(style.y + (style.height - nextHeight) / 2),
+    width: nextWidth,
+    height: nextHeight,
+  };
+}
+
 function SlideElementView({
   element,
   scale,
   selected,
+  isEditing,
   onSelect,
   onMove,
+  onStartEditing,
+  onStopEditing,
+  onUpdateContent,
 }: {
   element: SlideElement;
   scale: number;
   selected: boolean;
+  isEditing: boolean;
   onSelect?: (elementId: string) => void;
   onMove?: (elementId: string, position: { x: number; y: number }) => void;
+  onStartEditing?: (elementId: string) => void;
+  onStopEditing?: () => void;
+  onUpdateContent?: (
+    elementId: string,
+    content: string,
+    style?: Partial<SlideElement["style"]>,
+  ) => void;
 }) {
   const style = element.style;
   const animation = element.animations[0];
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [draftContent, setDraftContent] = useState(element.content);
+
   const dragStateRef = useRef<{
     startClientX: number;
     startClientY: number;
     startX: number;
     startY: number;
   } | null>(null);
+
+  useEffect(() => {
+    if (!isEditing) {
+      return;
+    }
+
+    textareaRef.current?.focus();
+    textareaRef.current?.select();
+  }, [isEditing]);
 
   const outerStyle: CSSProperties = {
     left: style.x * scale,
@@ -163,7 +239,47 @@ function SlideElementView({
       : undefined,
   };
 
-  function handlePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+  function commitContent() {
+    const nextStyle = measureTextElementSize(element, draftContent);
+
+    onUpdateContent?.(element.id, draftContent, nextStyle);
+    onStopEditing?.();
+  }
+
+  function cancelEditing() {
+    setDraftContent(element.content);
+    onStopEditing?.();
+  }
+
+  function handleDoubleClick(event: ReactMouseEvent<HTMLDivElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    onSelect?.(element.id);
+    setDraftContent(element.content);
+    onStartEditing?.(element.id);
+  }
+
+  function handleEditorKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    event.stopPropagation();
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelEditing();
+      return;
+    }
+
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      commitContent();
+    }
+  }
+
+  function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (isEditing) {
+      return;
+    }
+
     onSelect?.(element.id);
 
     const moveElement = onMove;
@@ -209,22 +325,43 @@ function SlideElementView({
   }
 
   return (
-    <button
-      type="button"
+    <div
       className={`absolute border-0 bg-transparent p-0 text-center transition ${
         selected ? "ring-2 ring-violet-500 ring-offset-2" : ""
-      } ${onMove ? "cursor-move touch-none" : ""}`}
+      } ${onMove && !isEditing ? "cursor-move touch-none" : ""}`}
       style={outerStyle}
       onPointerDown={handlePointerDown}
-      onClick={() => onSelect?.(element.id)}
+      onDoubleClick={handleDoubleClick}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSelect?.(element.id);
+      }}
     >
-      <span
-        className="flex h-full w-full items-center justify-center whitespace-pre-wrap wrap-break-word"
-        style={innerStyle}
-      >
-        {element.content}
-      </span>
-    </button>
+      {isEditing ? (
+        <textarea
+          ref={textareaRef}
+          className="h-full w-full resize-none border-0 p-0 text-center outline-none"
+          value={draftContent}
+          style={{
+            ...innerStyle,
+            padding: 8 * scale,
+            lineHeight: 1.2,
+          }}
+          onChange={(event) => setDraftContent(event.target.value)}
+          onBlur={commitContent}
+          onKeyDown={handleEditorKeyDown}
+          onClick={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+        />
+      ) : (
+        <span
+          className="flex h-full w-full items-center justify-center whitespace-pre-wrap wrap-break-word"
+          style={innerStyle}
+        >
+          {element.content}
+        </span>
+      )}
+    </div>
   );
 }
 

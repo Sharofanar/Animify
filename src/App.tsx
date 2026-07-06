@@ -1185,6 +1185,12 @@ function App() {
                       style: position,
                     })
                   }
+                  onUpdateElementContent={(elementId, content, style) =>
+                    handleUpdateElement(elementId, {
+                      content,
+                      style,
+                    })
+                  }
                   slideSurfaceRef={slideSurfaceRef}
                   animationPreviewKey={animationPreviewKey}
                 />

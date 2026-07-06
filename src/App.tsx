@@ -22,6 +22,13 @@ const STORAGE_KEY = "animify-project";
 
 type EditorMode = "edit" | "animation" | "present";
 
+type ProjectUpdater = (
+  currentProject: PresentationProject,
+) => PresentationProject;
+
+const MAX_HISTORY_LENGTH = 60;
+const HISTORY_MERGE_DELAY = 600;
+
 const featureCards = [
   {
     title: "可视化演示编排",
@@ -292,6 +299,10 @@ function App() {
   const [componentPanelOpen, setComponentPanelOpen] = useState(false);
   const [animationPreviewKey, setAnimationPreviewKey] = useState(0);
   const [presentToolbarOpen, setPresentToolbarOpen] = useState(false);
+  const undoStackRef = useRef<PresentationProject[]>([]);
+  const redoStackRef = useRef<PresentationProject[]>([]);
+  const lastHistoryAtRef = useRef(0);
+  const lastHistoryKeyRef = useRef<string | null>(null);
   const slideSurfaceRef = useRef<HTMLDivElement | null>(null);
   const canvasAreaRef = useRef<HTMLDivElement | null>(null);
   const [canvasAreaSize, setCanvasAreaSize] = useState({
@@ -314,6 +325,147 @@ function App() {
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
   }, [project]);
+
+  const commitProjectChange = useCallback(
+    (updater: ProjectUpdater, historyKey = "default") => {
+      setProject((currentProject) => {
+        const nextProject = updater(currentProject);
+
+        if (nextProject === currentProject) {
+          return currentProject;
+        }
+
+        const now = Date.now();
+        const isContinuousElementChange =
+          historyKey.startsWith("move:") ||
+          historyKey.startsWith("resize:") ||
+          historyKey.startsWith("rotate:");
+
+        const shouldMergeWithPrevious =
+          lastHistoryKeyRef.current === historyKey &&
+          (isContinuousElementChange ||
+            now - lastHistoryAtRef.current < HISTORY_MERGE_DELAY);
+
+        if (!shouldMergeWithPrevious) {
+          undoStackRef.current = [
+            ...undoStackRef.current,
+            currentProject,
+          ].slice(-MAX_HISTORY_LENGTH);
+        }
+
+        redoStackRef.current = [];
+        lastHistoryAtRef.current = now;
+        lastHistoryKeyRef.current = historyKey;
+
+        return nextProject;
+      });
+    },
+    [],
+  );
+
+  const finishProjectHistoryGroup = useCallback(() => {
+    lastHistoryAtRef.current = 0;
+    lastHistoryKeyRef.current = null;
+  }, []);
+
+  const undoProject = useCallback(() => {
+    setProject((currentProject) => {
+      const previousProject = undoStackRef.current.at(-1);
+
+      if (!previousProject) {
+        return currentProject;
+      }
+
+      undoStackRef.current = undoStackRef.current.slice(0, -1);
+      redoStackRef.current = [...redoStackRef.current, currentProject].slice(
+        -MAX_HISTORY_LENGTH,
+      );
+      lastHistoryAtRef.current = 0;
+      lastHistoryKeyRef.current = null;
+
+      const previousActiveSlide = previousProject.slides.find(
+        (slide) => slide.id === previousProject.activeSlideId,
+      );
+
+      setSelectedElementId(previousActiveSlide?.elements[0]?.id ?? "");
+      setAnimationPreviewKey((key) => key + 1);
+
+      return previousProject;
+    });
+  }, [setAnimationPreviewKey, setSelectedElementId]);
+
+  const redoProject = useCallback(() => {
+    setProject((currentProject) => {
+      const nextProject = redoStackRef.current.at(-1);
+
+      if (!nextProject) {
+        return currentProject;
+      }
+
+      redoStackRef.current = redoStackRef.current.slice(0, -1);
+      undoStackRef.current = [...undoStackRef.current, currentProject].slice(
+        -MAX_HISTORY_LENGTH,
+      );
+      lastHistoryAtRef.current = 0;
+      lastHistoryKeyRef.current = null;
+
+      const nextActiveSlide = nextProject.slides.find(
+        (slide) => slide.id === nextProject.activeSlideId,
+      );
+
+      setSelectedElementId(nextActiveSlide?.elements[0]?.id ?? "");
+      setAnimationPreviewKey((key) => key + 1);
+
+      return nextProject;
+    });
+  }, [setAnimationPreviewKey, setSelectedElementId]);
+
+  useEffect(() => {
+    function handleHistoryKeyDown(event: KeyboardEvent) {
+      const target = event.target;
+
+      const isTyping =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target instanceof HTMLElement && target.isContentEditable);
+
+      if (isTyping || mode === "present") {
+        return;
+      }
+
+      const isControlKey = event.ctrlKey || event.metaKey;
+
+      if (!isControlKey) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+
+      if (key === "z" && event.shiftKey) {
+        event.preventDefault();
+        redoProject();
+        return;
+      }
+
+      if (key === "z") {
+        event.preventDefault();
+        undoProject();
+        return;
+      }
+
+      if (key === "y") {
+        event.preventDefault();
+        redoProject();
+      }
+    }
+
+    window.addEventListener("keydown", handleHistoryKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleHistoryKeyDown);
+    };
+  }, [mode, redoProject, undoProject]);
 
   const handlePresentSlideStep = useCallback(
     (direction: 1 | -1) => {
@@ -467,7 +619,7 @@ function App() {
 
       event.preventDefault();
 
-      setProject((currentProject) => {
+      commitProjectChange((currentProject) => {
         let moved = false;
 
         const nextSlides = currentProject.slides.map((slide) => {
@@ -505,7 +657,7 @@ function App() {
           updatedAt: new Date().toISOString(),
           slides: nextSlides,
         };
-      });
+      }, `nudge:${selectedElementId}`);
     }
 
     window.addEventListener("keydown", handleElementNudge);
@@ -513,7 +665,7 @@ function App() {
     return () => {
       window.removeEventListener("keydown", handleElementNudge);
     };
-  }, [mode, selectedElementId]);
+  }, [commitProjectChange, mode, selectedElementId]);
 
   if (!activeSlide) {
     return (
@@ -653,7 +805,7 @@ function App() {
       position,
     );
 
-    setProject((currentProject) => ({
+    commitProjectChange((currentProject) => ({
       ...currentProject,
       updatedAt: new Date().toISOString(),
       slides: currentProject.slides.map((slide) => {
@@ -676,40 +828,44 @@ function App() {
     updates: Partial<Omit<SlideElement, "style">> & {
       style?: Partial<SlideElement["style"]>;
     },
+    historyKey = `update-element:${elementId}`,
   ) {
-    setProject((currentProject) => ({
-      ...currentProject,
-      updatedAt: new Date().toISOString(),
-      slides: currentProject.slides.map((slide) => {
-        if (slide.id !== currentProject.activeSlideId) {
-          return slide;
-        }
+    commitProjectChange(
+      (currentProject) => ({
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: currentProject.slides.map((slide) => {
+          if (slide.id !== currentProject.activeSlideId) {
+            return slide;
+          }
 
-        return {
-          ...slide,
-          elements: slide.elements.map((element) => {
-            if (element.id !== elementId) {
-              return element;
-            }
+          return {
+            ...slide,
+            elements: slide.elements.map((element) => {
+              if (element.id !== elementId) {
+                return element;
+              }
 
-            return {
-              ...element,
-              ...updates,
-              style: updates.style
-                ? {
-                    ...element.style,
-                    ...updates.style,
-                  }
-                : element.style,
-            };
-          }),
-        };
+              return {
+                ...element,
+                ...updates,
+                style: updates.style
+                  ? {
+                      ...element.style,
+                      ...updates.style,
+                    }
+                  : element.style,
+              };
+            }),
+          };
+        }),
       }),
-    }));
+      historyKey,
+    );
   }
 
   function handleDeleteElement(elementId: string) {
-    setProject((currentProject) => ({
+    commitProjectChange((currentProject) => ({
       ...currentProject,
       updatedAt: new Date().toISOString(),
       slides: currentProject.slides.map((slide) => {
@@ -737,7 +893,7 @@ function App() {
       | "bring-to-front"
       | "send-to-back",
   ) {
-    setProject((currentProject) => {
+    commitProjectChange((currentProject) => {
       let changed = false;
 
       const nextSlides = currentProject.slides.map((slide) => {
@@ -838,13 +994,13 @@ function App() {
     const firstElementId = demoProject.slides[0]?.elements[0]?.id ?? "";
 
     localStorage.removeItem(STORAGE_KEY);
-    setProject(demoProject);
+    commitProjectChange(() => demoProject);
     setSelectedElementId(firstElementId);
-    setAnimationPreviewKey((key) => key + 1);
+    setAnimationPreviewKey((key) => key + 1); 
   }
 
   function handleAddSlide() {
-    setProject((currentProject) => {
+    commitProjectChange((currentProject) => {
       const newSlide = createBlankSlide(currentProject.slides.length + 1);
       const nextSlides = normalizeSlideTitles([
         ...currentProject.slides,
@@ -881,7 +1037,7 @@ function App() {
   }
 
   function handleDeleteSlide(slideId: string) {
-    setProject((currentProject) => {
+    commitProjectChange((currentProject) => {
       if (currentProject.slides.length <= 1) {
         return currentProject;
       }
@@ -922,7 +1078,7 @@ function App() {
   }
 
   function handleDuplicateSlide(slideId: string) {
-    setProject((currentProject) => {
+    commitProjectChange((currentProject) => {
       const sourceIndex = currentProject.slides.findIndex(
         (slide) => slide.id === slideId,
       );
@@ -960,7 +1116,7 @@ function App() {
       return;
     }
 
-    setProject((currentProject) => {
+    commitProjectChange((currentProject) => {
       const oldIndex = currentProject.slides.findIndex(
         (slide) => slide.id === activeSlideId,
       );
@@ -1047,6 +1203,25 @@ function App() {
             <div className="flex items-center gap-3">
               <div className="rounded-full bg-violet-100 px-4 py-2 text-sm font-medium text-violet-700">
                 Local-First
+              </div>
+              <div className="flex rounded-full bg-slate-100 p-1">
+                <button
+                  type="button"
+                  className="rounded-full px-3 py-2 text-sm font-semibold text-slate-500 transition hover:bg-white hover:text-violet-600"
+                  onClick={undoProject}
+                  title="撤销 Ctrl + Z"
+                >
+                  撤销
+                </button>
+
+                <button
+                  type="button"
+                  className="rounded-full px-3 py-2 text-sm font-semibold text-slate-500 transition hover:bg-white hover:text-violet-600"
+                  onClick={redoProject}
+                  title="重做 Ctrl + Y / Ctrl + Shift + Z"
+                >
+                  重做
+                </button>
               </div>
               <div className="flex rounded-full bg-slate-100 p-1">
                 <button
@@ -1181,28 +1356,45 @@ function App() {
                   selectedElementId={selectedElement?.id}
                   onSelectElement={setSelectedElementId}
                   onMoveElement={(elementId, position) =>
-                    handleUpdateElement(elementId, {
-                      style: position,
-                    })
+                    handleUpdateElement(
+                      elementId,
+                      {
+                        style: position,
+                      },
+                      `move:${elementId}`,
+                    )
                   }
                   onResizeElement={(elementId, style) =>
-                    handleUpdateElement(elementId, {
-                      style,
-                    })
+                    handleUpdateElement(
+                      elementId,
+                      {
+                        style,
+                      },
+                      `resize:${elementId}`,
+                    )
                   }
                   onRotateElement={(elementId, rotate) =>
-                    handleUpdateElement(elementId, {
-                      style: {
-                        rotate,
+                    handleUpdateElement(
+                      elementId,
+                      {
+                        style: {
+                          rotate,
+                        },
                       },
-                    })
+                      `rotate:${elementId}`,
+                    )
                   }
                   onUpdateElementContent={(elementId, content, style) =>
-                    handleUpdateElement(elementId, {
-                      content,
-                      style,
-                    })
+                    handleUpdateElement(
+                      elementId,
+                      {
+                        content,
+                        style,
+                      },
+                      `content:${elementId}:${Date.now()}`,
+                    )
                   }
+                  onFinishElementChange={finishProjectHistoryGroup}
                   slideSurfaceRef={slideSurfaceRef}
                   animationPreviewKey={animationPreviewKey}
                 />

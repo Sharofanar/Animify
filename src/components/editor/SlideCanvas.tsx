@@ -69,6 +69,7 @@ type SlideCanvasProps = {
     style: Partial<SlideElement["style"]>,
   ) => void;
   onRotateElement?: (elementId: string, rotate: number) => void;
+  onFinishElementChange?: () => void;
   onUpdateElementContent?: (
     elementId: string,
     content: string,
@@ -89,6 +90,7 @@ export function SlideCanvas({
   onMoveElement,
   onResizeElement,
   onRotateElement,
+  onFinishElementChange,
   onUpdateElementContent,
   slideSurfaceRef,
   animationPreviewKey = 0,
@@ -141,6 +143,7 @@ export function SlideCanvas({
             onMove={onMoveElement}
             onResize={onResizeElement}
             onRotate={onRotateElement}
+            onFinishChange={onFinishElementChange}
             onStartEditing={setEditingElementId}
             onStopEditing={() => setEditingElementId(null)}
             onUpdateContent={onUpdateElementContent}
@@ -233,6 +236,7 @@ function SlideElementView({
   onMove,
   onResize,
   onRotate,
+  onFinishChange,
   onStartEditing,
   onStopEditing,
   onUpdateContent,
@@ -245,6 +249,7 @@ function SlideElementView({
   onMove?: (elementId: string, position: { x: number; y: number }) => void;
   onResize?: (elementId: string, style: Partial<SlideElement["style"]>) => void;
   onRotate?: (elementId: string, rotate: number) => void;
+  onFinishChange?: () => void;
   onStartEditing?: (elementId: string) => void;
   onStopEditing?: () => void;
   onUpdateContent?: (
@@ -388,6 +393,7 @@ function SlideElementView({
 
     function handlePointerUp() {
       dragStateRef.current = null;
+      onFinishChange?.();
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     }
@@ -479,6 +485,7 @@ function SlideElementView({
 
     function handlePointerUp() {
       resizeStateRef.current = null;
+      onFinishChange?.();
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     }
@@ -538,6 +545,7 @@ function SlideElementView({
 
     function handlePointerUp() {
       rotateStateRef.current = null;
+      onFinishChange?.();
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerUp);
     }

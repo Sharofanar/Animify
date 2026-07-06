@@ -3,10 +3,22 @@ import type {
   SlideElementAnimation,
 } from "../../types/presentation";
 
+type LayerAction =
+  | "bring-forward"
+  | "send-backward"
+  | "bring-to-front"
+  | "send-to-back";
+
 type PropertyPanelProps = {
   selectedElement?: SlideElement;
-  onUpdateElement?: (elementId: string, updates: Partial<SlideElement>) => void;
+  onUpdateElement?: (
+    elementId: string,
+    updates: Partial<Omit<SlideElement, "style">> & {
+      style?: Partial<SlideElement["style"]>;
+    },
+  ) => void;
   onDeleteElement?: (elementId: string) => void;
+  onLayerElement?: (elementId: string, action: LayerAction) => void;
 };
 
 const animationPresets = [
@@ -34,6 +46,7 @@ export function PropertyPanel({
   selectedElement,
   onUpdateElement,
   onDeleteElement,
+  onLayerElement,
 }: PropertyPanelProps) {
   function updateContent(content: string) {
     if (!selectedElement) {
@@ -122,6 +135,14 @@ export function PropertyPanel({
     onDeleteElement?.(selectedElement.id);
   }
 
+  function updateLayer(action: LayerAction) {
+    if (!selectedElement) {
+      return;
+    }
+
+    onLayerElement?.(selectedElement.id, action);
+  }
+
   const currentAnimation = selectedElement?.animations[0];
 
   return (
@@ -151,6 +172,48 @@ export function PropertyPanel({
                 />
               </label>
             </div>
+          </section>
+
+          <section className="rounded-3xl bg-slate-50 p-4">
+            <h3 className="text-sm font-black text-slate-800">图层管理</h3>
+
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                className="rounded-2xl bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm transition hover:bg-violet-50 hover:text-violet-600"
+                onClick={() => updateLayer("bring-forward")}
+              >
+                上移一层
+              </button>
+
+              <button
+                type="button"
+                className="rounded-2xl bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm transition hover:bg-violet-50 hover:text-violet-600"
+                onClick={() => updateLayer("send-backward")}
+              >
+                下移一层
+              </button>
+
+              <button
+                type="button"
+                className="rounded-2xl bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm transition hover:bg-violet-50 hover:text-violet-600"
+                onClick={() => updateLayer("bring-to-front")}
+              >
+                置于顶层
+              </button>
+
+              <button
+                type="button"
+                className="rounded-2xl bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-sm transition hover:bg-violet-50 hover:text-violet-600"
+                onClick={() => updateLayer("send-to-back")}
+              >
+                置于底层
+              </button>
+            </div>
+
+            <p className="mt-3 text-xs leading-5 text-slate-400">
+              上移/下移会优先按重叠元素调整，置顶/置底会按全部元素调整。
+            </p>
           </section>
 
           <section className="rounded-2xl bg-red-50 p-4">

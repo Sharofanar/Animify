@@ -271,6 +271,21 @@ function duplicateSlide(
   };
 }
 
+function areElementsOverlapping(
+  firstElement: SlideElement,
+  secondElement: SlideElement,
+) {
+  const firstStyle = firstElement.style;
+  const secondStyle = secondElement.style;
+
+  return (
+    firstStyle.x < secondStyle.x + secondStyle.width &&
+    firstStyle.x + firstStyle.width > secondStyle.x &&
+    firstStyle.y < secondStyle.y + secondStyle.height &&
+    firstStyle.y + firstStyle.height > secondStyle.y
+  );
+}
+
 function App() {
   const [project, setProject] = useState<PresentationProject>(loadSavedProject);
   const [mode, setMode] = useState<EditorMode>("edit");
@@ -714,6 +729,107 @@ function App() {
     setSelectedElementId("");
   }
 
+  function handleLayerElement(
+    elementId: string,
+    action:
+      | "bring-forward"
+      | "send-backward"
+      | "bring-to-front"
+      | "send-to-back",
+  ) {
+    setProject((currentProject) => {
+      let changed = false;
+
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        const currentIndex = slide.elements.findIndex(
+          (element) => element.id === elementId,
+        );
+
+        if (currentIndex === -1) {
+          return slide;
+        }
+
+        const currentElement = slide.elements[currentIndex];
+
+        if (!currentElement) {
+          return slide;
+        }
+
+        let nextIndex = currentIndex;
+
+        if (action === "bring-forward") {
+          const overlappingUpperIndex = slide.elements.findIndex(
+            (element, index) =>
+              index > currentIndex &&
+              areElementsOverlapping(currentElement, element),
+          );
+
+          if (overlappingUpperIndex === -1) {
+            return slide;
+          }
+
+          nextIndex = overlappingUpperIndex;
+        }
+
+        if (action === "send-backward") {
+          for (let index = currentIndex - 1; index >= 0; index -= 1) {
+            const element = slide.elements[index];
+
+            if (element && areElementsOverlapping(currentElement, element)) {
+              nextIndex = index;
+              break;
+            }
+          }
+
+          if (nextIndex === currentIndex) {
+            return slide;
+          }
+        }
+
+        if (action === "bring-to-front") {
+          nextIndex = slide.elements.length - 1;
+        }
+
+        if (action === "send-to-back") {
+          nextIndex = 0;
+        }
+
+        if (nextIndex === currentIndex) {
+          return slide;
+        }
+
+        const nextElements = [...slide.elements];
+        const [targetElement] = nextElements.splice(currentIndex, 1);
+
+        if (!targetElement) {
+          return slide;
+        }
+
+        nextElements.splice(nextIndex, 0, targetElement);
+        changed = true;
+
+        return {
+          ...slide,
+          elements: nextElements,
+        };
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    });
+  }
+
   function handleExportHtml() {
     exportProjectAsHtml(project);
   }
@@ -1142,6 +1258,7 @@ function App() {
                 selectedElement={selectedElement}
                 onUpdateElement={handleUpdateElement}
                 onDeleteElement={handleDeleteElement}
+                onLayerElement={handleLayerElement}
               />
             </div>
           </section>

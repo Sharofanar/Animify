@@ -1,307 +1,12 @@
-import type {
-  PresentationProject,
-  Slide,
-  SlideElement,
-} from "../types/presentation";
+import type { PresentationProject } from "../types/presentation";
 
-function escapeHtml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function renderElement(element: SlideElement) {
-  const style = element.style;
-  const animation = element.animations[0];
-
-  return `
-    <div
-      class="slide-element"
-      style="
-        left: ${style.x}px;
-        top: ${style.y}px;
-        width: ${style.width}px;
-        height: ${style.height}px;
-        transform: rotate(${style.rotate}deg);
-        opacity: ${style.opacity};
-      "
-    >
-      <div
-        class="slide-element-inner"
-        style="
-          color: ${style.color ?? "#0f172a"};
-          background: ${style.backgroundColor ?? "transparent"};
-          font-size: ${style.fontSize ?? 16}px;
-          font-weight: ${style.fontWeight ?? 400};
-          border-radius: ${style.borderRadius ?? 0}px;
-          ${
-            animation
-              ? `animation: ${animation.keyframes} ${animation.duration}ms ${animation.easing} ${animation.delay}ms both;`
-              : ""
-          }
-        "
-      >
-        ${escapeHtml(element.content)}
-      </div>
-    </div>
-  `;
-}
-
-function renderSlide(slide: Slide, index: number) {
-  return `
-    <section
-      class="slide ${index === 0 ? "active" : ""}"
-      data-slide-index="${index}"
-      style="background: ${slide.backgroundColor};"
-    >
-      ${slide.elements.map(renderElement).join("")}
-    </section>
-  `;
-}
-
-function createHtmlDocument(project: PresentationProject) {
-  const safeTitle = escapeHtml(project.name || "Animify 演示");
-
-  return `<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${safeTitle}</title>
-  <style>
-    * {
-      box-sizing: border-box;
-    }
-
-    html,
-    body {
-      width: 100%;
-      height: 100%;
-      margin: 0;
-      overflow: hidden;
-      background: #020617;
-      font-family:
-        Inter,
-        ui-sans-serif,
-        system-ui,
-        -apple-system,
-        BlinkMacSystemFont,
-        "Segoe UI",
-        sans-serif;
-    }
-
-    body {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    #stage {
-      position: relative;
-      width: ${project.width}px;
-      height: ${project.height}px;
-      overflow: hidden;
-      background: #020617;
-      transform-origin: center center;
-      box-shadow: 0 28px 80px rgba(0, 0, 0, 0.38);
-    }
-
-    .slide {
-      position: absolute;
-      inset: 0;
-      display: none;
-      overflow: hidden;
-    }
-
-    .slide.active {
-      display: block;
-    }
-
-    .slide-element {
-      position: absolute;
-      display: flex;
-      align-items: stretch;
-      justify-content: stretch;
-    }
-
-    .slide-element-inner {
-      width: 100%;
-      height: 100%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      white-space: pre-wrap;
-      overflow-wrap: anywhere;
-      text-align: center;
-    }
-
-    #page-indicator {
-      position: fixed;
-      right: 18px;
-      bottom: 16px;
-      z-index: 10;
-      border-radius: 999px;
-      padding: 8px 14px;
-      background: rgba(15, 23, 42, 0.72);
-      color: white;
-      font-size: 13px;
-      font-weight: 700;
-      backdrop-filter: blur(12px);
-      user-select: none;
-    }
-
-    #help {
-      position: fixed;
-      left: 18px;
-      bottom: 16px;
-      z-index: 10;
-      border-radius: 999px;
-      padding: 8px 14px;
-      background: rgba(15, 23, 42, 0.72);
-      color: white;
-      font-size: 13px;
-      font-weight: 700;
-      backdrop-filter: blur(12px);
-      user-select: none;
-    }
-
-    @keyframes fade-in {
-      from {
-        opacity: 0;
-      }
-
-      to {
-        opacity: 1;
-      }
-    }
-
-    @keyframes slide-up {
-      from {
-        opacity: 0;
-        transform: translateY(32px);
-      }
-
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
-    @keyframes zoom-in {
-      from {
-        opacity: 0;
-        transform: scale(0.85);
-      }
-
-      to {
-        opacity: 1;
-        transform: scale(1);
-      }
-    }
-
-    @keyframes fade-in-up {
-      from {
-        opacity: 0;
-        transform: translateY(24px);
-      }
-
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-  </style>
-</head>
-<body>
-  <main id="stage">
-    ${project.slides.map(renderSlide).join("")}
-  </main>
-
-  <div id="help">点击 / 空格 / 方向键翻页</div>
-  <div id="page-indicator">1 / ${project.slides.length}</div>
-
-  <script>
-    const stage = document.querySelector("#stage");
-    const slides = Array.from(document.querySelectorAll(".slide"));
-    const indicator = document.querySelector("#page-indicator");
-    let currentSlideIndex = 0;
-
-    function fitStage() {
-      const scale = Math.min(
-        window.innerWidth / ${project.width},
-        window.innerHeight / ${project.height}
-      );
-
-      stage.style.transform = "scale(" + scale + ")";
-    }
-
-    function replayAnimations(slide) {
-      const animatedElements = Array.from(
-        slide.querySelectorAll(".slide-element-inner")
-      );
-
-      for (const element of animatedElements) {
-        const animation = element.style.animation;
-        element.style.animation = "none";
-        element.offsetHeight;
-        element.style.animation = animation;
-      }
-    }
-
-    function showSlide(index) {
-      if (index < 0 || index >= slides.length) {
-        return;
-      }
-
-      slides[currentSlideIndex].classList.remove("active");
-      currentSlideIndex = index;
-      slides[currentSlideIndex].classList.add("active");
-
-      indicator.textContent = currentSlideIndex + 1 + " / " + slides.length;
-      replayAnimations(slides[currentSlideIndex]);
-    }
-
-    function nextSlide() {
-      showSlide(currentSlideIndex + 1);
-    }
-
-    function previousSlide() {
-      showSlide(currentSlideIndex - 1);
-    }
-
-    window.addEventListener("resize", fitStage);
-    window.addEventListener("click", nextSlide);
-
-    window.addEventListener("keydown", (event) => {
-      if (
-        event.key === "ArrowRight" ||
-        event.key === " " ||
-        event.key === "Enter" ||
-        event.key === "PageDown"
-      ) {
-        event.preventDefault();
-        nextSlide();
-      }
-
-      if (event.key === "ArrowLeft" || event.key === "PageUp") {
-        event.preventDefault();
-        previousSlide();
-      }
-    });
-
-    fitStage();
-
-    if (slides[0]) {
-      replayAnimations(slides[0]);
-    }
-  </script>
-</body>
-</html>`;
-}
-
+/**
+ * Export the current Animify project as a standalone HTML file.
+ *
+ * Current image assets are stored as Data URLs in project.assets, so embedding
+ * the whole project JSON is enough for the exported file to display images on
+ * another computer. Large video assets should later move to a ZIP export flow.
+ */
 export function exportProjectAsHtml(project: PresentationProject) {
   const html = createHtmlDocument(project);
   const blob = new Blob([html], {
@@ -312,8 +17,320 @@ export function exportProjectAsHtml(project: PresentationProject) {
   const link = document.createElement("a");
 
   link.href = url;
-  link.download = `${project.name || "animify"}.html`;
+  link.download = `${project.name || "animify-presentation"}.html`;
   link.click();
 
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Create a complete HTML player.
+ *
+ * The exported player keeps all slide data and asset references inside one
+ * document, so users can open the file directly without installing Animify.
+ */
+function createHtmlDocument(project: PresentationProject) {
+  const serializedProject = escapeScriptJson(project);
+
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${escapeHtml(project.name || "Animify Presentation")}</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family:
+        Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", "Microsoft YaHei", sans-serif;
+      background: #020617;
+      color: #f8fafc;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at top left, rgba(124, 58, 237, 0.26), transparent 34rem),
+        #020617;
+    }
+
+    #app {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .slide {
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 28px 90px rgba(15, 23, 42, 0.55);
+    }
+
+    .element {
+      position: absolute;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      white-space: pre-wrap;
+      text-align: center;
+      line-height: 1.2;
+      transform-origin: center center;
+    }
+
+    .element-image {
+      background: transparent !important;
+    }
+
+    .element-image img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+      user-select: none;
+      pointer-events: none;
+    }
+
+    .controls {
+      position: fixed;
+      right: 24px;
+      bottom: 24px;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 999px;
+      padding: 10px;
+      background: rgba(15, 23, 42, 0.82);
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.32);
+      backdrop-filter: blur(18px);
+    }
+
+    .controls button {
+      height: 38px;
+      min-width: 38px;
+      border: 0;
+      border-radius: 999px;
+      padding: 0 14px;
+      background: #ffffff;
+      color: #0f172a;
+      cursor: pointer;
+      font-weight: 800;
+      transition:
+        transform 160ms ease,
+        background 160ms ease;
+    }
+
+    .controls button:hover {
+      transform: translateY(-1px);
+      background: #ede9fe;
+    }
+
+    .counter {
+      min-width: 64px;
+      text-align: center;
+      font-size: 13px;
+      font-weight: 800;
+      color: #c4b5fd;
+    }
+
+    .hint {
+      position: fixed;
+      left: 24px;
+      bottom: 24px;
+      z-index: 20;
+      color: rgba(226, 232, 240, 0.72);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <div class="controls" aria-label="放映控制">
+    <button type="button" id="prevButton">上一页</button>
+    <span class="counter" id="slideCounter"></span>
+    <button type="button" id="nextButton">下一页</button>
+  </div>
+
+  <div class="hint">方向键 / 空格翻页，Esc 可退出全屏</div>
+
+  <script>
+    const project = ${serializedProject};
+    let activeSlideIndex = Math.max(
+      0,
+      project.slides.findIndex((slide) => slide.id === project.activeSlideId),
+    );
+
+    const app = document.getElementById("app");
+    const prevButton = document.getElementById("prevButton");
+    const nextButton = document.getElementById("nextButton");
+    const slideCounter = document.getElementById("slideCounter");
+
+    function escapeHtml(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+    }
+
+    function getAsset(assetId) {
+      if (!assetId || !project.assets) {
+        return undefined;
+      }
+
+      return project.assets[assetId];
+    }
+
+    function createElementNode(element) {
+      const style = element.style || {};
+      const asset = getAsset(element.assetId);
+      const node = document.createElement("div");
+
+      node.className =
+        element.type === "image" ? "element element-image" : "element";
+
+      node.style.left = \`\${style.x ?? 0}px\`;
+      node.style.top = \`\${style.y ?? 0}px\`;
+      node.style.width = \`\${style.width ?? 0}px\`;
+      node.style.height = \`\${style.height ?? 0}px\`;
+      node.style.transform = \`rotate(\${style.rotate ?? 0}deg)\`;
+      node.style.opacity = String(style.opacity ?? 1);
+      node.style.color = style.color ?? "#0f172a";
+      node.style.backgroundColor = style.backgroundColor ?? "transparent";
+      node.style.fontSize = \`\${style.fontSize ?? 16}px\`;
+      node.style.fontWeight = String(style.fontWeight ?? 400);
+      node.style.borderRadius = \`\${style.borderRadius ?? 0}px\`;
+
+      // Image elements only store assetId on the slide. Resolve the real image
+      // data from project.assets so exported presentations show the image
+      // instead of the file name.
+      if (element.type === "image" && asset?.type === "image") {
+        const image = document.createElement("img");
+
+        image.src = asset.source;
+        image.alt = asset.name || element.name || "image";
+        image.draggable = false;
+        image.style.borderRadius = \`\${style.borderRadius ?? 0}px\`;
+
+        node.appendChild(image);
+        return node;
+      }
+
+      node.innerHTML = escapeHtml(element.content || "");
+      return node;
+    }
+
+    function renderSlide() {
+      const slide = project.slides[activeSlideIndex];
+
+      if (!slide) {
+        app.innerHTML = "<p>没有找到可播放的页面。</p>";
+        return;
+      }
+
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+      const scale = Math.min(
+        viewportWidth / project.width,
+        viewportHeight / project.height,
+      );
+
+      const slideNode = document.createElement("section");
+
+      slideNode.className = "slide";
+      slideNode.style.width = \`\${project.width}px\`;
+      slideNode.style.height = \`\${project.height}px\`;
+      slideNode.style.backgroundColor = slide.backgroundColor || "#f8fafc";
+      slideNode.style.transform = \`scale(\${scale})\`;
+
+      for (const element of slide.elements || []) {
+        slideNode.appendChild(createElementNode(element));
+      }
+
+      app.replaceChildren(slideNode);
+
+      slideCounter.textContent = \`\${activeSlideIndex + 1} / \${project.slides.length}\`;
+      prevButton.disabled = activeSlideIndex <= 0;
+      nextButton.disabled = activeSlideIndex >= project.slides.length - 1;
+    }
+
+    function goToSlide(nextIndex) {
+      if (nextIndex < 0 || nextIndex >= project.slides.length) {
+        return;
+      }
+
+      activeSlideIndex = nextIndex;
+      renderSlide();
+    }
+
+    prevButton.addEventListener("click", () => {
+      goToSlide(activeSlideIndex - 1);
+    });
+
+    nextButton.addEventListener("click", () => {
+      goToSlide(activeSlideIndex + 1);
+    });
+
+    window.addEventListener("keydown", (event) => {
+      if (
+        event.key === "ArrowRight" ||
+        event.key === " " ||
+        event.key === "Enter" ||
+        event.key === "PageDown"
+      ) {
+        event.preventDefault();
+        goToSlide(activeSlideIndex + 1);
+        return;
+      }
+
+      if (event.key === "ArrowLeft" || event.key === "PageUp") {
+        event.preventDefault();
+        goToSlide(activeSlideIndex - 1);
+        return;
+      }
+
+      if (event.key === "Escape" && document.fullscreenElement) {
+        event.preventDefault();
+        document.exitFullscreen();
+      }
+    });
+
+    window.addEventListener("resize", renderSlide);
+
+    renderSlide();
+  </script>
+</body>
+</html>`;
+}
+
+/**
+ * Safely serialize project data into a script tag.
+ *
+ * Replacing '<' prevents a project string from accidentally closing the script
+ * tag, for example through '</script>' inside user-entered text.
+ */
+function escapeScriptJson(project: PresentationProject) {
+  return JSON.stringify(project).replaceAll("<", "\\u003c");
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
 }

@@ -69,6 +69,7 @@ type SlideCanvasProps = {
     style: Partial<SlideElement["style"]>,
   ) => void;
   onRotateElement?: (elementId: string, rotate: number) => void;
+  onBeginElementChange?: () => void;
   onFinishElementChange?: () => void;
   onUpdateElementContent?: (
     elementId: string,
@@ -90,6 +91,7 @@ export function SlideCanvas({
   onMoveElement,
   onResizeElement,
   onRotateElement,
+  onBeginElementChange,
   onFinishElementChange,
   onUpdateElementContent,
   slideSurfaceRef,
@@ -143,6 +145,7 @@ export function SlideCanvas({
             onMove={onMoveElement}
             onResize={onResizeElement}
             onRotate={onRotateElement}
+            onBeginChange={onBeginElementChange}
             onFinishChange={onFinishElementChange}
             onStartEditing={setEditingElementId}
             onStopEditing={() => setEditingElementId(null)}
@@ -236,6 +239,7 @@ function SlideElementView({
   onMove,
   onResize,
   onRotate,
+  onBeginChange,
   onFinishChange,
   onStartEditing,
   onStopEditing,
@@ -249,6 +253,7 @@ function SlideElementView({
   onMove?: (elementId: string, position: { x: number; y: number }) => void;
   onResize?: (elementId: string, style: Partial<SlideElement["style"]>) => void;
   onRotate?: (elementId: string, rotate: number) => void;
+  onBeginChange?: () => void;
   onFinishChange?: () => void;
   onStartEditing?: (elementId: string) => void;
   onStopEditing?: () => void;
@@ -357,6 +362,7 @@ function SlideElementView({
       return;
     }
 
+    onBeginChange?.();
     onSelect?.(element.id);
 
     const moveElement = onMove;
@@ -414,6 +420,8 @@ function SlideElementView({
 
     event.preventDefault();
     event.stopPropagation();
+
+    onBeginChange?.();
 
     resizeStateRef.current = {
       startClientX: event.clientX,
@@ -506,6 +514,8 @@ function SlideElementView({
 
     event.preventDefault();
     event.stopPropagation();
+
+    onBeginChange?.();
 
     const centerX = rect.left + rect.width / 2;
     const centerY = rect.top + rect.height / 2;

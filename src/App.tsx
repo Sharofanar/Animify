@@ -27,7 +27,6 @@ type ProjectUpdater = (
 ) => PresentationProject;
 
 const MAX_HISTORY_LENGTH = 60;
-const HISTORY_MERGE_DELAY = 600;
 
 const featureCards = [
   {
@@ -293,16 +292,21 @@ function areElementsOverlapping(
   );
 }
 
+function cloneProjectSnapshot(project: PresentationProject) {
+  return JSON.parse(JSON.stringify(project)) as PresentationProject;
+}
+
 function App() {
   const [project, setProject] = useState<PresentationProject>(loadSavedProject);
+  const latestProjectRef = useRef(project);
   const [mode, setMode] = useState<EditorMode>("edit");
   const [componentPanelOpen, setComponentPanelOpen] = useState(false);
   const [animationPreviewKey, setAnimationPreviewKey] = useState(0);
   const [presentToolbarOpen, setPresentToolbarOpen] = useState(false);
   const undoStackRef = useRef<PresentationProject[]>([]);
   const redoStackRef = useRef<PresentationProject[]>([]);
-  const lastHistoryAtRef = useRef(0);
-  const lastHistoryKeyRef = useRef<string | null>(null);
+  const historyGroupSnapshotRef = useRef<PresentationProject | null>(null);
+  const historyGroupChangedRef = useRef(false);
   const slideSurfaceRef = useRef<HTMLDivElement | null>(null);
   const canvasAreaRef = useRef<HTMLDivElement | null>(null);
   const [canvasAreaSize, setCanvasAreaSize] = useState({
@@ -323,101 +327,116 @@ function App() {
   );
 
   useEffect(() => {
+    latestProjectRef.current = project;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
   }, [project]);
 
-  const commitProjectChange = useCallback(
-    (updater: ProjectUpdater, historyKey = "default") => {
-      setProject((currentProject) => {
-        const nextProject = updater(currentProject);
+  const pushUndoSnapshot = useCallback((snapshot: PresentationProject) => {
+    undoStackRef.current = [
+      ...undoStackRef.current,
+      cloneProjectSnapshot(snapshot),
+    ].slice(-MAX_HISTORY_LENGTH);
 
-        if (nextProject === currentProject) {
-          return currentProject;
-        }
-
-        const now = Date.now();
-        const isContinuousElementChange =
-          historyKey.startsWith("move:") ||
-          historyKey.startsWith("resize:") ||
-          historyKey.startsWith("rotate:");
-
-        const shouldMergeWithPrevious =
-          lastHistoryKeyRef.current === historyKey &&
-          (isContinuousElementChange ||
-            now - lastHistoryAtRef.current < HISTORY_MERGE_DELAY);
-
-        if (!shouldMergeWithPrevious) {
-          undoStackRef.current = [
-            ...undoStackRef.current,
-            currentProject,
-          ].slice(-MAX_HISTORY_LENGTH);
-        }
-
-        redoStackRef.current = [];
-        lastHistoryAtRef.current = now;
-        lastHistoryKeyRef.current = historyKey;
-
-        return nextProject;
-      });
-    },
-    [],
-  );
-
-  const finishProjectHistoryGroup = useCallback(() => {
-    lastHistoryAtRef.current = 0;
-    lastHistoryKeyRef.current = null;
+    redoStackRef.current = [];
   }, []);
 
-  const undoProject = useCallback(() => {
-    setProject((currentProject) => {
-      const previousProject = undoStackRef.current.at(-1);
+  const commitProjectChange = useCallback(
+    (updater: ProjectUpdater, options: { recordHistory?: boolean } = {}) => {
+      const currentProject = latestProjectRef.current;
+      const nextProject = updater(currentProject);
 
-      if (!previousProject) {
-        return currentProject;
+      if (nextProject === currentProject) {
+        return;
       }
 
-      undoStackRef.current = undoStackRef.current.slice(0, -1);
-      redoStackRef.current = [...redoStackRef.current, currentProject].slice(
-        -MAX_HISTORY_LENGTH,
-      );
-      lastHistoryAtRef.current = 0;
-      lastHistoryKeyRef.current = null;
+      if (options.recordHistory === false) {
+        if (historyGroupSnapshotRef.current) {
+          historyGroupChangedRef.current = true;
+        } else {
+          pushUndoSnapshot(currentProject);
+        }
+      } else {
+        pushUndoSnapshot(currentProject);
+      }
 
-      const previousActiveSlide = previousProject.slides.find(
-        (slide) => slide.id === previousProject.activeSlideId,
-      );
+      latestProjectRef.current = nextProject;
+      setProject(nextProject);
+    },
+    [pushUndoSnapshot],
+  );
 
-      setSelectedElementId(previousActiveSlide?.elements[0]?.id ?? "");
-      setAnimationPreviewKey((key) => key + 1);
+  const beginProjectHistoryGroup = useCallback(() => {
+    if (historyGroupSnapshotRef.current) {
+      return;
+    }
 
-      return previousProject;
-    });
+    historyGroupSnapshotRef.current = cloneProjectSnapshot(
+      latestProjectRef.current,
+    );
+    historyGroupChangedRef.current = false;
+  }, []);
+
+  const finishProjectHistoryGroup = useCallback(() => {
+    const snapshot = historyGroupSnapshotRef.current;
+
+    if (snapshot && historyGroupChangedRef.current) {
+      pushUndoSnapshot(snapshot);
+    }
+
+    historyGroupSnapshotRef.current = null;
+    historyGroupChangedRef.current = false;
+  }, [pushUndoSnapshot]);
+
+  const undoProject = useCallback(() => {
+    const previousProject = undoStackRef.current.at(-1);
+
+    if (!previousProject) {
+      return;
+    }
+
+    const currentProject = latestProjectRef.current;
+
+    undoStackRef.current = undoStackRef.current.slice(0, -1);
+    redoStackRef.current = [
+      ...redoStackRef.current,
+      cloneProjectSnapshot(currentProject),
+    ].slice(-MAX_HISTORY_LENGTH);
+
+    const projectToRestore = cloneProjectSnapshot(previousProject);
+    const previousActiveSlide = projectToRestore.slides.find(
+      (slide) => slide.id === projectToRestore.activeSlideId,
+    );
+
+    latestProjectRef.current = projectToRestore;
+    setProject(projectToRestore);
+    setSelectedElementId(previousActiveSlide?.elements[0]?.id ?? "");
+    setAnimationPreviewKey((key) => key + 1);
   }, [setAnimationPreviewKey, setSelectedElementId]);
 
   const redoProject = useCallback(() => {
-    setProject((currentProject) => {
-      const nextProject = redoStackRef.current.at(-1);
+    const nextProject = redoStackRef.current.at(-1);
 
-      if (!nextProject) {
-        return currentProject;
-      }
+    if (!nextProject) {
+      return;
+    }
 
-      redoStackRef.current = redoStackRef.current.slice(0, -1);
-      undoStackRef.current = [...undoStackRef.current, currentProject].slice(
-        -MAX_HISTORY_LENGTH,
-      );
-      lastHistoryAtRef.current = 0;
-      lastHistoryKeyRef.current = null;
+    const currentProject = latestProjectRef.current;
 
-      const nextActiveSlide = nextProject.slides.find(
-        (slide) => slide.id === nextProject.activeSlideId,
-      );
+    redoStackRef.current = redoStackRef.current.slice(0, -1);
+    undoStackRef.current = [
+      ...undoStackRef.current,
+      cloneProjectSnapshot(currentProject),
+    ].slice(-MAX_HISTORY_LENGTH);
 
-      setSelectedElementId(nextActiveSlide?.elements[0]?.id ?? "");
-      setAnimationPreviewKey((key) => key + 1);
+    const projectToRestore = cloneProjectSnapshot(nextProject);
+    const nextActiveSlide = projectToRestore.slides.find(
+      (slide) => slide.id === projectToRestore.activeSlideId,
+    );
 
-      return nextProject;
-    });
+    latestProjectRef.current = projectToRestore;
+    setProject(projectToRestore);
+    setSelectedElementId(nextActiveSlide?.elements[0]?.id ?? "");
+    setAnimationPreviewKey((key) => key + 1);
   }, [setAnimationPreviewKey, setSelectedElementId]);
 
   useEffect(() => {
@@ -657,7 +676,7 @@ function App() {
           updatedAt: new Date().toISOString(),
           slides: nextSlides,
         };
-      }, `nudge:${selectedElementId}`);
+      });
     }
 
     window.addEventListener("keydown", handleElementNudge);
@@ -828,7 +847,7 @@ function App() {
     updates: Partial<Omit<SlideElement, "style">> & {
       style?: Partial<SlideElement["style"]>;
     },
-    historyKey = `update-element:${elementId}`,
+    options?: { recordHistory?: boolean },
   ) {
     commitProjectChange(
       (currentProject) => ({
@@ -860,7 +879,7 @@ function App() {
           };
         }),
       }),
-      historyKey,
+      options,
     );
   }
 
@@ -996,7 +1015,7 @@ function App() {
     localStorage.removeItem(STORAGE_KEY);
     commitProjectChange(() => demoProject);
     setSelectedElementId(firstElementId);
-    setAnimationPreviewKey((key) => key + 1); 
+    setAnimationPreviewKey((key) => key + 1);
   }
 
   function handleAddSlide() {
@@ -1361,7 +1380,7 @@ function App() {
                       {
                         style: position,
                       },
-                      `move:${elementId}`,
+                      { recordHistory: false },
                     )
                   }
                   onResizeElement={(elementId, style) =>
@@ -1370,7 +1389,7 @@ function App() {
                       {
                         style,
                       },
-                      `resize:${elementId}`,
+                      { recordHistory: false },
                     )
                   }
                   onRotateElement={(elementId, rotate) =>
@@ -1381,19 +1400,16 @@ function App() {
                           rotate,
                         },
                       },
-                      `rotate:${elementId}`,
+                      { recordHistory: false },
                     )
                   }
                   onUpdateElementContent={(elementId, content, style) =>
-                    handleUpdateElement(
-                      elementId,
-                      {
-                        content,
-                        style,
-                      },
-                      `content:${elementId}:${Date.now()}`,
-                    )
+                    handleUpdateElement(elementId, {
+                      content,
+                      style,
+                    })
                   }
+                  onBeginElementChange={beginProjectHistoryGroup}
                   onFinishElementChange={finishProjectHistoryGroup}
                   slideSurfaceRef={slideSurfaceRef}
                   animationPreviewKey={animationPreviewKey}

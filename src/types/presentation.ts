@@ -1,4 +1,17 @@
 export type SlideElementType = "text" | "shape" | "image" | "svg";
+
+export type PresentationAssetType = "image" | "video" | "audio";
+
+export type PresentationAsset = {
+  id: string;
+  type: PresentationAssetType;
+  name: string;
+  mimeType: string;
+  size: number;
+  source: string;
+  createdAt: string;
+};
+
 export type SlideElementAnimation = {
   id: string;
   name: string;
@@ -28,6 +41,7 @@ export type SlideElement = {
   type: SlideElementType;
   name: string;
   content: string;
+  assetId?: string;
   style: SlideElementStyle;
   animations: SlideElementAnimation[];
 };
@@ -46,6 +60,7 @@ export type PresentationProject = {
   width: number;
   height: number;
   slides: Slide[];
+  assets: Record<string, PresentationAsset>;
   activeSlideId: string;
   updatedAt: string;
 };

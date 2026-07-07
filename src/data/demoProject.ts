@@ -8,6 +8,7 @@ export const demoProject: PresentationProject = {
   height: 720,
   activeSlideId: "slide-cover",
   updatedAt: "2026-07-02T00:00:00.000Z",
+  assets: {},
   slides: [
     {
       id: "slide-cover",

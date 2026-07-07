@@ -172,6 +172,7 @@ function loadSavedProject(): PresentationProject {
 
     return {
       ...parsedProject,
+      assets: parsedProject.assets ?? {},
       slides: normalizeSlideTitles(parsedProject.slides),
     };
   } catch {

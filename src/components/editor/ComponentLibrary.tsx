@@ -10,7 +10,13 @@ type ComponentItem = {
 };
 
 type ComponentLibraryProps = {
-  onAddElement?: (type: SlideElementType) => void;
+  onAddElement: (type: SlideElementType) => void;
+
+  /**
+   * Open the image picker and insert the selected file through the asset store.
+   * Image elements should not be created as empty placeholders.
+   */
+  onAddImage?: () => void;
 };
 
 const componentItems: ComponentItem[] = [
@@ -29,7 +35,7 @@ const componentItems: ComponentItem[] = [
   {
     id: "image",
     title: "图像",
-    description: "添加本地图片素材",
+    description: "选择本地图片并插入画布",
     icon: "◎",
   },
   {
@@ -40,7 +46,10 @@ const componentItems: ComponentItem[] = [
   },
 ];
 
-export function ComponentLibrary({ onAddElement }: ComponentLibraryProps) {
+export function ComponentLibrary({
+  onAddElement,
+  onAddImage,
+}: ComponentLibraryProps) {
   return (
     <aside className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="mb-4">
@@ -54,12 +63,14 @@ export function ComponentLibrary({ onAddElement }: ComponentLibraryProps) {
             key={item.id}
             item={item}
             onAddElement={onAddElement}
+            onAddImage={onAddImage}
           />
         ))}
       </div>
 
       <p className="mt-4 rounded-2xl bg-slate-100 p-3 text-xs leading-5 text-slate-500">
-        可以点击组件按钮直接添加，也可以拖拽组件到中间画布区域。
+        文本、形状和 SVG
+        可以点击添加，也可以拖拽到画布。图像需要点击后选择本地文件。
       </p>
     </aside>
   );
@@ -68,16 +79,29 @@ export function ComponentLibrary({ onAddElement }: ComponentLibraryProps) {
 function DraggableComponentItem({
   item,
   onAddElement,
+  onAddImage,
 }: {
   item: ComponentItem;
-  onAddElement?: (type: SlideElementType) => void;
+  onAddElement: (type: SlideElementType) => void;
+
+  /**
+   * Used only by the image card. Images must be selected from local files
+   * and stored in the project asset store before an image element is created.
+   */
+  onAddImage?: () => void;
 }) {
+  const isImageItem = item.id === "image";
+
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({
       id: `component-${item.id}`,
       data: {
         type: item.id,
       },
+
+      // Image insertion needs a real file. Disable dragging to avoid creating
+      // an empty image placeholder on the canvas.
+      disabled: isImageItem,
     });
 
   const style = {
@@ -92,9 +116,19 @@ function DraggableComponentItem({
         isDragging ? "z-50 opacity-60 shadow-xl" : ""
       }`}
       style={style}
-      onClick={() => onAddElement?.(item.id)}
-      {...listeners}
-      {...attributes}
+      onClick={() => {
+        // Image components are backed by the project asset store.
+        // Clicking the image card opens the file picker instead of creating
+        // an empty image placeholder.
+        if (isImageItem) {
+          onAddImage?.();
+          return;
+        }
+
+        onAddElement(item.id);
+      }}
+      {...(isImageItem ? {} : listeners)}
+      {...(isImageItem ? {} : attributes)}
     >
       <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-lg font-black text-violet-600 shadow-sm">
         {item.icon}

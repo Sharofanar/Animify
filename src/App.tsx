@@ -6,13 +6,20 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from "react";
 import { ComponentLibrary } from "./components/editor/ComponentLibrary";
 import { PropertyPanel } from "./components/editor/PropertyPanel";
 import { SlideCanvas } from "./components/editor/SlideCanvas";
 import { demoProject } from "./data/demoProject";
 import { exportProjectAsHtml } from "./utils/exportHtml";
 import type {
+  PresentationAsset,
   PresentationProject,
   SlideElement,
   SlideElementType,
@@ -297,6 +304,34 @@ function cloneProjectSnapshot(project: PresentationProject) {
   return JSON.parse(JSON.stringify(project)) as PresentationProject;
 }
 
+/**
+ * Read a local file as a Data URL so the image can be previewed and restored
+ * after refreshing the browser during the current local-first stage.
+ *
+ * Later, large videos should move to IndexedDB or export-package assets instead
+ * of being stored directly in localStorage.
+ */
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result !== "string") {
+        reject(new Error("Failed to read file as Data URL."));
+        return;
+      }
+
+      resolve(reader.result);
+    };
+
+    reader.onerror = () => {
+      reject(reader.error ?? new Error("Failed to read file."));
+    };
+
+    reader.readAsDataURL(file);
+  });
+}
+
 function App() {
   const [project, setProject] = useState<PresentationProject>(loadSavedProject);
   const latestProjectRef = useRef(project);
@@ -309,6 +344,7 @@ function App() {
   const historyGroupSnapshotRef = useRef<PresentationProject | null>(null);
   const historyGroupChangedRef = useRef(false);
   const slideSurfaceRef = useRef<HTMLDivElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const canvasAreaRef = useRef<HTMLDivElement | null>(null);
   const [canvasAreaSize, setCanvasAreaSize] = useState({
     width: 0,
@@ -726,8 +762,12 @@ function App() {
         onClick={() => handlePresentSlideStep(1)}
       >
         <section className="absolute inset-0 flex items-center justify-center">
+          {/* Present mode reuses SlideCanvas without editor chrome.
+    Pass project.assets so image elements can resolve assetId into real image data
+    instead of showing the image file name. */}
           <SlideCanvas
             slide={activeSlide}
+            assets={project.assets}
             scale={presentScale}
             animationPreviewKey={animationPreviewKey}
             chrome={false}
@@ -841,6 +881,147 @@ function App() {
     }));
 
     setSelectedElementId(newElement.id);
+  }
+
+  /**
+   * Open the hidden image file input from a normal toolbar button.
+   */
+  function handleOpenImagePicker() {
+    imageInputRef.current?.click();
+  }
+
+  /**
+   * Insert one or more selected images into the active slide.
+   *
+   * Media files are stored once in project.assets. Slide elements only keep
+   * assetId, so future undo/redo and multi-slide reuse will not duplicate
+   * large image data inside every element.
+   */
+  async function handleImageFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const selectedFiles = Array.from(event.target.files ?? []);
+
+    // Reset the input value so selecting the same image again can still trigger change.
+    event.target.value = "";
+
+    if (selectedFiles.length === 0) {
+      return;
+    }
+
+    const imageFiles = selectedFiles.filter((file) =>
+      file.type.startsWith("image/"),
+    );
+
+    if (imageFiles.length === 0) {
+      window.alert("请选择图片文件。");
+      return;
+    }
+
+    try {
+      const now = new Date().toISOString();
+      const timestamp = Date.now();
+
+      const imageItems = await Promise.all(
+        imageFiles.map(async (file, index) => {
+          const source = await readFileAsDataUrl(file);
+          const idSuffix = `${timestamp}-${index}`;
+
+          return {
+            file,
+            source,
+            assetId: `asset-image-${idSuffix}`,
+            elementId: `element-image-${idSuffix}`,
+          };
+        }),
+      );
+
+      const lastInsertedElementId = imageItems.at(-1)?.elementId ?? "";
+
+      commitProjectChange((currentProject) => {
+        const imageWidth = 420;
+        const imageHeight = 260;
+        const imageOffsetX = 36;
+
+        const centerX = Math.round((currentProject.width - imageWidth) / 2);
+        const centerY = Math.round((currentProject.height - imageHeight) / 2);
+
+        const activeSlide = currentProject.slides.find(
+          (slide) => slide.id === currentProject.activeSlideId,
+        );
+
+        const lastImageElement = activeSlide?.elements
+          .filter((element) => element.type === "image")
+          .at(-1);
+
+        // If there is already an image on the current slide, place the next image
+        // to the right of the previous one. Otherwise, start from the canvas center.
+        const startX = lastImageElement
+          ? lastImageElement.style.x + imageOffsetX
+          : centerX;
+
+        const startY = lastImageElement ? lastImageElement.style.y : centerY;
+
+        const newAssets: Record<string, PresentationAsset> = {};
+        const newElements: SlideElement[] = imageItems.map((item, index) => {
+          const fileName = item.file.name || "未命名图片";
+
+          const imageAsset: PresentationAsset = {
+            id: item.assetId,
+            type: "image",
+            name: fileName,
+            mimeType: item.file.type || "image/*",
+            size: item.file.size,
+            source: item.source,
+            createdAt: now,
+          };
+
+          newAssets[item.assetId] = imageAsset;
+
+          return {
+            id: item.elementId,
+            type: "image",
+            name: fileName,
+            content: fileName,
+            assetId: item.assetId,
+            style: {
+              x: startX + imageOffsetX * index,
+              y: startY,
+              width: imageWidth,
+              height: imageHeight,
+              rotate: 0,
+              opacity: 1,
+              borderRadius: 0,
+            },
+            animations: [],
+          };
+        });
+
+        return {
+          ...currentProject,
+          updatedAt: now,
+
+          // Store image data in the shared asset store.
+          assets: {
+            ...(currentProject.assets ?? {}),
+            ...newAssets,
+          },
+
+          slides: currentProject.slides.map((slide) => {
+            if (slide.id !== currentProject.activeSlideId) {
+              return slide;
+            }
+
+            return {
+              ...slide,
+              elements: [...slide.elements, ...newElements],
+            };
+          }),
+        };
+      });
+
+      setSelectedElementId(lastInsertedElementId);
+    } catch {
+      window.alert("图片读取失败，请换一张图片重试。");
+    }
   }
 
   function handleUpdateElement(
@@ -1180,9 +1361,20 @@ function App() {
     };
   }
 
+  /**
+   * Handle the end of a drag operation.
+   *
+   * There are two drag sources in the editor:
+   * 1. Slide thumbnails: reorder slides in the left sidebar.
+   * 2. Component library items: drop text / shape / SVG elements onto the canvas.
+   *
+   * Image components are intentionally excluded from drag-to-create because an
+   * image element must be backed by a real asset record from the file picker.
+   */
   function handleDragEnd(event: DragEndEvent) {
     const draggedKind = event.active.data.current?.kind;
 
+    // Slide thumbnail dragging: reorder slides instead of creating canvas elements.
     if (draggedKind === "slide") {
       const overSlideId = event.over?.id;
 
@@ -1194,6 +1386,7 @@ function App() {
       return;
     }
 
+    // Component items should only create elements when dropped on the canvas.
     if (event.over?.id !== "slide-canvas-droppable") {
       return;
     }
@@ -1201,6 +1394,13 @@ function App() {
     const draggedType = event.active.data.current?.type;
 
     if (!isSlideElementType(draggedType)) {
+      return;
+    }
+
+    // Images must be inserted through the file picker so the project can create
+    // a matching asset record. Dragging an image component should not create an
+    // empty placeholder element.
+    if (draggedType === "image") {
       return;
     }
 
@@ -1300,6 +1500,15 @@ function App() {
               >
                 导出 HTML
               </button>
+
+              <input
+                ref={imageInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={handleImageFileChange}
+                style={{ display: "none" }}
+              />
             </div>
           </header>
 
@@ -1338,7 +1547,10 @@ function App() {
                   收起
                 </button>
 
-                <ComponentLibrary onAddElement={handleAddElement} />
+                <ComponentLibrary
+                  onAddElement={handleAddElement}
+                  onAddImage={handleOpenImagePicker}
+                />
               </div>
             ) : (
               <aside className="flex min-h-130 flex-col items-center gap-4 rounded-3xl border border-slate-200 bg-white px-3 py-4 shadow-sm">
@@ -1372,6 +1584,7 @@ function App() {
               <div ref={canvasAreaRef} className="min-h-0 flex-1">
                 <SlideCanvas
                   slide={activeSlide}
+                  assets={project.assets}
                   scale={canvasScale}
                   selectedElementId={selectedElement?.id}
                   onSelectElement={setSelectedElementId}
@@ -1548,6 +1761,7 @@ function SlideNavigator({
               previewWidth={previewWidth}
               previewHeight={previewHeight}
               previewScale={previewScale}
+              assets={project.assets}
               onSelectSlide={onSelectSlide}
               onDeleteSlide={onDeleteSlide}
               onDuplicateSlide={onDuplicateSlide}
@@ -1567,6 +1781,7 @@ function SortableSlideCard({
   previewWidth,
   previewHeight,
   previewScale,
+  assets,
   onSelectSlide,
   onDeleteSlide,
   onDuplicateSlide,
@@ -1578,6 +1793,7 @@ function SortableSlideCard({
   previewWidth: number;
   previewHeight: number;
   previewScale: number;
+  assets: PresentationProject["assets"];
   onSelectSlide: (slideId: string) => void;
   onDeleteSlide: (slideId: string) => void;
   onDuplicateSlide: (slideId: string) => void;
@@ -1646,6 +1862,13 @@ function SortableSlideCard({
         {slide.elements.map((element) => {
           const style = element.style;
 
+          // Thumbnail previews use the same asset store as the main canvas.
+          // Image elements only keep assetId, so the real image source must be
+          // resolved from project.assets before rendering.
+          const asset = element.assetId ? assets[element.assetId] : undefined;
+          const isImageElement =
+            element.type === "image" && asset?.type === "image";
+
           return (
             <div
               key={element.id}
@@ -1664,7 +1887,24 @@ function SortableSlideCard({
                 borderRadius: (style.borderRadius ?? 0) * previewScale,
               }}
             >
-              {element.content}
+              {isImageElement ? (
+                <img
+                  src={asset.source}
+                  alt={asset.name}
+                  draggable={false}
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                    display: "block",
+                    pointerEvents: "none",
+                    userSelect: "none",
+                    borderRadius: (style.borderRadius ?? 0) * previewScale,
+                  }}
+                />
+              ) : (
+                element.content
+              )}
             </div>
           );
         })}

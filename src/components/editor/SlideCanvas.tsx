@@ -8,7 +8,11 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import type { Slide, SlideElement } from "../../types/presentation";
+import type {
+  PresentationAsset,
+  Slide,
+  SlideElement,
+} from "../../types/presentation";
 
 const SLIDE_WIDTH = 1280;
 const SLIDE_HEIGHT = 720;
@@ -57,6 +61,7 @@ const resizeHandleConfigs: Array<{
 
 type SlideCanvasProps = {
   slide: Slide;
+  assets?: Record<string, PresentationAsset>;
   scale?: number;
   selectedElementId?: string;
   onSelectElement?: (elementId: string) => void;
@@ -85,6 +90,7 @@ type SlideCanvasProps = {
 
 export function SlideCanvas({
   slide,
+  assets = {},
   scale = 0.6,
   selectedElementId,
   onSelectElement,
@@ -133,11 +139,13 @@ export function SlideCanvas({
         const animationKey = firstAnimation
           ? `${element.id}-${firstAnimation.keyframes}-${firstAnimation.duration}-${firstAnimation.delay}-${animationPreviewKey}`
           : `${element.id}-${animationPreviewKey}`;
+        const asset = element.assetId ? assets[element.assetId] : undefined;
 
         return (
           <SlideElementView
             key={animationKey}
             element={element}
+            asset={asset}
             scale={scale}
             selected={element.id === selectedElementId}
             isEditing={element.id === editingElementId}
@@ -232,6 +240,7 @@ function measureTextElementSize(element: SlideElement, content: string) {
 
 function SlideElementView({
   element,
+  asset,
   scale,
   selected,
   isEditing,
@@ -246,6 +255,7 @@ function SlideElementView({
   onUpdateContent,
 }: {
   element: SlideElement;
+  asset?: PresentationAsset;
   scale: number;
   selected: boolean;
   isEditing: boolean;
@@ -599,7 +609,23 @@ function SlideElementView({
           className="flex h-full w-full items-center justify-center whitespace-pre-wrap wrap-break-word"
           style={innerStyle}
         >
-          {element.content}
+          {element.type === "image" && asset?.type === "image" ? (
+            <img
+              src={asset.source}
+              alt={asset.name}
+              draggable={false}
+              style={{
+                width: "100%",
+                height: "100%",
+                objectFit: "cover",
+                pointerEvents: "none",
+                userSelect: "none",
+                borderRadius: element.style.borderRadius ?? 0,
+              }}
+            />
+          ) : (
+            element.content
+          )}
         </span>
       )}
 

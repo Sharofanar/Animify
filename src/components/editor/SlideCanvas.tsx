@@ -617,7 +617,7 @@ function SlideElementView({
               style={{
                 width: "100%",
                 height: "100%",
-                objectFit: "cover",
+                objectFit: "contain",
                 pointerEvents: "none",
                 userSelect: "none",
                 borderRadius: element.style.borderRadius ?? 0,

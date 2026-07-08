@@ -332,6 +332,42 @@ function readFileAsDataUrl(file: File) {
   });
 }
 
+/**
+ * Read the natural image size and scale it into a comfortable canvas size.
+ *
+ * The image keeps its original aspect ratio. Large images are scaled down so
+ * they fit the slide better, while small images keep their real size instead
+ * of being stretched.
+ */
+function getImageDisplaySize(source: string) {
+  return new Promise<{ width: number; height: number }>((resolve, reject) => {
+    const image = new Image();
+
+    image.onload = () => {
+      const naturalWidth = image.naturalWidth || 420;
+      const naturalHeight = image.naturalHeight || 260;
+      const maxWidth = 520;
+      const maxHeight = 360;
+      const scale = Math.min(
+        maxWidth / naturalWidth,
+        maxHeight / naturalHeight,
+        1,
+      );
+
+      resolve({
+        width: Math.round(naturalWidth * scale),
+        height: Math.round(naturalHeight * scale),
+      });
+    };
+
+    image.onerror = () => {
+      reject(new Error("Failed to read image size."));
+    };
+
+    image.src = source;
+  });
+}
+
 function App() {
   const [project, setProject] = useState<PresentationProject>(loadSavedProject);
   const latestProjectRef = useRef(project);
@@ -923,11 +959,13 @@ function App() {
       const imageItems = await Promise.all(
         imageFiles.map(async (file, index) => {
           const source = await readFileAsDataUrl(file);
+          const displaySize = await getImageDisplaySize(source);
           const idSuffix = `${timestamp}-${index}`;
 
           return {
             file,
             source,
+            displaySize,
             assetId: `asset-image-${idSuffix}`,
             elementId: `element-image-${idSuffix}`,
           };
@@ -937,12 +975,18 @@ function App() {
       const lastInsertedElementId = imageItems.at(-1)?.elementId ?? "";
 
       commitProjectChange((currentProject) => {
-        const imageWidth = 420;
-        const imageHeight = 260;
         const imageOffsetX = 36;
+        const firstImageSize = imageItems[0]?.displaySize ?? {
+          width: 420,
+          height: 260,
+        };
 
-        const centerX = Math.round((currentProject.width - imageWidth) / 2);
-        const centerY = Math.round((currentProject.height - imageHeight) / 2);
+        const centerX = Math.round(
+          (currentProject.width - firstImageSize.width) / 2,
+        );
+        const centerY = Math.round(
+          (currentProject.height - firstImageSize.height) / 2,
+        );
 
         const activeSlide = currentProject.slides.find(
           (slide) => slide.id === currentProject.activeSlideId,
@@ -985,8 +1029,8 @@ function App() {
             style: {
               x: startX + imageOffsetX * index,
               y: startY,
-              width: imageWidth,
-              height: imageHeight,
+              width: item.displaySize.width,
+              height: item.displaySize.height,
               rotate: 0,
               opacity: 1,
               borderRadius: 0,

@@ -95,7 +95,7 @@ function createHtmlDocument(project: PresentationProject) {
       width: 100%;
       height: 100%;
       display: block;
-      object-fit: cover;
+      object-fit: contain;
       user-select: none;
       pointer-events: none;
     }

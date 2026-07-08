@@ -29,6 +29,12 @@ const STORAGE_KEY = "animify-project";
 
 type EditorMode = "edit" | "animation" | "present";
 
+type ElementContextMenuState = {
+  elementId: string;
+  x: number;
+  y: number;
+} | null;
+
 type ProjectUpdater = (
   currentProject: PresentationProject,
 ) => PresentationProject;
@@ -305,6 +311,34 @@ function cloneProjectSnapshot(project: PresentationProject) {
 }
 
 /**
+ * Clone an element for duplicate or paste operations.
+ *
+ * The copied element keeps assetId, so images reuse the same asset record
+ * instead of duplicating large image data.
+ */
+function cloneSlideElementForInsert(
+  sourceElement: SlideElement,
+  newElementId: string,
+  now: number,
+  nameSuffix: string,
+): SlideElement {
+  return {
+    ...sourceElement,
+    id: newElementId,
+    name: `${sourceElement.name} ${nameSuffix}`,
+    style: {
+      ...sourceElement.style,
+      x: sourceElement.style.x + 32,
+      y: sourceElement.style.y + 32,
+    },
+    animations: sourceElement.animations.map((animation, animationIndex) => ({
+      ...animation,
+      id: `${animation.id}-${nameSuffix}-${now}-${animationIndex}`,
+    })),
+  };
+}
+
+/**
  * Read a local file as a Data URL so the image can be previewed and restored
  * after refreshing the browser during the current local-first stage.
  *
@@ -375,6 +409,8 @@ function App() {
   const [componentPanelOpen, setComponentPanelOpen] = useState(false);
   const [animationPreviewKey, setAnimationPreviewKey] = useState(0);
   const [presentToolbarOpen, setPresentToolbarOpen] = useState(false);
+  const [elementContextMenu, setElementContextMenu] =
+    useState<ElementContextMenuState>(null);
   const undoStackRef = useRef<PresentationProject[]>([]);
   const redoStackRef = useRef<PresentationProject[]>([]);
   const historyGroupSnapshotRef = useRef<PresentationProject | null>(null);
@@ -411,6 +447,32 @@ function App() {
     latestProjectRef.current = project;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
   }, [project]);
+
+    useEffect(() => {
+      if (!elementContextMenu) {
+        return;
+      }
+
+      function closeElementContextMenu() {
+        setElementContextMenu(null);
+      }
+
+      function handleElementContextMenuKeyDown(event: KeyboardEvent) {
+        if (event.key === "Escape") {
+          setElementContextMenu(null);
+        }
+      }
+
+      window.addEventListener("click", closeElementContextMenu);
+      window.addEventListener("resize", closeElementContextMenu);
+      window.addEventListener("keydown", handleElementContextMenuKeyDown);
+
+      return () => {
+        window.removeEventListener("click", closeElementContextMenu);
+        window.removeEventListener("resize", closeElementContextMenu);
+        window.removeEventListener("keydown", handleElementContextMenuKeyDown);
+      };
+    }, [elementContextMenu]);
 
   const pushUndoSnapshot = useCallback((snapshot: PresentationProject) => {
     undoStackRef.current = [
@@ -707,164 +769,155 @@ function App() {
         target instanceof HTMLSelectElement ||
         (target instanceof HTMLElement && target.isContentEditable);
 
-            if (isTyping) {
-              return;
+      if (isTyping) {
+        return;
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
+        event.preventDefault();
+
+        const currentProject = latestProjectRef.current;
+        const currentSlide = currentProject.slides.find(
+          (slide) => slide.id === currentProject.activeSlideId,
+        );
+        const selectedElement = currentSlide?.elements.find(
+          (element) => element.id === selectedElementId,
+        );
+
+        if (!selectedElement) {
+          return;
+        }
+
+        // Deep clone the copied element so later edits to the original element
+        // will not mutate the clipboard copy.
+        copiedElementRef.current = JSON.parse(
+          JSON.stringify(selectedElement),
+        ) as SlideElement;
+
+        return;
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") {
+        event.preventDefault();
+
+        const copiedElement = copiedElementRef.current;
+
+        if (!copiedElement) {
+          return;
+        }
+
+        const now = Date.now();
+        const pastedElementId = `${copiedElement.id}-paste-${now}`;
+
+        const pastedElement: SlideElement = {
+          ...copiedElement,
+          id: pastedElementId,
+          name: `${copiedElement.name} 粘贴`,
+          style: {
+            ...copiedElement.style,
+            x: copiedElement.style.x + 32,
+            y: copiedElement.style.y + 32,
+          },
+          animations: copiedElement.animations.map(
+            (animation, animationIndex) => ({
+              ...animation,
+              id: `${animation.id}-paste-${now}-${animationIndex}`,
+            }),
+          ),
+        };
+
+        commitProjectChange((currentProject) => ({
+          ...currentProject,
+          updatedAt: new Date().toISOString(),
+          slides: currentProject.slides.map((slide) => {
+            if (slide.id !== currentProject.activeSlideId) {
+              return slide;
             }
 
-            if (
-              (event.ctrlKey || event.metaKey) &&
-              event.key.toLowerCase() === "c"
-            ) {
-              event.preventDefault();
+            return {
+              ...slide,
+              elements: [...slide.elements, pastedElement],
+            };
+          }),
+        }));
 
-              const currentProject = latestProjectRef.current;
-              const currentSlide = currentProject.slides.find(
-                (slide) => slide.id === currentProject.activeSlideId,
-              );
-              const selectedElement = currentSlide?.elements.find(
-                (element) => element.id === selectedElementId,
-              );
+        setSelectedElementId(pastedElementId);
+        return;
+      }
 
-              if (!selectedElement) {
-                return;
-              }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") {
+        event.preventDefault();
 
-              // Deep clone the copied element so later edits to the original element
-              // will not mutate the clipboard copy.
-              copiedElementRef.current = JSON.parse(
-                JSON.stringify(selectedElement),
-              ) as SlideElement;
+        const now = Date.now();
+        const duplicateElementId = `${selectedElementId}-copy-${now}`;
+        let duplicated = false;
 
-              return;
+        commitProjectChange((currentProject) => {
+          const nextSlides = currentProject.slides.map((slide) => {
+            if (slide.id !== currentProject.activeSlideId) {
+              return slide;
             }
 
-            if (
-              (event.ctrlKey || event.metaKey) &&
-              event.key.toLowerCase() === "v"
-            ) {
-              event.preventDefault();
+            const sourceElementIndex = slide.elements.findIndex(
+              (element) => element.id === selectedElementId,
+            );
 
-              const copiedElement = copiedElementRef.current;
+            if (sourceElementIndex === -1) {
+              return slide;
+            }
 
-              if (!copiedElement) {
-                return;
-              }
+            const sourceElement = slide.elements[sourceElementIndex];
 
-              const now = Date.now();
-              const pastedElementId = `${copiedElement.id}-paste-${now}`;
+            duplicated = true;
 
-              const pastedElement: SlideElement = {
-                ...copiedElement,
-                id: pastedElementId,
-                name: `${copiedElement.name} 粘贴`,
-                style: {
-                  ...copiedElement.style,
-                  x: copiedElement.style.x + 32,
-                  y: copiedElement.style.y + 32,
-                },
-                animations: copiedElement.animations.map(
-                  (animation, animationIndex) => ({
-                    ...animation,
-                    id: `${animation.id}-paste-${now}-${animationIndex}`,
-                  }),
-                ),
-              };
-
-              commitProjectChange((currentProject) => ({
-                ...currentProject,
-                updatedAt: new Date().toISOString(),
-                slides: currentProject.slides.map((slide) => {
-                  if (slide.id !== currentProject.activeSlideId) {
-                    return slide;
-                  }
-
-                  return {
-                    ...slide,
-                    elements: [...slide.elements, pastedElement],
-                  };
+            const duplicateElement: SlideElement = {
+              ...sourceElement,
+              id: duplicateElementId,
+              name: `${sourceElement.name} 副本`,
+              style: {
+                ...sourceElement.style,
+                x: sourceElement.style.x + 32,
+                y: sourceElement.style.y + 32,
+              },
+              animations: sourceElement.animations.map(
+                (animation, animationIndex) => ({
+                  ...animation,
+                  id: `${animation.id}-copy-${now}-${animationIndex}`,
                 }),
-              }));
+              ),
+            };
 
-              setSelectedElementId(pastedElementId);
-              return;
-            }
+            return {
+              ...slide,
 
-            if (
-              (event.ctrlKey || event.metaKey) &&
-              event.key.toLowerCase() === "d"
-            ) {
-              event.preventDefault();
+              // Insert the duplicated element right after the original one.
+              // This keeps the layer order predictable while making the copy
+              // easy to find and move.
+              elements: [
+                ...slide.elements.slice(0, sourceElementIndex + 1),
+                duplicateElement,
+                ...slide.elements.slice(sourceElementIndex + 1),
+              ],
+            };
+          });
 
-              const now = Date.now();
-              const duplicateElementId = `${selectedElementId}-copy-${now}`;
-              let duplicated = false;
+          if (!duplicated) {
+            return currentProject;
+          }
 
-              commitProjectChange((currentProject) => {
-                const nextSlides = currentProject.slides.map((slide) => {
-                  if (slide.id !== currentProject.activeSlideId) {
-                    return slide;
-                  }
+          return {
+            ...currentProject,
+            updatedAt: new Date().toISOString(),
+            slides: nextSlides,
+          };
+        });
 
-                  const sourceElementIndex = slide.elements.findIndex(
-                    (element) => element.id === selectedElementId,
-                  );
+        if (duplicated) {
+          setSelectedElementId(duplicateElementId);
+        }
 
-                  if (sourceElementIndex === -1) {
-                    return slide;
-                  }
-
-                  const sourceElement = slide.elements[sourceElementIndex];
-
-                  duplicated = true;
-
-                  const duplicateElement: SlideElement = {
-                    ...sourceElement,
-                    id: duplicateElementId,
-                    name: `${sourceElement.name} 副本`,
-                    style: {
-                      ...sourceElement.style,
-                      x: sourceElement.style.x + 32,
-                      y: sourceElement.style.y + 32,
-                    },
-                    animations: sourceElement.animations.map(
-                      (animation, animationIndex) => ({
-                        ...animation,
-                        id: `${animation.id}-copy-${now}-${animationIndex}`,
-                      }),
-                    ),
-                  };
-
-                  return {
-                    ...slide,
-
-                    // Insert the duplicated element right after the original one.
-                    // This keeps the layer order predictable while making the copy
-                    // easy to find and move.
-                    elements: [
-                      ...slide.elements.slice(0, sourceElementIndex + 1),
-                      duplicateElement,
-                      ...slide.elements.slice(sourceElementIndex + 1),
-                    ],
-                  };
-                });
-
-                if (!duplicated) {
-                  return currentProject;
-                }
-
-                return {
-                  ...currentProject,
-                  updatedAt: new Date().toISOString(),
-                  slides: nextSlides,
-                };
-              });
-
-              if (duplicated) {
-                setSelectedElementId(duplicateElementId);
-              }
-
-              return;
-            }
+        return;
+      }
 
       if (event.key === "Delete" || event.key === "Backspace") {
         event.preventDefault();
@@ -1304,6 +1357,179 @@ function App() {
       }),
       options,
     );
+  }
+
+  /**
+   * Open the right-click menu near the mouse position.
+   *
+   * The position is clamped so the menu does not go outside the viewport.
+   */
+  function handleOpenElementContextMenu(
+    elementId: string,
+    position: { x: number; y: number },
+  ) {
+    const menuWidth = 180;
+    const menuHeight = 260;
+
+    setSelectedElementId(elementId);
+    setElementContextMenu({
+      elementId,
+      x: Math.min(position.x, window.innerWidth - menuWidth),
+      y: Math.min(position.y, window.innerHeight - menuHeight),
+    });
+  }
+
+  /**
+   * Run an action from the element context menu.
+   *
+   * Copy and paste use copiedElementRef so keyboard shortcuts and the context
+   * menu share the same internal clipboard.
+   */
+  function handleElementContextMenuAction(
+    action:
+      | "copy"
+      | "paste"
+      | "duplicate"
+      | "delete"
+      | "bring-to-front"
+      | "send-to-back",
+  ) {
+    const menuState = elementContextMenu;
+
+    if (!menuState) {
+      return;
+    }
+
+    if (action === "copy") {
+      const currentProject = latestProjectRef.current;
+      const currentSlide = currentProject.slides.find(
+        (slide) => slide.id === currentProject.activeSlideId,
+      );
+      const selectedElement = currentSlide?.elements.find(
+        (element) => element.id === menuState.elementId,
+      );
+
+      if (selectedElement) {
+        copiedElementRef.current = JSON.parse(
+          JSON.stringify(selectedElement),
+        ) as SlideElement;
+      }
+
+      setElementContextMenu(null);
+      return;
+    }
+
+    if (action === "paste") {
+      const copiedElement = copiedElementRef.current;
+
+      if (!copiedElement) {
+        setElementContextMenu(null);
+        return;
+      }
+
+      const now = Date.now();
+      const pastedElementId = `${copiedElement.id}-paste-${now}`;
+      const pastedElement = cloneSlideElementForInsert(
+        copiedElement,
+        pastedElementId,
+        now,
+        "粘贴",
+      );
+
+      commitProjectChange((currentProject) => ({
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: currentProject.slides.map((slide) => {
+          if (slide.id !== currentProject.activeSlideId) {
+            return slide;
+          }
+
+          return {
+            ...slide,
+            elements: [...slide.elements, pastedElement],
+          };
+        }),
+      }));
+
+      setSelectedElementId(pastedElementId);
+      setElementContextMenu(null);
+      return;
+    }
+
+    if (action === "duplicate") {
+      let duplicateElementId = "";
+
+      commitProjectChange((currentProject) => {
+        let duplicated = false;
+        const now = Date.now();
+
+        const nextSlides = currentProject.slides.map((slide) => {
+          if (slide.id !== currentProject.activeSlideId) {
+            return slide;
+          }
+
+          const sourceElementIndex = slide.elements.findIndex(
+            (element) => element.id === menuState.elementId,
+          );
+
+          if (sourceElementIndex === -1) {
+            return slide;
+          }
+
+          const sourceElement = slide.elements[sourceElementIndex];
+
+          if (!sourceElement) {
+            return slide;
+          }
+
+          duplicateElementId = `${sourceElement.id}-copy-${now}`;
+
+          const duplicateElement = cloneSlideElementForInsert(
+            sourceElement,
+            duplicateElementId,
+            now,
+            "副本",
+          );
+
+          duplicated = true;
+
+          return {
+            ...slide,
+            elements: [
+              ...slide.elements.slice(0, sourceElementIndex + 1),
+              duplicateElement,
+              ...slide.elements.slice(sourceElementIndex + 1),
+            ],
+          };
+        });
+
+        if (!duplicated) {
+          return currentProject;
+        }
+
+        return {
+          ...currentProject,
+          updatedAt: new Date().toISOString(),
+          slides: nextSlides,
+        };
+      });
+
+      if (duplicateElementId) {
+        setSelectedElementId(duplicateElementId);
+      }
+
+      setElementContextMenu(null);
+      return;
+    }
+
+    if (action === "delete") {
+      handleDeleteElement(menuState.elementId);
+      setElementContextMenu(null);
+      return;
+    }
+
+    handleLayerElement(menuState.elementId, action);
+    setElementContextMenu(null);
   }
 
   function handleDeleteElement(elementId: string) {
@@ -1829,6 +2055,7 @@ function App() {
                   scale={canvasScale}
                   selectedElementId={selectedElement?.id}
                   onSelectElement={setSelectedElementId}
+                  onOpenElementContextMenu={handleOpenElementContextMenu}
                   onMoveElement={(elementId, position) =>
                     handleUpdateElement(
                       elementId,
@@ -1945,6 +2172,71 @@ function App() {
           </section>
         </section>
       </main>
+
+      {elementContextMenu ? (
+        <div
+          className="fixed z-9999 w-44 overflow-hidden rounded-2xl border border-slate-200 bg-white p-1 text-sm shadow-2xl"
+          style={{
+            left: elementContextMenu.x,
+            top: elementContextMenu.y,
+          }}
+          onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <button
+            type="button"
+            className="w-full rounded-xl px-3 py-2 text-left font-semibold text-slate-700 transition hover:bg-violet-50 hover:text-violet-600"
+            onClick={() => handleElementContextMenuAction("copy")}
+          >
+            复制
+          </button>
+
+          <button
+            type="button"
+            className="w-full rounded-xl px-3 py-2 text-left font-semibold text-slate-700 transition hover:bg-violet-50 hover:text-violet-600 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white"
+            disabled={!copiedElementRef.current}
+            onClick={() => handleElementContextMenuAction("paste")}
+          >
+            粘贴
+          </button>
+
+          <button
+            type="button"
+            className="w-full rounded-xl px-3 py-2 text-left font-semibold text-slate-700 transition hover:bg-violet-50 hover:text-violet-600"
+            onClick={() => handleElementContextMenuAction("duplicate")}
+          >
+            复制副本
+          </button>
+
+          <div className="my-1 h-px bg-slate-100" />
+
+          <button
+            type="button"
+            className="w-full rounded-xl px-3 py-2 text-left font-semibold text-slate-700 transition hover:bg-violet-50 hover:text-violet-600"
+            onClick={() => handleElementContextMenuAction("bring-to-front")}
+          >
+            置于顶层
+          </button>
+
+          <button
+            type="button"
+            className="w-full rounded-xl px-3 py-2 text-left font-semibold text-slate-700 transition hover:bg-violet-50 hover:text-violet-600"
+            onClick={() => handleElementContextMenuAction("send-to-back")}
+          >
+            置于底层
+          </button>
+
+          <div className="my-1 h-px bg-slate-100" />
+
+          <button
+            type="button"
+            className="w-full rounded-xl px-3 py-2 text-left font-semibold text-red-600 transition hover:bg-red-50"
+            onClick={() => handleElementContextMenuAction("delete")}
+          >
+            删除
+          </button>
+        </div>
+      ) : null}
     </DndContext>
   );
 }

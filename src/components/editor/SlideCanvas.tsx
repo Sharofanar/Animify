@@ -65,6 +65,10 @@ type SlideCanvasProps = {
   scale?: number;
   selectedElementId?: string;
   onSelectElement?: (elementId: string) => void;
+  onOpenElementContextMenu?: (
+    elementId: string,
+    position: { x: number; y: number },
+  ) => void;
   onMoveElement?: (
     elementId: string,
     position: { x: number; y: number },
@@ -94,6 +98,7 @@ export function SlideCanvas({
   scale = 0.6,
   selectedElementId,
   onSelectElement,
+  onOpenElementContextMenu,
   onMoveElement,
   onResizeElement,
   onRotateElement,
@@ -150,6 +155,7 @@ export function SlideCanvas({
             selected={element.id === selectedElementId}
             isEditing={element.id === editingElementId}
             onSelect={onSelectElement}
+            onOpenContextMenu={onOpenElementContextMenu}
             onMove={onMoveElement}
             onResize={onResizeElement}
             onRotate={onRotateElement}
@@ -245,6 +251,7 @@ function SlideElementView({
   selected,
   isEditing,
   onSelect,
+  onOpenContextMenu,
   onMove,
   onResize,
   onRotate,
@@ -260,6 +267,10 @@ function SlideElementView({
   selected: boolean;
   isEditing: boolean;
   onSelect?: (elementId: string) => void;
+  onOpenContextMenu?: (
+    elementId: string,
+    position: { x: number; y: number },
+  ) => void;
   onMove?: (elementId: string, position: { x: number; y: number }) => void;
   onResize?: (elementId: string, style: Partial<SlideElement["style"]>) => void;
   onRotate?: (elementId: string, rotate: number) => void;
@@ -365,6 +376,27 @@ function SlideElementView({
       event.preventDefault();
       commitContent();
     }
+  }
+
+  /**
+   * Open the element context menu from right click.
+   *
+   * Right clicking also selects the element first, so the context menu always
+   * acts on the element under the mouse instead of a previously selected one.
+   */
+  function handleContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
+    if (isEditing) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    onSelect?.(element.id);
+    onOpenContextMenu?.(element.id, {
+      x: event.clientX,
+      y: event.clientY,
+    });
   }
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -582,6 +614,7 @@ function SlideElementView({
       } ${onMove && !isEditing ? "cursor-move touch-none" : ""}`}
       style={outerStyle}
       onPointerDown={handlePointerDown}
+      onContextMenu={handleContextMenu}
       onDoubleClick={handleDoubleClick}
       onClick={(event) => {
         event.stopPropagation();

@@ -382,6 +382,14 @@ function App() {
   const slideSurfaceRef = useRef<HTMLDivElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const canvasAreaRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * Store the element copied with Ctrl + C.
+   *
+   * This is kept in a ref instead of React state because copying does not need
+   * to re-render the editor. Pasting will clone this element into the active slide.
+   */
+  const copiedElementRef = useRef<SlideElement | null>(null);
   const [canvasAreaSize, setCanvasAreaSize] = useState({
     width: 0,
     height: 0,
@@ -675,200 +683,278 @@ function App() {
     };
   }, []);
 
-    useEffect(() => {
-      if (mode === "present" || !selectedElementId) {
-        return;
-      }
+  useEffect(() => {
+    if (mode === "present" || !selectedElementId) {
+      return;
+    }
 
-      /**
-       * Handle keyboard shortcuts for the selected element.
-       *
-       * - Arrow keys move the element by 1px.
-       * - Shift + Arrow keys move the element by 10px.
-       * - Delete / Backspace removes the selected element.
-       *
-       * Inputs and textareas are ignored so normal typing, deleting text, and
-       * editing element content are not interrupted.
-       */
-      function handleSelectedElementKeyDown(event: KeyboardEvent) {
-        const target = event.target;
+    /**
+     * Handle keyboard shortcuts for the selected element.
+     *
+     * - Arrow keys move the element by 1px.
+     * - Shift + Arrow keys move the element by 10px.
+     * - Delete / Backspace removes the selected element.
+     *
+     * Inputs and textareas are ignored so normal typing, deleting text, and
+     * editing element content are not interrupted.
+     */
+    function handleSelectedElementKeyDown(event: KeyboardEvent) {
+      const target = event.target;
 
-        const isTyping =
-          target instanceof HTMLInputElement ||
-          target instanceof HTMLTextAreaElement ||
-          target instanceof HTMLSelectElement ||
-          (target instanceof HTMLElement && target.isContentEditable);
+      const isTyping =
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target instanceof HTMLElement && target.isContentEditable);
 
-              if (isTyping) {
+            if (isTyping) {
+              return;
+            }
+
+            if (
+              (event.ctrlKey || event.metaKey) &&
+              event.key.toLowerCase() === "c"
+            ) {
+              event.preventDefault();
+
+              const currentProject = latestProjectRef.current;
+              const currentSlide = currentProject.slides.find(
+                (slide) => slide.id === currentProject.activeSlideId,
+              );
+              const selectedElement = currentSlide?.elements.find(
+                (element) => element.id === selectedElementId,
+              );
+
+              if (!selectedElement) {
                 return;
               }
 
-              if (
-                (event.ctrlKey || event.metaKey) &&
-                event.key.toLowerCase() === "d"
-              ) {
-                event.preventDefault();
+              // Deep clone the copied element so later edits to the original element
+              // will not mutate the clipboard copy.
+              copiedElementRef.current = JSON.parse(
+                JSON.stringify(selectedElement),
+              ) as SlideElement;
 
-                const now = Date.now();
-                const duplicateElementId = `${selectedElementId}-copy-${now}`;
-                let duplicated = false;
+              return;
+            }
 
-                commitProjectChange((currentProject) => {
-                  const nextSlides = currentProject.slides.map((slide) => {
-                    if (slide.id !== currentProject.activeSlideId) {
-                      return slide;
-                    }
+            if (
+              (event.ctrlKey || event.metaKey) &&
+              event.key.toLowerCase() === "v"
+            ) {
+              event.preventDefault();
 
-                    const sourceElementIndex = slide.elements.findIndex(
-                      (element) => element.id === selectedElementId,
-                    );
+              const copiedElement = copiedElementRef.current;
 
-                    if (sourceElementIndex === -1) {
-                      return slide;
-                    }
+              if (!copiedElement) {
+                return;
+              }
 
-                    const sourceElement = slide.elements[sourceElementIndex];
+              const now = Date.now();
+              const pastedElementId = `${copiedElement.id}-paste-${now}`;
 
-                    duplicated = true;
+              const pastedElement: SlideElement = {
+                ...copiedElement,
+                id: pastedElementId,
+                name: `${copiedElement.name} 粘贴`,
+                style: {
+                  ...copiedElement.style,
+                  x: copiedElement.style.x + 32,
+                  y: copiedElement.style.y + 32,
+                },
+                animations: copiedElement.animations.map(
+                  (animation, animationIndex) => ({
+                    ...animation,
+                    id: `${animation.id}-paste-${now}-${animationIndex}`,
+                  }),
+                ),
+              };
 
-                    const duplicateElement: SlideElement = {
-                      ...sourceElement,
-                      id: duplicateElementId,
-                      name: `${sourceElement.name} 副本`,
-                      style: {
-                        ...sourceElement.style,
-                        x: sourceElement.style.x + 32,
-                        y: sourceElement.style.y + 32,
-                      },
-                      animations: sourceElement.animations.map(
-                        (animation, animationIndex) => ({
-                          ...animation,
-                          id: `${animation.id}-copy-${now}-${animationIndex}`,
-                        }),
-                      ),
-                    };
-
-                    return {
-                      ...slide,
-
-                      // Insert the duplicated element right after the original one.
-                      // This keeps the layer order predictable while making the copy
-                      // easy to find and move.
-                      elements: [
-                        ...slide.elements.slice(0, sourceElementIndex + 1),
-                        duplicateElement,
-                        ...slide.elements.slice(sourceElementIndex + 1),
-                      ],
-                    };
-                  });
-
-                  if (!duplicated) {
-                    return currentProject;
+              commitProjectChange((currentProject) => ({
+                ...currentProject,
+                updatedAt: new Date().toISOString(),
+                slides: currentProject.slides.map((slide) => {
+                  if (slide.id !== currentProject.activeSlideId) {
+                    return slide;
                   }
 
                   return {
-                    ...currentProject,
-                    updatedAt: new Date().toISOString(),
-                    slides: nextSlides,
+                    ...slide,
+                    elements: [...slide.elements, pastedElement],
+                  };
+                }),
+              }));
+
+              setSelectedElementId(pastedElementId);
+              return;
+            }
+
+            if (
+              (event.ctrlKey || event.metaKey) &&
+              event.key.toLowerCase() === "d"
+            ) {
+              event.preventDefault();
+
+              const now = Date.now();
+              const duplicateElementId = `${selectedElementId}-copy-${now}`;
+              let duplicated = false;
+
+              commitProjectChange((currentProject) => {
+                const nextSlides = currentProject.slides.map((slide) => {
+                  if (slide.id !== currentProject.activeSlideId) {
+                    return slide;
+                  }
+
+                  const sourceElementIndex = slide.elements.findIndex(
+                    (element) => element.id === selectedElementId,
+                  );
+
+                  if (sourceElementIndex === -1) {
+                    return slide;
+                  }
+
+                  const sourceElement = slide.elements[sourceElementIndex];
+
+                  duplicated = true;
+
+                  const duplicateElement: SlideElement = {
+                    ...sourceElement,
+                    id: duplicateElementId,
+                    name: `${sourceElement.name} 副本`,
+                    style: {
+                      ...sourceElement.style,
+                      x: sourceElement.style.x + 32,
+                      y: sourceElement.style.y + 32,
+                    },
+                    animations: sourceElement.animations.map(
+                      (animation, animationIndex) => ({
+                        ...animation,
+                        id: `${animation.id}-copy-${now}-${animationIndex}`,
+                      }),
+                    ),
+                  };
+
+                  return {
+                    ...slide,
+
+                    // Insert the duplicated element right after the original one.
+                    // This keeps the layer order predictable while making the copy
+                    // easy to find and move.
+                    elements: [
+                      ...slide.elements.slice(0, sourceElementIndex + 1),
+                      duplicateElement,
+                      ...slide.elements.slice(sourceElementIndex + 1),
+                    ],
                   };
                 });
 
-                if (duplicated) {
-                  setSelectedElementId(duplicateElementId);
+                if (!duplicated) {
+                  return currentProject;
                 }
 
-                return;
-              }
-
-              if (event.key === "Delete" || event.key === "Backspace") {
-                event.preventDefault();
-
-                commitProjectChange((currentProject) => ({
+                return {
                   ...currentProject,
                   updatedAt: new Date().toISOString(),
-                  slides: currentProject.slides.map((slide) => {
-                    if (slide.id !== currentProject.activeSlideId) {
-                      return slide;
-                    }
+                  slides: nextSlides,
+                };
+              });
 
-                    return {
-                      ...slide,
-                      elements: slide.elements.filter(
-                        (element) => element.id !== selectedElementId,
-                      ),
-                    };
-                  }),
-                }));
-
-                setSelectedElementId("");
-                return;
+              if (duplicated) {
+                setSelectedElementId(duplicateElementId);
               }
 
-        const step = event.shiftKey ? 10 : 1;
-        let deltaX = 0;
-        let deltaY = 0;
+              return;
+            }
 
-        if (event.key === "ArrowLeft") {
-          deltaX = -step;
-        } else if (event.key === "ArrowRight") {
-          deltaX = step;
-        } else if (event.key === "ArrowUp") {
-          deltaY = -step;
-        } else if (event.key === "ArrowDown") {
-          deltaY = step;
-        } else {
-          return;
-        }
-
+      if (event.key === "Delete" || event.key === "Backspace") {
         event.preventDefault();
 
-        commitProjectChange((currentProject) => {
-          let moved = false;
-
-          const nextSlides = currentProject.slides.map((slide) => {
+        commitProjectChange((currentProject) => ({
+          ...currentProject,
+          updatedAt: new Date().toISOString(),
+          slides: currentProject.slides.map((slide) => {
             if (slide.id !== currentProject.activeSlideId) {
               return slide;
             }
 
             return {
               ...slide,
-              elements: slide.elements.map((element) => {
-                if (element.id !== selectedElementId) {
-                  return element;
-                }
-
-                moved = true;
-
-                return {
-                  ...element,
-                  style: {
-                    ...element.style,
-                    x: element.style.x + deltaX,
-                    y: element.style.y + deltaY,
-                  },
-                };
-              }),
+              elements: slide.elements.filter(
+                (element) => element.id !== selectedElementId,
+              ),
             };
-          });
+          }),
+        }));
 
-          if (!moved) {
-            return currentProject;
+        setSelectedElementId("");
+        return;
+      }
+
+      const step = event.shiftKey ? 10 : 1;
+      let deltaX = 0;
+      let deltaY = 0;
+
+      if (event.key === "ArrowLeft") {
+        deltaX = -step;
+      } else if (event.key === "ArrowRight") {
+        deltaX = step;
+      } else if (event.key === "ArrowUp") {
+        deltaY = -step;
+      } else if (event.key === "ArrowDown") {
+        deltaY = step;
+      } else {
+        return;
+      }
+
+      event.preventDefault();
+
+      commitProjectChange((currentProject) => {
+        let moved = false;
+
+        const nextSlides = currentProject.slides.map((slide) => {
+          if (slide.id !== currentProject.activeSlideId) {
+            return slide;
           }
 
           return {
-            ...currentProject,
-            updatedAt: new Date().toISOString(),
-            slides: nextSlides,
+            ...slide,
+            elements: slide.elements.map((element) => {
+              if (element.id !== selectedElementId) {
+                return element;
+              }
+
+              moved = true;
+
+              return {
+                ...element,
+                style: {
+                  ...element.style,
+                  x: element.style.x + deltaX,
+                  y: element.style.y + deltaY,
+                },
+              };
+            }),
           };
         });
-      }
 
-      window.addEventListener("keydown", handleSelectedElementKeyDown);
+        if (!moved) {
+          return currentProject;
+        }
 
-      return () => {
-        window.removeEventListener("keydown", handleSelectedElementKeyDown);
-      };
-    }, [commitProjectChange, mode, selectedElementId]);
+        return {
+          ...currentProject,
+          updatedAt: new Date().toISOString(),
+          slides: nextSlides,
+        };
+      });
+    }
+
+    window.addEventListener("keydown", handleSelectedElementKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleSelectedElementKeyDown);
+    };
+  }, [commitProjectChange, mode, selectedElementId]);
 
   if (!activeSlide) {
     return (

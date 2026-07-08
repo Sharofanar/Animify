@@ -675,89 +675,123 @@ function App() {
     };
   }, []);
 
-  useEffect(() => {
-    if (mode === "present" || !selectedElementId) {
-      return;
-    }
-
-    function handleElementNudge(event: KeyboardEvent) {
-      const target = event.target;
-
-      const isTyping =
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement ||
-        (target instanceof HTMLElement && target.isContentEditable);
-
-      if (isTyping) {
+    useEffect(() => {
+      if (mode === "present" || !selectedElementId) {
         return;
       }
 
-      const step = event.shiftKey ? 10 : 1;
-      let deltaX = 0;
-      let deltaY = 0;
+      /**
+       * Handle keyboard shortcuts for the selected element.
+       *
+       * - Arrow keys move the element by 1px.
+       * - Shift + Arrow keys move the element by 10px.
+       * - Delete / Backspace removes the selected element.
+       *
+       * Inputs and textareas are ignored so normal typing, deleting text, and
+       * editing element content are not interrupted.
+       */
+      function handleSelectedElementKeyDown(event: KeyboardEvent) {
+        const target = event.target;
 
-      if (event.key === "ArrowLeft") {
-        deltaX = -step;
-      } else if (event.key === "ArrowRight") {
-        deltaX = step;
-      } else if (event.key === "ArrowUp") {
-        deltaY = -step;
-      } else if (event.key === "ArrowDown") {
-        deltaY = step;
-      } else {
-        return;
-      }
+        const isTyping =
+          target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          target instanceof HTMLSelectElement ||
+          (target instanceof HTMLElement && target.isContentEditable);
 
-      event.preventDefault();
+        if (isTyping) {
+          return;
+        }
 
-      commitProjectChange((currentProject) => {
-        let moved = false;
+        if (event.key === "Delete" || event.key === "Backspace") {
+          event.preventDefault();
 
-        const nextSlides = currentProject.slides.map((slide) => {
-          if (slide.id !== currentProject.activeSlideId) {
-            return slide;
+          commitProjectChange((currentProject) => ({
+            ...currentProject,
+            updatedAt: new Date().toISOString(),
+            slides: currentProject.slides.map((slide) => {
+              if (slide.id !== currentProject.activeSlideId) {
+                return slide;
+              }
+
+              return {
+                ...slide,
+                elements: slide.elements.filter(
+                  (element) => element.id !== selectedElementId,
+                ),
+              };
+            }),
+          }));
+
+          setSelectedElementId("");
+          return;
+        }
+
+        const step = event.shiftKey ? 10 : 1;
+        let deltaX = 0;
+        let deltaY = 0;
+
+        if (event.key === "ArrowLeft") {
+          deltaX = -step;
+        } else if (event.key === "ArrowRight") {
+          deltaX = step;
+        } else if (event.key === "ArrowUp") {
+          deltaY = -step;
+        } else if (event.key === "ArrowDown") {
+          deltaY = step;
+        } else {
+          return;
+        }
+
+        event.preventDefault();
+
+        commitProjectChange((currentProject) => {
+          let moved = false;
+
+          const nextSlides = currentProject.slides.map((slide) => {
+            if (slide.id !== currentProject.activeSlideId) {
+              return slide;
+            }
+
+            return {
+              ...slide,
+              elements: slide.elements.map((element) => {
+                if (element.id !== selectedElementId) {
+                  return element;
+                }
+
+                moved = true;
+
+                return {
+                  ...element,
+                  style: {
+                    ...element.style,
+                    x: element.style.x + deltaX,
+                    y: element.style.y + deltaY,
+                  },
+                };
+              }),
+            };
+          });
+
+          if (!moved) {
+            return currentProject;
           }
 
           return {
-            ...slide,
-            elements: slide.elements.map((element) => {
-              if (element.id !== selectedElementId) {
-                return element;
-              }
-
-              moved = true;
-
-              return {
-                ...element,
-                style: {
-                  ...element.style,
-                  x: element.style.x + deltaX,
-                  y: element.style.y + deltaY,
-                },
-              };
-            }),
+            ...currentProject,
+            updatedAt: new Date().toISOString(),
+            slides: nextSlides,
           };
         });
+      }
 
-        if (!moved) {
-          return currentProject;
-        }
+      window.addEventListener("keydown", handleSelectedElementKeyDown);
 
-        return {
-          ...currentProject,
-          updatedAt: new Date().toISOString(),
-          slides: nextSlides,
-        };
-      });
-    }
-
-    window.addEventListener("keydown", handleElementNudge);
-
-    return () => {
-      window.removeEventListener("keydown", handleElementNudge);
-    };
-  }, [commitProjectChange, mode, selectedElementId]);
+      return () => {
+        window.removeEventListener("keydown", handleSelectedElementKeyDown);
+      };
+    }, [commitProjectChange, mode, selectedElementId]);
 
   if (!activeSlide) {
     return (

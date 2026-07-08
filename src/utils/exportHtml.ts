@@ -100,6 +100,74 @@ function createHtmlDocument(project: PresentationProject) {
       pointer-events: none;
     }
 
+        .element-content {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      white-space: pre-wrap;
+      text-align: center;
+      line-height: 1.2;
+    }
+
+    @keyframes fade-in-up {
+      from {
+        opacity: 0;
+        transform: translateY(28px);
+      }
+
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @keyframes fade-in {
+      from {
+        opacity: 0;
+      }
+
+      to {
+        opacity: 1;
+      }
+    }
+
+    @keyframes scale-in {
+      from {
+        opacity: 0;
+        transform: scale(0.92);
+      }
+
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    @keyframes pulse {
+      0%,
+      100% {
+        transform: scale(1);
+      }
+
+      50% {
+        transform: scale(1.05);
+      }
+    }
+
+    @keyframes float {
+      0%,
+      100% {
+        transform: translateY(0);
+      }
+
+      50% {
+        transform: translateY(-14px);
+      }
+    }
+
     .controls {
       position: fixed;
       right: 24px;
@@ -167,10 +235,9 @@ function createHtmlDocument(project: PresentationProject) {
 
   <script>
     const project = ${serializedProject};
-    let activeSlideIndex = Math.max(
-      0,
-      project.slides.findIndex((slide) => slide.id === project.activeSlideId),
-    );
+    // Exported presentations should always start from the first slide,
+    // no matter which slide was active when the user clicked export.
+    let activeSlideIndex = 0;
 
     const app = document.getElementById("app");
     const prevButton = document.getElementById("prevButton");
@@ -193,26 +260,125 @@ function createHtmlDocument(project: PresentationProject) {
 
       return project.assets[assetId];
     }
+    
+    function getAnimationFrames(animationName) {
+      // Keep these names aligned with PropertyPanel animationPresets.
+      // The editor currently saves animation.keyframes as:
+      // "fade-in", "slide-up", or "zoom-in".
+      if (animationName === "fade-in") {
+        return [
+          { opacity: 0 },
+          { opacity: 1 },
+        ];
+      }
 
-    function createElementNode(element) {
+      if (animationName === "slide-up") {
+        return [
+          { opacity: 0, transform: "translateY(28px)" },
+          { opacity: 1, transform: "translateY(0)" },
+        ];
+      }
+
+      if (animationName === "zoom-in") {
+        return [
+          { opacity: 0, transform: "scale(0.92)" },
+          { opacity: 1, transform: "scale(1)" },
+        ];
+      }
+
+      // Backward-compatible names used by the original demo data or older exports.
+      if (animationName === "fade-in-up") {
+        return [
+          { opacity: 0, transform: "translateY(28px)" },
+          { opacity: 1, transform: "translateY(0)" },
+        ];
+      }
+
+      if (animationName === "scale-in") {
+        return [
+          { opacity: 0, transform: "scale(0.92)" },
+          { opacity: 1, transform: "scale(1)" },
+        ];
+      }
+
+      if (animationName === "pulse") {
+        return [
+          { transform: "scale(1)" },
+          { transform: "scale(1.05)" },
+          { transform: "scale(1)" },
+        ];
+      }
+
+      if (animationName === "float") {
+        return [
+          { transform: "translateY(0)" },
+          { transform: "translateY(-14px)" },
+          { transform: "translateY(0)" },
+        ];
+      }
+
+      return null;
+    }
+
+    function playSlideAnimations(slideNode) {
+      const animatedNodes = slideNode.querySelectorAll("[data-animation-name]");
+
+      animatedNodes.forEach((node) => {
+        const animationName = node.dataset.animationName;
+        const animationFrames = getAnimationFrames(animationName);
+
+        if (!animationFrames) {
+          return;
+        }
+
+        // Cancel existing animations first so changing slides or resizing the
+        // browser can replay the animation from the beginning.
+        node.getAnimations().forEach((animation) => {
+          animation.cancel();
+        });
+
+        node.animate(animationFrames, {
+          duration: Number(node.dataset.animationDuration || 600),
+          delay: Number(node.dataset.animationDelay || 0),
+          easing: node.dataset.animationEasing || "ease-out",
+          fill: "both",
+        });
+      });
+    }
+
+          function createElementNode(element) {
       const style = element.style || {};
+      const animation = element.animations?.[0];
       const asset = getAsset(element.assetId);
       const node = document.createElement("div");
+      const contentNode = document.createElement("div");
 
       node.className =
         element.type === "image" ? "element element-image" : "element";
 
-      node.style.left = \`\${style.x ?? 0}px\`;
-      node.style.top = \`\${style.y ?? 0}px\`;
-      node.style.width = \`\${style.width ?? 0}px\`;
-      node.style.height = \`\${style.height ?? 0}px\`;
-      node.style.transform = \`rotate(\${style.rotate ?? 0}deg)\`;
+      node.style.left = String(style.x ?? 0) + "px";
+      node.style.top = String(style.y ?? 0) + "px";
+      node.style.width = String(style.width ?? 0) + "px";
+      node.style.height = String(style.height ?? 0) + "px";
+      node.style.transform = "rotate(" + String(style.rotate ?? 0) + "deg)";
       node.style.opacity = String(style.opacity ?? 1);
-      node.style.color = style.color ?? "#0f172a";
-      node.style.backgroundColor = style.backgroundColor ?? "transparent";
-      node.style.fontSize = \`\${style.fontSize ?? 16}px\`;
-      node.style.fontWeight = String(style.fontWeight ?? 400);
-      node.style.borderRadius = \`\${style.borderRadius ?? 0}px\`;
+
+      contentNode.className = "element-content";
+      contentNode.style.color = style.color ?? "#0f172a";
+      contentNode.style.backgroundColor = style.backgroundColor ?? "transparent";
+      contentNode.style.fontSize = String(style.fontSize ?? 16) + "px";
+      contentNode.style.fontWeight = String(style.fontWeight ?? 400);
+      contentNode.style.borderRadius = String(style.borderRadius ?? 0) + "px";
+
+            
+      // Store animation metadata on the inner content node. The exported player
+      // will actively replay these animations after each slide render.
+      if (animation) {
+        contentNode.dataset.animationName = animation.keyframes;
+        contentNode.dataset.animationDuration = String(animation.duration ?? 600);
+        contentNode.dataset.animationDelay = String(animation.delay ?? 0);
+        contentNode.dataset.animationEasing = animation.easing || "ease-out";
+      }
 
       // Image elements only store assetId on the slide. Resolve the real image
       // data from project.assets so exported presentations show the image
@@ -223,13 +389,16 @@ function createHtmlDocument(project: PresentationProject) {
         image.src = asset.source;
         image.alt = asset.name || element.name || "image";
         image.draggable = false;
-        image.style.borderRadius = \`\${style.borderRadius ?? 0}px\`;
+        image.style.borderRadius = String(style.borderRadius ?? 0) + "px";
 
-        node.appendChild(image);
+        contentNode.appendChild(image);
+        node.appendChild(contentNode);
         return node;
       }
 
-      node.innerHTML = escapeHtml(element.content || "");
+      contentNode.innerHTML = escapeHtml(element.content || "");
+      node.appendChild(contentNode);
+
       return node;
     }
 
@@ -261,6 +430,13 @@ function createHtmlDocument(project: PresentationProject) {
       }
 
       app.replaceChildren(slideNode);
+
+      // Play exported animations after the slide has been mounted into the DOM.
+      // requestAnimationFrame makes page switching more reliable, especially
+      // when the browser needs one frame to apply the newly inserted elements.
+      requestAnimationFrame(() => {
+        playSlideAnimations(slideNode);
+      });
 
       slideCounter.textContent = \`\${activeSlideIndex + 1} / \${project.slides.length}\`;
       prevButton.disabled = activeSlideIndex <= 0;

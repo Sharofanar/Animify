@@ -699,33 +699,110 @@ function App() {
           target instanceof HTMLSelectElement ||
           (target instanceof HTMLElement && target.isContentEditable);
 
-        if (isTyping) {
-          return;
-        }
-
-        if (event.key === "Delete" || event.key === "Backspace") {
-          event.preventDefault();
-
-          commitProjectChange((currentProject) => ({
-            ...currentProject,
-            updatedAt: new Date().toISOString(),
-            slides: currentProject.slides.map((slide) => {
-              if (slide.id !== currentProject.activeSlideId) {
-                return slide;
+              if (isTyping) {
+                return;
               }
 
-              return {
-                ...slide,
-                elements: slide.elements.filter(
-                  (element) => element.id !== selectedElementId,
-                ),
-              };
-            }),
-          }));
+              if (
+                (event.ctrlKey || event.metaKey) &&
+                event.key.toLowerCase() === "d"
+              ) {
+                event.preventDefault();
 
-          setSelectedElementId("");
-          return;
-        }
+                const now = Date.now();
+                const duplicateElementId = `${selectedElementId}-copy-${now}`;
+                let duplicated = false;
+
+                commitProjectChange((currentProject) => {
+                  const nextSlides = currentProject.slides.map((slide) => {
+                    if (slide.id !== currentProject.activeSlideId) {
+                      return slide;
+                    }
+
+                    const sourceElementIndex = slide.elements.findIndex(
+                      (element) => element.id === selectedElementId,
+                    );
+
+                    if (sourceElementIndex === -1) {
+                      return slide;
+                    }
+
+                    const sourceElement = slide.elements[sourceElementIndex];
+
+                    duplicated = true;
+
+                    const duplicateElement: SlideElement = {
+                      ...sourceElement,
+                      id: duplicateElementId,
+                      name: `${sourceElement.name} 副本`,
+                      style: {
+                        ...sourceElement.style,
+                        x: sourceElement.style.x + 32,
+                        y: sourceElement.style.y + 32,
+                      },
+                      animations: sourceElement.animations.map(
+                        (animation, animationIndex) => ({
+                          ...animation,
+                          id: `${animation.id}-copy-${now}-${animationIndex}`,
+                        }),
+                      ),
+                    };
+
+                    return {
+                      ...slide,
+
+                      // Insert the duplicated element right after the original one.
+                      // This keeps the layer order predictable while making the copy
+                      // easy to find and move.
+                      elements: [
+                        ...slide.elements.slice(0, sourceElementIndex + 1),
+                        duplicateElement,
+                        ...slide.elements.slice(sourceElementIndex + 1),
+                      ],
+                    };
+                  });
+
+                  if (!duplicated) {
+                    return currentProject;
+                  }
+
+                  return {
+                    ...currentProject,
+                    updatedAt: new Date().toISOString(),
+                    slides: nextSlides,
+                  };
+                });
+
+                if (duplicated) {
+                  setSelectedElementId(duplicateElementId);
+                }
+
+                return;
+              }
+
+              if (event.key === "Delete" || event.key === "Backspace") {
+                event.preventDefault();
+
+                commitProjectChange((currentProject) => ({
+                  ...currentProject,
+                  updatedAt: new Date().toISOString(),
+                  slides: currentProject.slides.map((slide) => {
+                    if (slide.id !== currentProject.activeSlideId) {
+                      return slide;
+                    }
+
+                    return {
+                      ...slide,
+                      elements: slide.elements.filter(
+                        (element) => element.id !== selectedElementId,
+                      ),
+                    };
+                  }),
+                }));
+
+                setSelectedElementId("");
+                return;
+              }
 
         const step = event.shiftKey ? 10 : 1;
         let deltaX = 0;

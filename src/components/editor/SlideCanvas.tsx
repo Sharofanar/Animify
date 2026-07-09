@@ -68,6 +68,12 @@ type SlideCanvasProps = {
   onSelectElement?: (elementId: string) => void;
   onToggleElementSelection?: (elementId: string) => void;
   onClearSelection?: () => void;
+  onOpenCanvasContextMenu?: (position: {
+    x: number;
+    y: number;
+    slideX: number;
+    slideY: number;
+  }) => void;
   onOpenElementContextMenu?: (
     elementId: string,
     position: { x: number; y: number },
@@ -104,6 +110,7 @@ export function SlideCanvas({
   onSelectElement,
   onToggleElementSelection,
   onClearSelection,
+  onOpenCanvasContextMenu,
   onOpenElementContextMenu,
   onMoveElement,
   onResizeElement,
@@ -134,26 +141,53 @@ export function SlideCanvas({
   }
 
   /**
-   * Clear the current element selection when the user clicks blank slide space.
+   * Clear the current element selection when the user left-clicks blank space.
    *
-   * Element clicks are ignored because their event target is not the slide
-   * surface itself. This keeps normal element selection, dragging, resizing, and
-   * rotating from being interrupted.
+   * Right click is handled separately by the canvas context menu, so it should
+   * not clear selection through this pointer handler.
    */
   function handleSlideSurfacePointerDown(
     event: ReactPointerEvent<HTMLDivElement>,
   ) {
-    if (event.target !== event.currentTarget) {
+    if (event.button !== 0 || event.target !== event.currentTarget) {
       return;
     }
 
     onClearSelection?.();
   }
 
+  /**
+   * Open the canvas context menu when the user right-clicks blank slide space.
+   *
+   * The menu receives both screen coordinates for positioning the menu and slide
+   * coordinates for inserting new elements near the clicked position.
+   */
+  function handleSlideSurfaceContextMenu(
+    event: ReactMouseEvent<HTMLDivElement>,
+  ) {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const surfaceRect = event.currentTarget.getBoundingClientRect();
+
+    onClearSelection?.();
+    onOpenCanvasContextMenu?.({
+      x: event.clientX,
+      y: event.clientY,
+      slideX: Math.round((event.clientX - surfaceRect.left) / scale),
+      slideY: Math.round((event.clientY - surfaceRect.top) / scale),
+    });
+  }
+
   const slideSurface = (
     <div
       ref={setSlideSurfaceNode}
       onPointerDown={handleSlideSurfacePointerDown}
+      onContextMenu={handleSlideSurfaceContextMenu}
       className={`relative rounded-2xl shadow-xl ${
         clipOverflow ? "overflow-hidden" : "overflow-visible"
       }`}

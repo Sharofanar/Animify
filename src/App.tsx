@@ -35,6 +35,13 @@ type ElementContextMenuState = {
   y: number;
 } | null;
 
+type CanvasContextMenuState = {
+  x: number;
+  y: number;
+  slideX: number;
+  slideY: number;
+} | null;
+
 type ProjectUpdater = (
   currentProject: PresentationProject,
 ) => PresentationProject;
@@ -412,6 +419,8 @@ function App() {
   const [propertyPanelOpen, setPropertyPanelOpen] = useState(true);
   const [elementContextMenu, setElementContextMenu] =
     useState<ElementContextMenuState>(null);
+  const [canvasContextMenu, setCanvasContextMenu] =
+    useState<CanvasContextMenuState>(null);
   const undoStackRef = useRef<PresentationProject[]>([]);
   const redoStackRef = useRef<PresentationProject[]>([]);
   const historyGroupSnapshotRef = useRef<PresentationProject | null>(null);
@@ -456,30 +465,31 @@ function App() {
   }, [project]);
 
   useEffect(() => {
-    if (!elementContextMenu) {
+    if (!elementContextMenu && !canvasContextMenu) {
       return;
     }
 
-    function closeElementContextMenu() {
+    function closeContextMenus() {
       setElementContextMenu(null);
+      setCanvasContextMenu(null);
     }
 
-    function handleElementContextMenuKeyDown(event: KeyboardEvent) {
+    function handleContextMenuKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
-        setElementContextMenu(null);
+        closeContextMenus();
       }
     }
 
-    window.addEventListener("click", closeElementContextMenu);
-    window.addEventListener("resize", closeElementContextMenu);
-    window.addEventListener("keydown", handleElementContextMenuKeyDown);
+    window.addEventListener("click", closeContextMenus);
+    window.addEventListener("resize", closeContextMenus);
+    window.addEventListener("keydown", handleContextMenuKeyDown);
 
     return () => {
-      window.removeEventListener("click", closeElementContextMenu);
-      window.removeEventListener("resize", closeElementContextMenu);
-      window.removeEventListener("keydown", handleElementContextMenuKeyDown);
+      window.removeEventListener("click", closeContextMenus);
+      window.removeEventListener("resize", closeContextMenus);
+      window.removeEventListener("keydown", handleContextMenuKeyDown);
     };
-  }, [elementContextMenu]);
+  }, [canvasContextMenu, elementContextMenu]);
 
   const pushUndoSnapshot = useCallback((snapshot: PresentationProject) => {
     undoStackRef.current = [
@@ -858,7 +868,6 @@ function App() {
         return;
       }
 
-      
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") {
         event.preventDefault();
 
@@ -1475,6 +1484,30 @@ function App() {
   }
 
   /**
+   * Open the canvas context menu near the mouse position.
+   *
+   * Screen coordinates place the menu. Slide coordinates are used by actions such
+   * as adding text, adding shapes, or pasting copied elements onto the slide.
+   */
+  function handleOpenCanvasContextMenu(position: {
+    x: number;
+    y: number;
+    slideX: number;
+    slideY: number;
+  }) {
+    const menuWidth = 180;
+    const menuHeight = 220;
+
+    setElementContextMenu(null);
+    setCanvasContextMenu({
+      x: clampPosition(position.x, 8, window.innerWidth - menuWidth - 8),
+      y: clampPosition(position.y, 8, window.innerHeight - menuHeight - 8),
+      slideX: position.slideX,
+      slideY: position.slideY,
+    });
+  }
+
+  /**
    * Run an action from the element context menu.
    *
    * Copy and paste use copiedElementsRef so keyboard shortcuts and the context
@@ -1648,6 +1681,103 @@ function App() {
 
     handleLayerElement(menuState.elementId, action);
     setElementContextMenu(null);
+  }
+
+  /**
+   * Run an action from the blank-canvas context menu.
+   *
+   * Pasting from the canvas menu places the copied group near the right-clicked
+   * slide position. Adding text or shape also uses that slide position.
+   */
+  function handleCanvasContextMenuAction(
+    action: "paste" | "add-text" | "add-shape" | "add-image",
+  ) {
+    const menuState = canvasContextMenu;
+
+    if (!menuState) {
+      return;
+    }
+
+    if (action === "add-text") {
+      handleAddElement("text", {
+        x: menuState.slideX,
+        y: menuState.slideY,
+      });
+      setCanvasContextMenu(null);
+      return;
+    }
+
+    if (action === "add-shape") {
+      handleAddElement("shape", {
+        x: menuState.slideX,
+        y: menuState.slideY,
+      });
+      setCanvasContextMenu(null);
+      return;
+    }
+
+    if (action === "add-image") {
+      setCanvasContextMenu(null);
+      handleOpenImagePicker();
+      return;
+    }
+
+    const copiedElements = copiedElementsRef.current;
+
+    if (copiedElements.length === 0) {
+      setCanvasContextMenu(null);
+      return;
+    }
+
+    const now = Date.now();
+    const sourceLeft = Math.min(
+      ...copiedElements.map((element) => element.style.x),
+    );
+    const sourceTop = Math.min(
+      ...copiedElements.map((element) => element.style.y),
+    );
+
+    const pastedElementIds = copiedElements.map(
+      (element, index) => `${element.id}-paste-${now}-${index}`,
+    );
+
+    const pastedElements = copiedElements.map((copiedElement, index) => {
+      const pastedElement = cloneSlideElementForInsert(
+        copiedElement,
+        pastedElementIds[index],
+        now,
+        "粘贴",
+      );
+
+      return {
+        ...pastedElement,
+        style: {
+          ...pastedElement.style,
+          x: menuState.slideX + (copiedElement.style.x - sourceLeft),
+          y: menuState.slideY + (copiedElement.style.y - sourceTop),
+        },
+      };
+    });
+
+    commitProjectChange((currentProject) => ({
+      ...currentProject,
+      updatedAt: new Date().toISOString(),
+      slides: currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        return {
+          ...slide,
+          elements: [...slide.elements, ...pastedElements],
+        };
+      }),
+    }));
+
+    setSelectedElementId(pastedElementIds.at(-1) ?? "");
+    setSelectedElementIds(pastedElementIds);
+    setPropertyPanelOpen(pastedElementIds.length === 1);
+    setCanvasContextMenu(null);
   }
 
   /**
@@ -2236,6 +2366,7 @@ function App() {
                   onToggleElementSelection={handleToggleElementSelection}
                   onClearSelection={handleClearElementSelection}
                   onOpenElementContextMenu={handleOpenElementContextMenu}
+                  onOpenCanvasContextMenu={handleOpenCanvasContextMenu}
                   onMoveElement={handleMoveSelectedElements}
                   onResizeElement={(elementId, style) =>
                     handleUpdateElement(
@@ -2408,6 +2539,53 @@ function App() {
             onClick={() => handleElementContextMenuAction("delete")}
           >
             删除
+          </button>
+        </div>
+      ) : null}
+
+      {canvasContextMenu ? (
+        <div
+          className="fixed z-9999 w-44 overflow-hidden rounded-2xl border border-slate-200 bg-white p-1 text-sm shadow-2xl"
+          style={{
+            left: canvasContextMenu.x,
+            top: canvasContextMenu.y,
+          }}
+          onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <button
+            type="button"
+            className="w-full rounded-xl px-3 py-2 text-left font-semibold text-slate-700 transition hover:bg-violet-50 hover:text-violet-600 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white"
+            disabled={copiedElementsRef.current.length === 0}
+            onClick={() => handleCanvasContextMenuAction("paste")}
+          >
+            粘贴
+          </button>
+
+          <div className="my-1 h-px bg-slate-100" />
+
+          <button
+            type="button"
+            className="w-full rounded-xl px-3 py-2 text-left font-semibold text-slate-700 transition hover:bg-violet-50 hover:text-violet-600"
+            onClick={() => handleCanvasContextMenuAction("add-text")}
+          >
+            添加文本
+          </button>
+
+          <button
+            type="button"
+            className="w-full rounded-xl px-3 py-2 text-left font-semibold text-slate-700 transition hover:bg-violet-50 hover:text-violet-600"
+            onClick={() => handleCanvasContextMenuAction("add-shape")}
+          >
+            添加形状
+          </button>
+
+          <button
+            type="button"
+            className="w-full rounded-xl px-3 py-2 text-left font-semibold text-slate-700 transition hover:bg-violet-50 hover:text-violet-600"
+            onClick={() => handleCanvasContextMenuAction("add-image")}
+          >
+            添加图片
           </button>
         </div>
       ) : null}

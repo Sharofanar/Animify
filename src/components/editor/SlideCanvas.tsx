@@ -65,6 +65,7 @@ type SlideCanvasProps = {
   scale?: number;
   selectedElementId?: string;
   onSelectElement?: (elementId: string) => void;
+  onClearSelection?: () => void;
   onOpenElementContextMenu?: (
     elementId: string,
     position: { x: number; y: number },
@@ -98,6 +99,7 @@ export function SlideCanvas({
   scale = 0.6,
   selectedElementId,
   onSelectElement,
+  onClearSelection,
   onOpenElementContextMenu,
   onMoveElement,
   onResizeElement,
@@ -127,9 +129,27 @@ export function SlideCanvas({
     }
   }
 
+  /**
+   * Clear the current element selection when the user clicks blank slide space.
+   *
+   * Element clicks are ignored because their event target is not the slide
+   * surface itself. This keeps normal element selection, dragging, resizing, and
+   * rotating from being interrupted.
+   */
+  function handleSlideSurfacePointerDown(
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) {
+    if (event.target !== event.currentTarget) {
+      return;
+    }
+
+    onClearSelection?.();
+  }
+
   const slideSurface = (
     <div
       ref={setSlideSurfaceNode}
+      onPointerDown={handleSlideSurfacePointerDown}
       className={`relative rounded-2xl shadow-xl ${
         clipOverflow ? "overflow-hidden" : "overflow-visible"
       }`}

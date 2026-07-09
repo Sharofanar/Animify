@@ -448,31 +448,31 @@ function App() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
   }, [project]);
 
-    useEffect(() => {
-      if (!elementContextMenu) {
-        return;
-      }
+  useEffect(() => {
+    if (!elementContextMenu) {
+      return;
+    }
 
-      function closeElementContextMenu() {
+    function closeElementContextMenu() {
+      setElementContextMenu(null);
+    }
+
+    function handleElementContextMenuKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
         setElementContextMenu(null);
       }
+    }
 
-      function handleElementContextMenuKeyDown(event: KeyboardEvent) {
-        if (event.key === "Escape") {
-          setElementContextMenu(null);
-        }
-      }
+    window.addEventListener("click", closeElementContextMenu);
+    window.addEventListener("resize", closeElementContextMenu);
+    window.addEventListener("keydown", handleElementContextMenuKeyDown);
 
-      window.addEventListener("click", closeElementContextMenu);
-      window.addEventListener("resize", closeElementContextMenu);
-      window.addEventListener("keydown", handleElementContextMenuKeyDown);
-
-      return () => {
-        window.removeEventListener("click", closeElementContextMenu);
-        window.removeEventListener("resize", closeElementContextMenu);
-        window.removeEventListener("keydown", handleElementContextMenuKeyDown);
-      };
-    }, [elementContextMenu]);
+    return () => {
+      window.removeEventListener("click", closeElementContextMenu);
+      window.removeEventListener("resize", closeElementContextMenu);
+      window.removeEventListener("keydown", handleElementContextMenuKeyDown);
+    };
+  }, [elementContextMenu]);
 
   const pushUndoSnapshot = useCallback((snapshot: PresentationProject) => {
     undoStackRef.current = [
@@ -1110,9 +1110,11 @@ function App() {
     );
   }
 
-  const selectedElement =
-    activeSlide.elements.find((element) => element.id === selectedElementId) ??
-    activeSlide.elements[0];
+  const selectedElement = selectedElementId
+    ? activeSlide.elements.find((element) => element.id === selectedElementId)
+    : undefined;
+
+  const showPropertyPanel = Boolean(selectedElement);
 
   const activeSlideElementCount = activeSlide.elements.length;
 
@@ -1529,6 +1531,21 @@ function App() {
     }
 
     handleLayerElement(menuState.elementId, action);
+    setElementContextMenu(null);
+  }
+
+  /**
+   * Select an element and reveal the property panel.
+   */
+  function handleSelectElement(elementId: string) {
+    setSelectedElementId(elementId);
+  }
+
+  /**
+   * Clear selection from blank slide clicks and hide the property panel.
+   */
+  function handleClearElementSelection() {
+    setSelectedElementId("");
     setElementContextMenu(null);
   }
 
@@ -2000,8 +2017,12 @@ function App() {
           <section
             className={`grid min-h-0 flex-1 gap-3 ${
               componentPanelOpen
-                ? "xl:grid-cols-[280px_180px_minmax(0,1fr)_320px]"
-                : "xl:grid-cols-[72px_180px_minmax(0,1fr)_320px]"
+                ? showPropertyPanel
+                  ? "xl:grid-cols-[280px_180px_minmax(0,1fr)_320px]"
+                  : "xl:grid-cols-[280px_180px_minmax(0,1fr)]"
+                : showPropertyPanel
+                  ? "xl:grid-cols-[72px_180px_minmax(0,1fr)_320px]"
+                  : "xl:grid-cols-[72px_180px_minmax(0,1fr)]"
             }`}
           >
             {componentPanelOpen ? (
@@ -2054,7 +2075,8 @@ function App() {
                   assets={project.assets}
                   scale={canvasScale}
                   selectedElementId={selectedElement?.id}
-                  onSelectElement={setSelectedElementId}
+                  onSelectElement={handleSelectElement}
+                  onClearSelection={handleClearElementSelection}
                   onOpenElementContextMenu={handleOpenElementContextMenu}
                   onMoveElement={(elementId, position) =>
                     handleUpdateElement(
@@ -2161,14 +2183,16 @@ function App() {
                 </section>
               ) : null}
             </div>
-            <div className="min-h-0 overflow-y-auto pr-1">
-              <PropertyPanel
-                selectedElement={selectedElement}
-                onUpdateElement={handleUpdateElement}
-                onDeleteElement={handleDeleteElement}
-                onLayerElement={handleLayerElement}
-              />
-            </div>
+            {showPropertyPanel ? (
+              <div className="min-h-0 overflow-y-auto pr-1">
+                <PropertyPanel
+                  selectedElement={selectedElement}
+                  onUpdateElement={handleUpdateElement}
+                  onDeleteElement={handleDeleteElement}
+                  onLayerElement={handleLayerElement}
+                />
+              </div>
+            ) : null}
           </section>
         </section>
       </main>

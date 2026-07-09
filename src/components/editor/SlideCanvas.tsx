@@ -411,8 +411,9 @@ function SlideElementView({
   /**
    * Open the element context menu from right click.
    *
-   * Right clicking also selects the element first, so the context menu always
-   * acts on the element under the mouse instead of a previously selected one.
+   * If the element is already selected as part of a multi-selection, keep the
+   * whole selection. If it is not selected, select only the right-clicked
+   * element before opening the menu.
    */
   function handleContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
     if (isEditing) {
@@ -422,7 +423,10 @@ function SlideElementView({
     event.preventDefault();
     event.stopPropagation();
 
-    onSelect?.(element.id);
+    if (!selected) {
+      onSelect?.(element.id);
+    }
+
     onOpenContextMenu?.(element.id, {
       x: event.clientX,
       y: event.clientY,

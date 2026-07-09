@@ -421,12 +421,12 @@ function App() {
   const canvasAreaRef = useRef<HTMLDivElement | null>(null);
 
   /**
-   * Store the element copied with Ctrl + C.
+   * Store elements copied with Ctrl + C or the context menu.
    *
-   * This is kept in a ref instead of React state because copying does not need
-   * to re-render the editor. Pasting will clone this element into the active slide.
+   * The clipboard stores one or more slide elements. Image elements keep assetId,
+   * so pasted images reuse the same asset record instead of duplicating image data.
    */
-  const copiedElementRef = useRef<SlideElement | null>(null);
+  const copiedElementsRef = useRef<SlideElement[]>([]);
   const [canvasAreaSize, setCanvasAreaSize] = useState({
     width: 0,
     height: 0,
@@ -753,7 +753,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (mode === "present" || selectedElementIds.length === 0) {
+    if (mode === "present") {
       return;
     }
 
@@ -780,58 +780,28 @@ function App() {
         return;
       }
 
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
-        event.preventDefault();
-
-        const currentProject = latestProjectRef.current;
-        const currentSlide = currentProject.slides.find(
-          (slide) => slide.id === currentProject.activeSlideId,
-        );
-        const selectedElement = currentSlide?.elements.find(
-          (element) => element.id === selectedElementId,
-        );
-
-        if (!selectedElement) {
-          return;
-        }
-
-        // Deep clone the copied element so later edits to the original element
-        // will not mutate the clipboard copy.
-        copiedElementRef.current = JSON.parse(
-          JSON.stringify(selectedElement),
-        ) as SlideElement;
-
-        return;
-      }
-
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") {
         event.preventDefault();
 
-        const copiedElement = copiedElementRef.current;
+        const copiedElements = copiedElementsRef.current;
 
-        if (!copiedElement) {
+        if (copiedElements.length === 0) {
           return;
         }
 
         const now = Date.now();
-        const pastedElementId = `${copiedElement.id}-paste-${now}`;
+        const pastedElementIds = copiedElements.map(
+          (element, index) => `${element.id}-paste-${now}-${index}`,
+        );
 
-        const pastedElement: SlideElement = {
-          ...copiedElement,
-          id: pastedElementId,
-          name: `${copiedElement.name} 粘贴`,
-          style: {
-            ...copiedElement.style,
-            x: copiedElement.style.x + 32,
-            y: copiedElement.style.y + 32,
-          },
-          animations: copiedElement.animations.map(
-            (animation, animationIndex) => ({
-              ...animation,
-              id: `${animation.id}-paste-${now}-${animationIndex}`,
-            }),
+        const pastedElements = copiedElements.map((copiedElement, index) =>
+          cloneSlideElementForInsert(
+            copiedElement,
+            pastedElementIds[index],
+            now,
+            "粘贴",
           ),
-        };
+        );
 
         commitProjectChange((currentProject) => ({
           ...currentProject,
@@ -843,15 +813,52 @@ function App() {
 
             return {
               ...slide,
-              elements: [...slide.elements, pastedElement],
+              elements: [...slide.elements, ...pastedElements],
             };
           }),
         }));
 
-        setSelectedElementId(pastedElementId);
+        setSelectedElementId(pastedElementIds.at(-1) ?? "");
+        setSelectedElementIds(pastedElementIds);
+        setPropertyPanelOpen(pastedElementIds.length === 1);
         return;
       }
 
+      if (selectedElementIds.length === 0) {
+        return;
+      }
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
+        event.preventDefault();
+
+        const currentProject = latestProjectRef.current;
+        const currentSlide = currentProject.slides.find(
+          (slide) => slide.id === currentProject.activeSlideId,
+        );
+
+        if (!currentSlide) {
+          return;
+        }
+
+        const selectedIdSet = new Set(selectedElementIds);
+        const copiedElements = currentSlide.elements.filter((element) =>
+          selectedIdSet.has(element.id),
+        );
+
+        if (copiedElements.length === 0) {
+          return;
+        }
+
+        // Deep clone the copied elements so later edits to the original elements
+        // will not mutate the internal clipboard copy.
+        copiedElementsRef.current = JSON.parse(
+          JSON.stringify(copiedElements),
+        ) as SlideElement[];
+
+        return;
+      }
+
+      
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") {
         event.preventDefault();
 
@@ -1470,7 +1477,7 @@ function App() {
   /**
    * Run an action from the element context menu.
    *
-   * Copy and paste use copiedElementRef so keyboard shortcuts and the context
+   * Copy and paste use copiedElementsRef so keyboard shortcuts and the context
    * menu share the same internal clipboard.
    */
   function handleElementContextMenuAction(
@@ -1493,14 +1500,30 @@ function App() {
       const currentSlide = currentProject.slides.find(
         (slide) => slide.id === currentProject.activeSlideId,
       );
-      const selectedElement = currentSlide?.elements.find(
-        (element) => element.id === menuState.elementId,
+
+      if (!currentSlide) {
+        setElementContextMenu(null);
+        return;
+      }
+
+      const shouldCopyCurrentSelection = selectedElementIds.includes(
+        menuState.elementId,
       );
 
-      if (selectedElement) {
-        copiedElementRef.current = JSON.parse(
-          JSON.stringify(selectedElement),
-        ) as SlideElement;
+      const idsToCopy =
+        shouldCopyCurrentSelection && selectedElementIds.length > 0
+          ? selectedElementIds
+          : [menuState.elementId];
+
+      const selectedIdSet = new Set(idsToCopy);
+      const copiedElements = currentSlide.elements.filter((element) =>
+        selectedIdSet.has(element.id),
+      );
+
+      if (copiedElements.length > 0) {
+        copiedElementsRef.current = JSON.parse(
+          JSON.stringify(copiedElements),
+        ) as SlideElement[];
       }
 
       setElementContextMenu(null);
@@ -1508,20 +1531,25 @@ function App() {
     }
 
     if (action === "paste") {
-      const copiedElement = copiedElementRef.current;
+      const copiedElements = copiedElementsRef.current;
 
-      if (!copiedElement) {
+      if (copiedElements.length === 0) {
         setElementContextMenu(null);
         return;
       }
 
       const now = Date.now();
-      const pastedElementId = `${copiedElement.id}-paste-${now}`;
-      const pastedElement = cloneSlideElementForInsert(
-        copiedElement,
-        pastedElementId,
-        now,
-        "粘贴",
+      const pastedElementIds = copiedElements.map(
+        (element, index) => `${element.id}-paste-${now}-${index}`,
+      );
+
+      const pastedElements = copiedElements.map((copiedElement, index) =>
+        cloneSlideElementForInsert(
+          copiedElement,
+          pastedElementIds[index],
+          now,
+          "粘贴",
+        ),
       );
 
       commitProjectChange((currentProject) => ({
@@ -1534,12 +1562,14 @@ function App() {
 
           return {
             ...slide,
-            elements: [...slide.elements, pastedElement],
+            elements: [...slide.elements, ...pastedElements],
           };
         }),
       }));
 
-      setSelectedElementId(pastedElementId);
+      setSelectedElementId(pastedElementIds.at(-1) ?? "");
+      setSelectedElementIds(pastedElementIds);
+      setPropertyPanelOpen(pastedElementIds.length === 1);
       setElementContextMenu(null);
       return;
     }
@@ -2338,7 +2368,7 @@ function App() {
           <button
             type="button"
             className="w-full rounded-xl px-3 py-2 text-left font-semibold text-slate-700 transition hover:bg-violet-50 hover:text-violet-600 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white"
-            disabled={!copiedElementRef.current}
+            disabled={copiedElementsRef.current.length === 0}
             onClick={() => handleElementContextMenuAction("paste")}
           >
             粘贴

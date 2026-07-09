@@ -444,6 +444,12 @@ function App() {
     demoProject.slides[0]?.elements[0]?.id ?? "",
   );
 
+  const [selectedElementIds, setSelectedElementIds] = useState<string[]>(() => {
+    const firstElementId = demoProject.slides[0]?.elements[0]?.id ?? "";
+
+    return firstElementId ? [firstElementId] : [];
+  });
+
   useEffect(() => {
     latestProjectRef.current = project;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
@@ -747,7 +753,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (mode === "present" || !selectedElementId) {
+    if (mode === "present" || selectedElementIds.length === 0) {
       return;
     }
 
@@ -934,13 +940,14 @@ function App() {
             return {
               ...slide,
               elements: slide.elements.filter(
-                (element) => element.id !== selectedElementId,
+                (element) => !selectedElementIds.includes(element.id),
               ),
             };
           }),
         }));
 
         setSelectedElementId("");
+        setSelectedElementIds([]);
         return;
       }
 
@@ -973,7 +980,7 @@ function App() {
           return {
             ...slide,
             elements: slide.elements.map((element) => {
-              if (element.id !== selectedElementId) {
+              if (!selectedElementIds.includes(element.id)) {
                 return element;
               }
 
@@ -1008,7 +1015,7 @@ function App() {
     return () => {
       window.removeEventListener("keydown", handleSelectedElementKeyDown);
     };
-  }, [commitProjectChange, mode, selectedElementId]);
+  }, [commitProjectChange, mode, selectedElementId, selectedElementIds]);
 
   if (!activeSlide) {
     return (
@@ -1115,7 +1122,10 @@ function App() {
     ? activeSlide.elements.find((element) => element.id === selectedElementId)
     : undefined;
 
-  const showPropertyPanel = propertyPanelOpen && Boolean(selectedElement);
+  const showPropertyPanel =
+    propertyPanelOpen &&
+    Boolean(selectedElement) &&
+    selectedElementIds.length === 1;
 
   const activeSlideElementCount = activeSlide.elements.length;
 
@@ -1170,6 +1180,7 @@ function App() {
     }));
 
     setSelectedElementId(newElement.id);
+    setSelectedElementIds([newElement.id]);
   }
 
   /**
@@ -1363,6 +1374,80 @@ function App() {
   }
 
   /**
+   * Move one element or the whole current multi-selection.
+   *
+   * SlideCanvas reports the dragged element's next absolute position. App converts
+   * that into a delta and applies the same delta to every selected element.
+   */
+  function handleMoveSelectedElements(
+    elementId: string,
+    position: { x: number; y: number },
+  ) {
+    commitProjectChange(
+      (currentProject) => {
+        const activeSelectionIds = selectedElementIds.includes(elementId)
+          ? selectedElementIds
+          : [elementId];
+
+        const selectedIdSet = new Set(activeSelectionIds);
+        let moved = false;
+
+        const nextSlides = currentProject.slides.map((slide) => {
+          if (slide.id !== currentProject.activeSlideId) {
+            return slide;
+          }
+
+          const draggedElement = slide.elements.find(
+            (element) => element.id === elementId,
+          );
+
+          if (!draggedElement) {
+            return slide;
+          }
+
+          const deltaX = position.x - draggedElement.style.x;
+          const deltaY = position.y - draggedElement.style.y;
+
+          if (deltaX === 0 && deltaY === 0) {
+            return slide;
+          }
+
+          moved = true;
+
+          return {
+            ...slide,
+            elements: slide.elements.map((element) => {
+              if (!selectedIdSet.has(element.id)) {
+                return element;
+              }
+
+              return {
+                ...element,
+                style: {
+                  ...element.style,
+                  x: element.style.x + deltaX,
+                  y: element.style.y + deltaY,
+                },
+              };
+            }),
+          };
+        });
+
+        if (!moved) {
+          return currentProject;
+        }
+
+        return {
+          ...currentProject,
+          updatedAt: new Date().toISOString(),
+          slides: nextSlides,
+        };
+      },
+      { recordHistory: false },
+    );
+  }
+
+  /**
    * Open the right-click menu near the mouse position.
    *
    * The position is clamped so the menu does not go outside the viewport.
@@ -1536,11 +1621,30 @@ function App() {
   }
 
   /**
-   * Select an element and reveal the property panel.
+   * Select exactly one element and reveal the property panel.
    */
   function handleSelectElement(elementId: string) {
     setSelectedElementId(elementId);
+    setSelectedElementIds([elementId]);
     setPropertyPanelOpen(true);
+  }
+
+  /**
+   * Toggle an element in multi-selection.
+   *
+   * Multi-selection hides the property panel because batch style editing is not
+   * implemented yet. The selected elements can still be moved or deleted together.
+   */
+  function handleToggleElementSelection(elementId: string) {
+    const isAlreadySelected = selectedElementIds.includes(elementId);
+    const nextSelectedElementIds = isAlreadySelected
+      ? selectedElementIds.filter((id) => id !== elementId)
+      : [...selectedElementIds, elementId];
+
+    setSelectedElementIds(nextSelectedElementIds);
+    setSelectedElementId(nextSelectedElementIds.at(-1) ?? "");
+    setElementContextMenu(null);
+    setPropertyPanelOpen(nextSelectedElementIds.length === 1);
   }
 
   /**
@@ -1548,6 +1652,7 @@ function App() {
    */
   function handleClearElementSelection() {
     setSelectedElementId("");
+    setSelectedElementIds([]);
     setElementContextMenu(null);
     setPropertyPanelOpen(false);
   }
@@ -1571,6 +1676,7 @@ function App() {
     }));
 
     setSelectedElementId("");
+    setSelectedElementIds([]);
   }
 
   function handleLayerElement(
@@ -1684,6 +1790,7 @@ function App() {
     localStorage.removeItem(STORAGE_KEY);
     commitProjectChange(() => demoProject);
     setSelectedElementId(firstElementId);
+    setSelectedElementIds(firstElementId ? [firstElementId] : []);
     setAnimationPreviewKey((key) => key + 1);
   }
 
@@ -2094,18 +2201,12 @@ function App() {
                   assets={project.assets}
                   scale={canvasScale}
                   selectedElementId={selectedElement?.id}
+                  selectedElementIds={selectedElementIds}
                   onSelectElement={handleSelectElement}
+                  onToggleElementSelection={handleToggleElementSelection}
                   onClearSelection={handleClearElementSelection}
                   onOpenElementContextMenu={handleOpenElementContextMenu}
-                  onMoveElement={(elementId, position) =>
-                    handleUpdateElement(
-                      elementId,
-                      {
-                        style: position,
-                      },
-                      { recordHistory: false },
-                    )
-                  }
+                  onMoveElement={handleMoveSelectedElements}
                   onResizeElement={(elementId, style) =>
                     handleUpdateElement(
                       elementId,

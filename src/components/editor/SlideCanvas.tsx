@@ -64,7 +64,9 @@ type SlideCanvasProps = {
   assets?: Record<string, PresentationAsset>;
   scale?: number;
   selectedElementId?: string;
+  selectedElementIds?: string[];
   onSelectElement?: (elementId: string) => void;
+  onToggleElementSelection?: (elementId: string) => void;
   onClearSelection?: () => void;
   onOpenElementContextMenu?: (
     elementId: string,
@@ -98,7 +100,9 @@ export function SlideCanvas({
   assets = {},
   scale = 0.6,
   selectedElementId,
+  selectedElementIds = [],
   onSelectElement,
+  onToggleElementSelection,
   onClearSelection,
   onOpenElementContextMenu,
   onMoveElement,
@@ -172,9 +176,13 @@ export function SlideCanvas({
             element={element}
             asset={asset}
             scale={scale}
-            selected={element.id === selectedElementId}
+            selected={
+              element.id === selectedElementId ||
+              selectedElementIds.includes(element.id)
+            }
             isEditing={element.id === editingElementId}
             onSelect={onSelectElement}
+            onToggleSelect={onToggleElementSelection}
             onOpenContextMenu={onOpenElementContextMenu}
             onMove={onMoveElement}
             onResize={onResizeElement}
@@ -271,6 +279,7 @@ function SlideElementView({
   selected,
   isEditing,
   onSelect,
+  onToggleSelect,
   onOpenContextMenu,
   onMove,
   onResize,
@@ -287,6 +296,7 @@ function SlideElementView({
   selected: boolean;
   isEditing: boolean;
   onSelect?: (elementId: string) => void;
+  onToggleSelect?: (elementId: string) => void;
   onOpenContextMenu?: (
     elementId: string,
     position: { x: number; y: number },
@@ -419,8 +429,32 @@ function SlideElementView({
     });
   }
 
+  /**
+   * Select a single element normally, or toggle multi-selection with Shift.
+   */
+  function handleElementClick(event: ReactMouseEvent<HTMLDivElement>) {
+    event.stopPropagation();
+
+    if (event.shiftKey) {
+      onToggleSelect?.(element.id);
+      return;
+    }
+
+    onSelect?.(element.id);
+  }
+
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
     if (isEditing) {
+      return;
+    }
+
+    if (event.button !== 0) {
+      return;
+    }
+
+    // Shift click is reserved for multi-selection, so it should not start dragging.
+    if (event.shiftKey) {
+      event.stopPropagation();
       return;
     }
 
@@ -429,7 +463,7 @@ function SlideElementView({
 
     const moveElement = onMove;
 
-    if (!moveElement || event.button !== 0) {
+    if (!moveElement) {
       return;
     }
 
@@ -636,10 +670,7 @@ function SlideElementView({
       onPointerDown={handlePointerDown}
       onContextMenu={handleContextMenu}
       onDoubleClick={handleDoubleClick}
-      onClick={(event) => {
-        event.stopPropagation();
-        onSelect?.(element.id);
-      }}
+      onClick={handleElementClick}
     >
       {isEditing ? (
         <textarea

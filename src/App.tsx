@@ -409,6 +409,7 @@ function App() {
   const [componentPanelOpen, setComponentPanelOpen] = useState(false);
   const [animationPreviewKey, setAnimationPreviewKey] = useState(0);
   const [presentToolbarOpen, setPresentToolbarOpen] = useState(false);
+  const [propertyPanelOpen, setPropertyPanelOpen] = useState(true);
   const [elementContextMenu, setElementContextMenu] =
     useState<ElementContextMenuState>(null);
   const undoStackRef = useRef<PresentationProject[]>([]);
@@ -1114,7 +1115,7 @@ function App() {
     ? activeSlide.elements.find((element) => element.id === selectedElementId)
     : undefined;
 
-  const showPropertyPanel = Boolean(selectedElement);
+  const showPropertyPanel = propertyPanelOpen && Boolean(selectedElement);
 
   const activeSlideElementCount = activeSlide.elements.length;
 
@@ -1539,6 +1540,7 @@ function App() {
    */
   function handleSelectElement(elementId: string) {
     setSelectedElementId(elementId);
+    setPropertyPanelOpen(true);
   }
 
   /**
@@ -1547,6 +1549,7 @@ function App() {
   function handleClearElementSelection() {
     setSelectedElementId("");
     setElementContextMenu(null);
+    setPropertyPanelOpen(false);
   }
 
   function handleDeleteElement(elementId: string) {
@@ -1967,6 +1970,22 @@ function App() {
                 onClick={() => setAnimationPreviewKey((key) => key + 1)}
               >
                 播放动画
+              </button>
+
+              <button
+                type="button"
+                className={`rounded-full px-5 py-2 text-sm font-semibold shadow-sm transition ${
+                  selectedElement
+                    ? propertyPanelOpen
+                      ? "bg-violet-100 text-violet-700 hover:bg-violet-200"
+                      : "bg-slate-200 text-slate-700 hover:bg-slate-300"
+                    : "cursor-not-allowed bg-slate-100 text-slate-300"
+                }`}
+                disabled={!selectedElement}
+                onClick={() => setPropertyPanelOpen((open) => !open)}
+                title={propertyPanelOpen ? "隐藏属性栏" : "显示属性栏"}
+              >
+                属性栏
               </button>
 
               <button

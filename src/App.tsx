@@ -1464,6 +1464,72 @@ function App() {
   }
 
   /**
+   * Apply exact style updates produced by the multi-selection resize frame.
+   *
+   * All pointer-move updates use recordHistory: false. SlideCanvas wraps the
+   * complete resize gesture with begin/finish history calls, so one drag creates
+   * only one undo entry.
+   */
+  function handleResizeSelectedElements(
+    updates: Array<{
+      elementId: string;
+      style: Partial<SlideElement["style"]>;
+    }>,
+  ) {
+    if (updates.length === 0) {
+      return;
+    }
+
+    const updatesByElementId = new Map(
+      updates.map((update) => [update.elementId, update.style]),
+    );
+
+    commitProjectChange(
+      (currentProject) => {
+        let changed = false;
+
+        const nextSlides = currentProject.slides.map((slide) => {
+          if (slide.id !== currentProject.activeSlideId) {
+            return slide;
+          }
+
+          return {
+            ...slide,
+            elements: slide.elements.map((element) => {
+              const styleUpdate = updatesByElementId.get(element.id);
+
+              if (!styleUpdate) {
+                return element;
+              }
+
+              changed = true;
+
+              return {
+                ...element,
+                style: {
+                  ...element.style,
+                  ...styleUpdate,
+                },
+              };
+            }),
+          };
+        });
+
+        if (!changed) {
+          return currentProject;
+        }
+
+        return {
+          ...currentProject,
+          updatedAt: new Date().toISOString(),
+          slides: nextSlides,
+        };
+      },
+      { recordHistory: false },
+    );
+  }
+
+  /**
    * Open the right-click menu near the mouse position.
    *
    * The position is clamped so the menu does not go outside the viewport.
@@ -2383,6 +2449,7 @@ function App() {
                   onOpenElementContextMenu={handleOpenElementContextMenu}
                   onOpenCanvasContextMenu={handleOpenCanvasContextMenu}
                   onMoveElement={handleMoveSelectedElements}
+                  onResizeSelectedElements={handleResizeSelectedElements}
                   onResizeElement={(elementId, style) =>
                     handleUpdateElement(
                       elementId,

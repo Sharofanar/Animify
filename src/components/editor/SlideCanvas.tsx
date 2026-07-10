@@ -25,6 +25,18 @@ type SelectionBox = {
   currentY: number;
 };
 
+type ElementStyleUpdate = {
+  elementId: string;
+  style: Partial<SlideElement["style"]>;
+};
+
+type SelectionBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 function getPointerAngle(
   clientX: number,
   clientY: number,
@@ -40,6 +52,59 @@ function normalizeRotate(value: number) {
 
 function clampSlideCoordinate(value: number, max: number) {
   return Math.min(Math.max(value, 0), max);
+}
+
+/**
+ * Calculate the visible axis-aligned bounds of an element.
+ *
+ * Rotation is included so the multi-selection frame can fully cover rotated
+ * elements instead of only using their unrotated width and height.
+ */
+function getElementVisualBounds(element: SlideElement): SelectionBounds {
+  const { x, y, width, height, rotate } = element.style;
+  const radians = (rotate * Math.PI) / 180;
+  const absoluteCos = Math.abs(Math.cos(radians));
+  const absoluteSin = Math.abs(Math.sin(radians));
+
+  const visualWidth = width * absoluteCos + height * absoluteSin;
+  const visualHeight = width * absoluteSin + height * absoluteCos;
+  const centerX = x + width / 2;
+  const centerY = y + height / 2;
+
+  return {
+    x: centerX - visualWidth / 2,
+    y: centerY - visualHeight / 2,
+    width: visualWidth,
+    height: visualHeight,
+  };
+}
+
+/**
+ * Calculate one bounding rectangle around every selected element.
+ */
+function getSelectionBounds(
+  elements: SlideElement[],
+): SelectionBounds | null {
+  if (elements.length === 0) {
+    return null;
+  }
+
+  const elementBounds = elements.map(getElementVisualBounds);
+  const left = Math.min(...elementBounds.map((bounds) => bounds.x));
+  const top = Math.min(...elementBounds.map((bounds) => bounds.y));
+  const right = Math.max(
+    ...elementBounds.map((bounds) => bounds.x + bounds.width),
+  );
+  const bottom = Math.max(
+    ...elementBounds.map((bounds) => bounds.y + bounds.height),
+  );
+
+  return {
+    x: left,
+    y: top,
+    width: right - left,
+    height: bottom - top,
+  };
 }
 
 const resizeHandleConfigs: Array<{
@@ -97,6 +162,7 @@ type SlideCanvasProps = {
     elementId: string,
     style: Partial<SlideElement["style"]>,
   ) => void;
+  onResizeSelectedElements?: (updates: ElementStyleUpdate[]) => void;
   onRotateElement?: (elementId: string, rotate: number) => void;
   onBeginElementChange?: () => void;
   onFinishElementChange?: () => void;
@@ -126,6 +192,7 @@ export function SlideCanvas({
   onOpenElementContextMenu,
   onMoveElement,
   onResizeElement,
+  onResizeSelectedElements,
   onRotateElement,
   onBeginElementChange,
   onFinishElementChange,
@@ -140,6 +207,8 @@ export function SlideCanvas({
 
   const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
 
+  const slideSurfaceNodeRef = useRef<HTMLDivElement | null>(null);
+
   const { isOver, setNodeRef } = useDroppable({
     id: "slide-canvas-droppable",
   });
@@ -149,6 +218,8 @@ export function SlideCanvas({
   }
 
   function setSlideSurfaceNode(node: HTMLDivElement | null) {
+    slideSurfaceNodeRef.current = node;
+
     if (slideSurfaceRef) {
       slideSurfaceRef.current = node;
     }
@@ -291,6 +362,199 @@ export function SlideCanvas({
     });
   }
 
+  const selectedElements = slide.elements.filter((element) =>
+    selectedElementIds.includes(element.id),
+  );
+
+  const multiSelectionActive = selectedElements.length > 1;
+  const multiSelectionBounds = getSelectionBounds(selectedElements);
+
+  /**
+   * Move the current multi-selection by dragging one of the outer frame edges.
+   *
+   * The existing onMoveElement callback already understands multi-selection, so
+   * the frame only needs to report the next position of one selected element.
+   */
+  function handleMultiSelectionMovePointerDown(
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) {
+    const primaryElement = selectedElements[0];
+
+    if (
+      event.button !== 0 ||
+      !primaryElement ||
+      !onMoveElement ||
+      !multiSelectionActive
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const startClientX = event.clientX;
+    const startClientY = event.clientY;
+    const startElementX = primaryElement.style.x;
+    const startElementY = primaryElement.style.y;
+
+    onBeginElementChange?.();
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      const deltaX = (moveEvent.clientX - startClientX) / scale;
+      const deltaY = (moveEvent.clientY - startClientY) / scale;
+
+      onMoveElement?.(primaryElement.id, {
+        x: Math.round(startElementX + deltaX),
+        y: Math.round(startElementY + deltaY),
+      });
+    }
+
+    function handlePointerUp() {
+      onFinishElementChange?.();
+
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  }
+
+  /**
+   * Resize every selected element proportionally from one corner.
+   *
+   * Element centers, sizes, font sizes, and border radii are scaled around the
+   * opposite corner. Rotation angles remain unchanged.
+   */
+  function handleMultiSelectionResizePointerDown(
+    direction: ResizeDirection,
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) {
+    const surfaceNode = slideSurfaceNodeRef.current;
+    const resizeSelectedElements = onResizeSelectedElements;
+
+    if (
+      event.button !== 0 ||
+      !surfaceNode ||
+      !multiSelectionBounds ||
+      !resizeSelectedElements ||
+      !multiSelectionActive
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const surfaceRect = surfaceNode.getBoundingClientRect();
+
+    // Keep immutable copies so every pointer move is calculated from the same
+    // starting state instead of repeatedly scaling already-scaled values.
+    const initialElements: SlideElement[] = selectedElements.map((element) => ({
+      ...element,
+      style: {
+        ...element.style,
+      },
+    }));
+
+    const initialBounds = getSelectionBounds(initialElements);
+
+    if (!initialBounds) {
+      return;
+    }
+
+    const left = initialBounds.x;
+    const top = initialBounds.y;
+    const right = initialBounds.x + initialBounds.width;
+    const bottom = initialBounds.y + initialBounds.height;
+
+    // The corner opposite the dragged handle stays fixed.
+    const anchorX = direction.includes("w") ? right : left;
+    const anchorY = direction.includes("n") ? bottom : top;
+    const startCornerX = direction.includes("w") ? left : right;
+    const startCornerY = direction.includes("n") ? top : bottom;
+    const initialVectorX = startCornerX - anchorX;
+    const initialVectorY = startCornerY - anchorY;
+    const initialVectorLengthSquared =
+      initialVectorX * initialVectorX + initialVectorY * initialVectorY;
+
+    if (initialVectorLengthSquared === 0) {
+      return;
+    }
+
+    onBeginElementChange?.();
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      const pointerX = clampSlideCoordinate(
+        (moveEvent.clientX - surfaceRect.left) / scale,
+        SLIDE_WIDTH,
+      );
+      const pointerY = clampSlideCoordinate(
+        (moveEvent.clientY - surfaceRect.top) / scale,
+        SLIDE_HEIGHT,
+      );
+
+      const currentVectorX = pointerX - anchorX;
+      const currentVectorY = pointerY - anchorY;
+
+      // Vector projection produces one uniform scale factor, so the group keeps
+      // its original aspect ratio regardless of the exact drag direction.
+      const projectedScale =
+        (currentVectorX * initialVectorX + currentVectorY * initialVectorY) /
+        initialVectorLengthSquared;
+
+      const scaleFactor = Math.max(0.08, projectedScale);
+
+      const updates: ElementStyleUpdate[] = initialElements.map((element) => {
+        const oldStyle = element.style;
+        const oldCenterX = oldStyle.x + oldStyle.width / 2;
+        const oldCenterY = oldStyle.y + oldStyle.height / 2;
+        const newCenterX = anchorX + (oldCenterX - anchorX) * scaleFactor;
+        const newCenterY = anchorY + (oldCenterY - anchorY) * scaleFactor;
+        const nextWidth = Math.max(8, oldStyle.width * scaleFactor);
+        const nextHeight = Math.max(8, oldStyle.height * scaleFactor);
+
+        const nextStyle: Partial<SlideElement["style"]> = {
+          x: Math.round(newCenterX - nextWidth / 2),
+          y: Math.round(newCenterY - nextHeight / 2),
+          width: Math.round(nextWidth),
+          height: Math.round(nextHeight),
+        };
+
+        if (oldStyle.fontSize !== undefined) {
+          nextStyle.fontSize = Math.max(
+            8,
+            Math.round(oldStyle.fontSize * scaleFactor),
+          );
+        }
+
+        if (oldStyle.borderRadius !== undefined) {
+          nextStyle.borderRadius = Math.max(
+            0,
+            Math.round(oldStyle.borderRadius * scaleFactor),
+          );
+        }
+
+        return {
+          elementId: element.id,
+          style: nextStyle,
+        };
+      });
+
+      resizeSelectedElements?.(updates);
+    }
+
+    function handlePointerUp() {
+      onFinishElementChange?.();
+
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  }
+
   const slideSurface = (
     <div
       ref={setSlideSurfaceNode}
@@ -336,6 +600,7 @@ export function SlideCanvas({
               element.id === selectedElementId ||
               selectedElementIds.includes(element.id)
             }
+            showTransformControls={!multiSelectionActive}
             isEditing={element.id === editingElementId}
             onSelect={onSelectElement}
             onToggleSelect={onToggleElementSelection}
@@ -351,6 +616,49 @@ export function SlideCanvas({
           />
         );
       })}
+      {multiSelectionActive && multiSelectionBounds ? (
+        <div
+          className="pointer-events-none absolute z-40 border-2 border-violet-500"
+          style={{
+            left: multiSelectionBounds.x * scale,
+            top: multiSelectionBounds.y * scale,
+            width: multiSelectionBounds.width * scale,
+            height: multiSelectionBounds.height * scale,
+          }}
+        >
+          {/* Transparent edge hit areas let the user drag the unified frame. */}
+          <div
+            className="pointer-events-auto absolute -left-1 -right-1 -top-2 h-4 cursor-move"
+            onPointerDown={handleMultiSelectionMovePointerDown}
+          />
+          <div
+            className="pointer-events-auto absolute -bottom-2 -left-1 -right-1 h-4 cursor-move"
+            onPointerDown={handleMultiSelectionMovePointerDown}
+          />
+          <div
+            className="pointer-events-auto absolute -bottom-1 -left-2 -top-1 w-4 cursor-move"
+            onPointerDown={handleMultiSelectionMovePointerDown}
+          />
+          <div
+            className="pointer-events-auto absolute -bottom-1 -right-2 -top-1 w-4 cursor-move"
+            onPointerDown={handleMultiSelectionMovePointerDown}
+          />
+
+          {resizeHandleConfigs.map((handle) => (
+            <button
+              key={handle.direction}
+              type="button"
+              className={`pointer-events-auto absolute z-50 h-4 w-4 rounded-full border-2 border-white bg-violet-500 shadow-md ${handle.className}`}
+              aria-label={`整组${handle.label}`}
+              title={`整组${handle.label}`}
+              onPointerDown={(event) =>
+                handleMultiSelectionResizePointerDown(handle.direction, event)
+              }
+              onClick={(event) => event.stopPropagation()}
+            />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 
@@ -433,6 +741,7 @@ function SlideElementView({
   asset,
   scale,
   selected,
+  showTransformControls = true,
   isEditing,
   onSelect,
   onToggleSelect,
@@ -450,6 +759,7 @@ function SlideElementView({
   asset?: PresentationAsset;
   scale: number;
   selected: boolean;
+  showTransformControls?: boolean;
   isEditing: boolean;
   onSelect?: (elementId: string) => void;
   onToggleSelect?: (elementId: string) => void;
@@ -824,7 +1134,9 @@ function SlideElementView({
     <div
       ref={elementNodeRef}
       className={`absolute border-0 bg-transparent p-0 text-center ${
-        selected ? "ring-2 ring-violet-500 ring-offset-2" : ""
+        selected && showTransformControls
+          ? "ring-2 ring-violet-500 ring-offset-2"
+          : ""
       } ${onMove && !isEditing ? "cursor-move touch-none" : ""}`}
       style={outerStyle}
       onPointerDown={handlePointerDown}
@@ -873,7 +1185,7 @@ function SlideElementView({
         </span>
       )}
 
-      {selected && onResize && !isEditing ? (
+      {selected && showTransformControls && onResize && !isEditing ? (
         <>
           {resizeHandleConfigs.map((handle) => (
             <button
@@ -891,7 +1203,7 @@ function SlideElementView({
         </>
       ) : null}
 
-      {selected && onRotate && !isEditing ? (
+      {selected && showTransformControls && onRotate && !isEditing ? (
         <>
           <div className="absolute left-1/2 top-0 z-10 h-0 w-px -translate-x-1/2 -translate-y-8 border-l border-dashed border-violet-400" />
 

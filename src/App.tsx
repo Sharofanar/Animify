@@ -1808,6 +1808,20 @@ function App() {
   }
 
   /**
+   * Select all elements inside the box-selection area.
+   *
+   * The property panel stays hidden for multi-selection because batch style
+   * editing is not implemented yet.
+   */
+  function handleSelectElements(elementIds: string[]) {
+    setSelectedElementIds(elementIds);
+    setSelectedElementId(elementIds.at(-1) ?? "");
+    setElementContextMenu(null);
+    setCanvasContextMenu(null);
+    setPropertyPanelOpen(elementIds.length === 1);
+  }
+
+  /**
    * Clear selection from blank slide clicks and hide the property panel.
    */
   function handleClearElementSelection() {
@@ -2364,6 +2378,7 @@ function App() {
                   selectedElementIds={selectedElementIds}
                   onSelectElement={handleSelectElement}
                   onToggleElementSelection={handleToggleElementSelection}
+                  onSelectElements={handleSelectElements}
                   onClearSelection={handleClearElementSelection}
                   onOpenElementContextMenu={handleOpenElementContextMenu}
                   onOpenCanvasContextMenu={handleOpenCanvasContextMenu}

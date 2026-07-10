@@ -18,6 +18,12 @@ const SLIDE_WIDTH = 1280;
 const SLIDE_HEIGHT = 720;
 
 type ResizeDirection = "nw" | "ne" | "sw" | "se";
+type SelectionBox = {
+  startX: number;
+  startY: number;
+  currentX: number;
+  currentY: number;
+};
 
 function getPointerAngle(
   clientX: number,
@@ -30,6 +36,10 @@ function getPointerAngle(
 
 function normalizeRotate(value: number) {
   return Math.round(((value % 360) + 360) % 360);
+}
+
+function clampSlideCoordinate(value: number, max: number) {
+  return Math.min(Math.max(value, 0), max);
 }
 
 const resizeHandleConfigs: Array<{
@@ -67,6 +77,7 @@ type SlideCanvasProps = {
   selectedElementIds?: string[];
   onSelectElement?: (elementId: string) => void;
   onToggleElementSelection?: (elementId: string) => void;
+  onSelectElements?: (elementIds: string[]) => void;
   onClearSelection?: () => void;
   onOpenCanvasContextMenu?: (position: {
     x: number;
@@ -109,6 +120,7 @@ export function SlideCanvas({
   selectedElementIds = [],
   onSelectElement,
   onToggleElementSelection,
+  onSelectElements,
   onClearSelection,
   onOpenCanvasContextMenu,
   onOpenElementContextMenu,
@@ -126,6 +138,8 @@ export function SlideCanvas({
 }: SlideCanvasProps) {
   const [editingElementId, setEditingElementId] = useState<string | null>(null);
 
+  const [selectionBox, setSelectionBox] = useState<SelectionBox | null>(null);
+
   const { isOver, setNodeRef } = useDroppable({
     id: "slide-canvas-droppable",
   });
@@ -141,10 +155,11 @@ export function SlideCanvas({
   }
 
   /**
-   * Clear the current element selection when the user left-clicks blank space.
+   * Start box selection from blank slide space.
    *
-   * Right click is handled separately by the canvas context menu, so it should
-   * not clear selection through this pointer handler.
+   * A short click without dragging still clears the current selection. Once the
+   * pointer moves far enough, the drag area becomes a selection box and all
+   * intersecting elements are selected when the pointer is released.
    */
   function handleSlideSurfacePointerDown(
     event: ReactPointerEvent<HTMLDivElement>,
@@ -153,7 +168,100 @@ export function SlideCanvas({
       return;
     }
 
-    onClearSelection?.();
+    event.preventDefault();
+
+    const surfaceRect = event.currentTarget.getBoundingClientRect();
+    const startX = clampSlideCoordinate(
+      Math.round((event.clientX - surfaceRect.left) / scale),
+      SLIDE_WIDTH,
+    );
+    const startY = clampSlideCoordinate(
+      Math.round((event.clientY - surfaceRect.top) / scale),
+      SLIDE_HEIGHT,
+    );
+
+    let hasDragged = false;
+
+    setSelectionBox({
+      startX,
+      startY,
+      currentX: startX,
+      currentY: startY,
+    });
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      const currentX = clampSlideCoordinate(
+        Math.round((moveEvent.clientX - surfaceRect.left) / scale),
+        SLIDE_WIDTH,
+      );
+      const currentY = clampSlideCoordinate(
+        Math.round((moveEvent.clientY - surfaceRect.top) / scale),
+        SLIDE_HEIGHT,
+      );
+
+      if (Math.abs(currentX - startX) > 4 || Math.abs(currentY - startY) > 4) {
+        hasDragged = true;
+      }
+
+      setSelectionBox({
+        startX,
+        startY,
+        currentX,
+        currentY,
+      });
+    }
+
+    function handlePointerUp(upEvent: PointerEvent) {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+
+      setSelectionBox(null);
+
+      if (!hasDragged) {
+        onClearSelection?.();
+        return;
+      }
+
+      const endX = clampSlideCoordinate(
+        Math.round((upEvent.clientX - surfaceRect.left) / scale),
+        SLIDE_WIDTH,
+      );
+      const endY = clampSlideCoordinate(
+        Math.round((upEvent.clientY - surfaceRect.top) / scale),
+        SLIDE_HEIGHT,
+      );
+
+      const boxLeft = Math.min(startX, endX);
+      const boxTop = Math.min(startY, endY);
+      const boxRight = Math.max(startX, endX);
+      const boxBottom = Math.max(startY, endY);
+
+      const selectedIds = slide.elements
+        .filter((element) => {
+          const elementLeft = element.style.x;
+          const elementTop = element.style.y;
+          const elementRight = element.style.x + element.style.width;
+          const elementBottom = element.style.y + element.style.height;
+
+          return (
+            elementLeft < boxRight &&
+            elementRight > boxLeft &&
+            elementTop < boxBottom &&
+            elementBottom > boxTop
+          );
+        })
+        .map((element) => element.id);
+
+      if (selectedIds.length > 0) {
+        onSelectElements?.(selectedIds);
+        return;
+      }
+
+      onClearSelection?.();
+    }
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
   }
 
   /**
@@ -197,6 +305,20 @@ export function SlideCanvas({
         backgroundColor: slide.backgroundColor,
       }}
     >
+      {selectionBox ? (
+        <div
+          className="pointer-events-none absolute z-30 border border-violet-500 bg-violet-500/15"
+          style={{
+            left: Math.min(selectionBox.startX, selectionBox.currentX) * scale,
+            top: Math.min(selectionBox.startY, selectionBox.currentY) * scale,
+            width:
+              Math.abs(selectionBox.currentX - selectionBox.startX) * scale,
+            height:
+              Math.abs(selectionBox.currentY - selectionBox.startY) * scale,
+          }}
+        />
+      ) : null}
+
       {slide.elements.map((element) => {
         const firstAnimation = element.animations[0];
         const animationKey = firstAnimation

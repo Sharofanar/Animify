@@ -298,21 +298,6 @@ function duplicateSlide(
   };
 }
 
-function areElementsOverlapping(
-  firstElement: SlideElement,
-  secondElement: SlideElement,
-) {
-  const firstStyle = firstElement.style;
-  const secondStyle = secondElement.style;
-
-  return (
-    firstStyle.x < secondStyle.x + secondStyle.width &&
-    firstStyle.x + firstStyle.width > secondStyle.x &&
-    firstStyle.y < secondStyle.y + secondStyle.height &&
-    firstStyle.y + firstStyle.height > secondStyle.y
-  );
-}
-
 function cloneProjectSnapshot(project: PresentationProject) {
   return JSON.parse(JSON.stringify(project)) as PresentationProject;
 }
@@ -1138,10 +1123,7 @@ function App() {
     ? activeSlide.elements.find((element) => element.id === selectedElementId)
     : undefined;
 
-  const showPropertyPanel =
-    propertyPanelOpen &&
-    Boolean(selectedElement) &&
-    selectedElementIds.length === 1;
+  const showPropertyPanel = propertyPanelOpen && Boolean(selectedElement);
 
   const activeSlideElementCount = activeSlide.elements.length;
 
@@ -1530,9 +1512,10 @@ function App() {
   }
 
   /**
-   * Open the right-click menu near the mouse position.
+   * Open the element context menu without destroying an existing multi-selection.
    *
-   * The position is clamped so the menu does not go outside the viewport.
+   * Right-clicking an element inside the selected group keeps the group. An
+   * unselected element becomes the only selected element before its menu opens.
    */
   function handleOpenElementContextMenu(
     elementId: string,
@@ -1540,15 +1523,23 @@ function App() {
   ) {
     const menuWidth = 180;
     const menuHeight = 260;
+    const elementAlreadySelected = selectedElementIds.includes(elementId);
 
     setSelectedElementId(elementId);
+
+    if (!elementAlreadySelected) {
+      setSelectedElementIds([elementId]);
+    }
+
+    setPropertyPanelOpen(true);
+    setCanvasContextMenu(null);
+
     setElementContextMenu({
       elementId,
       x: Math.min(position.x, window.innerWidth - menuWidth),
       y: Math.min(position.y, window.innerHeight - menuHeight),
     });
   }
-
   /**
    * Open the canvas context menu near the mouse position.
    *
@@ -1870,7 +1861,7 @@ function App() {
     setSelectedElementIds(nextSelectedElementIds);
     setSelectedElementId(nextSelectedElementIds.at(-1) ?? "");
     setElementContextMenu(null);
-    setPropertyPanelOpen(nextSelectedElementIds.length === 1);
+    setPropertyPanelOpen(nextSelectedElementIds.length > 0);
   }
 
   /**
@@ -1884,7 +1875,7 @@ function App() {
     setSelectedElementId(elementIds.at(-1) ?? "");
     setElementContextMenu(null);
     setCanvasContextMenu(null);
-    setPropertyPanelOpen(elementIds.length === 1);
+    setPropertyPanelOpen(elementIds.length > 0);
   }
 
   /**
@@ -1919,6 +1910,13 @@ function App() {
     setSelectedElementIds([]);
   }
 
+  /**
+   * Change the layer order of one element or the current multi-selection.
+   *
+   * When the requested element belongs to the current multi-selection, every
+   * selected element is moved together while preserving the order inside the
+   * group. Single-element operations keep their original behavior.
+   */
   function handleLayerElement(
     elementId: string,
     action:
@@ -1927,6 +1925,13 @@ function App() {
       | "bring-to-front"
       | "send-to-back",
   ) {
+    const targetElementIds =
+      selectedElementIds.includes(elementId) && selectedElementIds.length > 1
+        ? selectedElementIds
+        : [elementId];
+
+    const targetElementIdSet = new Set(targetElementIds);
+
     commitProjectChange((currentProject) => {
       let changed = false;
 
@@ -1935,71 +1940,91 @@ function App() {
           return slide;
         }
 
-        const currentIndex = slide.elements.findIndex(
-          (element) => element.id === elementId,
+        const hasTargetElement = slide.elements.some((element) =>
+          targetElementIdSet.has(element.id),
         );
 
-        if (currentIndex === -1) {
+        if (!hasTargetElement) {
           return slide;
         }
 
-        const currentElement = slide.elements[currentIndex];
-
-        if (!currentElement) {
-          return slide;
-        }
-
-        let nextIndex = currentIndex;
+        let nextElements = [...slide.elements];
 
         if (action === "bring-forward") {
-          const overlappingUpperIndex = slide.elements.findIndex(
-            (element, index) =>
-              index > currentIndex &&
-              areElementsOverlapping(currentElement, element),
-          );
+          /*
+           * Iterate from top to bottom. A selected element swaps with the first
+           * unselected element directly above it. Consecutive selected elements
+           * therefore move together as one group.
+           */
+          for (let index = nextElements.length - 2; index >= 0; index -= 1) {
+            const currentElement = nextElements[index];
+            const upperElement = nextElements[index + 1];
 
-          if (overlappingUpperIndex === -1) {
-            return slide;
+            if (
+              currentElement &&
+              upperElement &&
+              targetElementIdSet.has(currentElement.id) &&
+              !targetElementIdSet.has(upperElement.id)
+            ) {
+              nextElements[index] = upperElement;
+              nextElements[index + 1] = currentElement;
+            }
           }
-
-          nextIndex = overlappingUpperIndex;
         }
 
         if (action === "send-backward") {
-          for (let index = currentIndex - 1; index >= 0; index -= 1) {
-            const element = slide.elements[index];
+          /*
+           * Iterate from bottom to top so each selected element moves down by
+           * one layer without changing the selected group's internal order.
+           */
+          for (let index = 1; index < nextElements.length; index += 1) {
+            const currentElement = nextElements[index];
+            const lowerElement = nextElements[index - 1];
 
-            if (element && areElementsOverlapping(currentElement, element)) {
-              nextIndex = index;
-              break;
+            if (
+              currentElement &&
+              lowerElement &&
+              targetElementIdSet.has(currentElement.id) &&
+              !targetElementIdSet.has(lowerElement.id)
+            ) {
+              nextElements[index] = lowerElement;
+              nextElements[index - 1] = currentElement;
             }
-          }
-
-          if (nextIndex === currentIndex) {
-            return slide;
           }
         }
 
         if (action === "bring-to-front") {
-          nextIndex = slide.elements.length - 1;
+          const unselectedElements = nextElements.filter(
+            (element) => !targetElementIdSet.has(element.id),
+          );
+
+          const selectedElements = nextElements.filter((element) =>
+            targetElementIdSet.has(element.id),
+          );
+
+          nextElements = [...unselectedElements, ...selectedElements];
         }
 
         if (action === "send-to-back") {
-          nextIndex = 0;
+          const selectedElements = nextElements.filter((element) =>
+            targetElementIdSet.has(element.id),
+          );
+
+          const unselectedElements = nextElements.filter(
+            (element) => !targetElementIdSet.has(element.id),
+          );
+
+          nextElements = [...selectedElements, ...unselectedElements];
         }
 
-        if (nextIndex === currentIndex) {
+        const orderChanged = slide.elements.some(
+          (element, index) => element.id !== nextElements[index]?.id,
+        );
+
+        if (!orderChanged) {
           return slide;
         }
 
-        const nextElements = [...slide.elements];
-        const [targetElement] = nextElements.splice(currentIndex, 1);
-
-        if (!targetElement) {
-          return slide;
-        }
-
-        nextElements.splice(nextIndex, 0, targetElement);
         changed = true;
 
         return {

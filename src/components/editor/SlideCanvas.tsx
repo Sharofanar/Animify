@@ -877,9 +877,8 @@ function SlideElementView({
   /**
    * Open the element context menu from right click.
    *
-   * If the element is already selected as part of a multi-selection, keep the
-   * whole selection. If it is not selected, select only the right-clicked
-   * element before opening the menu.
+   * Right-clicking an element inside the current multi-selection keeps the whole
+   * group selected. Right-clicking an unselected element switches to that element.
    */
   function handleContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
     if (isEditing) {
@@ -901,6 +900,10 @@ function SlideElementView({
 
   /**
    * Select a single element normally, or toggle multi-selection with Shift.
+   *
+   * Clicking an element that already belongs to the current selection keeps the
+   * whole multi-selection. This prevents a group from collapsing to one element
+   * after dragging or opening its context menu.
    */
   function handleElementClick(event: ReactMouseEvent<HTMLDivElement>) {
     event.stopPropagation();
@@ -910,7 +913,10 @@ function SlideElementView({
       return;
     }
 
-    onSelect?.(element.id);
+    // Keep the current multi-selection when this element is already selected.
+    if (!selected) {
+      onSelect?.(element.id);
+    }
   }
 
   function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
@@ -929,7 +935,11 @@ function SlideElementView({
     }
 
     onBeginChange?.();
-    onSelect?.(element.id);
+
+    // Do not collapse an existing multi-selection when dragging one of its elements.
+    if (!selected) {
+      onSelect?.(element.id);
+    }
 
     const moveElement = onMove;
 

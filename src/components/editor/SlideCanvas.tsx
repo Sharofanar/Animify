@@ -140,6 +140,7 @@ type SlideCanvasProps = {
   scale?: number;
   selectedElementId?: string;
   selectedElementIds?: string[];
+  propertyTargetElementIds?: string[];
   onSelectElement?: (elementId: string) => void;
   onToggleElementSelection?: (elementId: string) => void;
   onSelectElements?: (elementIds: string[]) => void;
@@ -184,6 +185,7 @@ export function SlideCanvas({
   scale = 0.6,
   selectedElementId,
   selectedElementIds = [],
+  propertyTargetElementIds = [],
   onSelectElement,
   onToggleElementSelection,
   onSelectElements,
@@ -589,6 +591,13 @@ export function SlideCanvas({
           ? `${element.id}-${firstAnimation.keyframes}-${firstAnimation.duration}-${firstAnimation.delay}-${animationPreviewKey}`
           : `${element.id}-${animationPreviewKey}`;
         const asset = element.assetId ? assets[element.assetId] : undefined;
+        const selectionIndex = selectedElementIds.indexOf(element.id);
+        const selectionNumber =
+          multiSelectionActive && selectionIndex >= 0
+            ? selectionIndex + 1
+            : undefined;
+
+        const propertyTargeted = propertyTargetElementIds.includes(element.id);
 
         return (
           <SlideElementView
@@ -600,6 +609,8 @@ export function SlideCanvas({
               element.id === selectedElementId ||
               selectedElementIds.includes(element.id)
             }
+            selectionNumber={selectionNumber}
+            propertyTargeted={propertyTargeted}
             showTransformControls={!multiSelectionActive}
             isEditing={element.id === editingElementId}
             onSelect={onSelectElement}
@@ -741,6 +752,8 @@ function SlideElementView({
   asset,
   scale,
   selected,
+  selectionNumber,
+  propertyTargeted = false,
   showTransformControls = true,
   isEditing,
   onSelect,
@@ -759,6 +772,8 @@ function SlideElementView({
   asset?: PresentationAsset;
   scale: number;
   selected: boolean;
+  selectionNumber?: number;
+  propertyTargeted?: boolean;
   showTransformControls?: boolean;
   isEditing: boolean;
   onSelect?: (elementId: string) => void;
@@ -1194,6 +1209,24 @@ function SlideElementView({
           )}
         </span>
       )}
+
+      {/* Show the canvas selection number for each multi-selected element.
+          Purple means the element is an active property-panel target.
+          Gray means it remains selected on the canvas but is not targeted. */}
+      {selectionNumber !== undefined ? (
+        <div
+          className={`pointer-events-none absolute -left-2 -top-2 z-40 flex h-6 min-w-6 items-center justify-center rounded-full border-2 border-white px-1 text-xs font-black text-white shadow-lg ${
+            propertyTargeted ? "bg-violet-600" : "bg-slate-400"
+          }`}
+          title={
+            propertyTargeted
+              ? `属性操作对象 ${selectionNumber}`
+              : `已框选但未勾选 ${selectionNumber}`
+          }
+        >
+          {selectionNumber}
+        </div>
+      ) : null}
 
       {selected && showTransformControls && onResize && !isEditing ? (
         <>

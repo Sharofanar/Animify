@@ -444,6 +444,21 @@ function App() {
     return firstElementId ? [firstElementId] : [];
   });
 
+  /**
+   * Elements currently enabled as property-panel operation targets.
+   *
+   * Canvas selection and property targets are intentionally stored separately:
+   * unchecking an item in the property panel must not remove it from the canvas
+   * multi-selection.
+   */
+  const [propertyTargetElementIds, setPropertyTargetElementIds] = useState<
+    string[]
+  >(() => {
+    const firstElementId = demoProject.slides[0]?.elements[0]?.id ?? "";
+
+    return firstElementId ? [firstElementId] : [];
+  });
+
   useEffect(() => {
     latestProjectRef.current = project;
     localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
@@ -1123,7 +1138,32 @@ function App() {
     ? activeSlide.elements.find((element) => element.id === selectedElementId)
     : undefined;
 
-  const showPropertyPanel = propertyPanelOpen && Boolean(selectedElement);
+  /**
+   * Preserve selectedElementIds order so canvas number badges and the property
+   * panel element list always use the same numbering.
+   */
+  const selectedElements = selectedElementIds.flatMap((elementId) => {
+    const element = activeSlide.elements.find((item) => item.id === elementId);
+
+    return element ? [element] : [];
+  });
+
+  const validPropertyTargetElementIds = propertyTargetElementIds.filter(
+    (elementId) => selectedElementIds.includes(elementId),
+  );
+
+  /**
+   * New selections default to targeting every selected element.
+   *
+   * This fallback also keeps paste, duplicate, undo, and slide-switch workflows
+   * safe even when they change selectedElementIds directly.
+   */
+  const effectivePropertyTargetElementIds =
+    validPropertyTargetElementIds.length > 0
+      ? validPropertyTargetElementIds
+      : selectedElementIds;
+
+  const showPropertyPanel = propertyPanelOpen && selectedElements.length > 0;
 
   const activeSlideElementCount = activeSlide.elements.length;
 
@@ -1838,19 +1878,21 @@ function App() {
   }
 
   /**
-   * Select exactly one element and reveal the property panel.
+   * Select exactly one element and make it the property-panel target.
    */
   function handleSelectElement(elementId: string) {
     setSelectedElementId(elementId);
     setSelectedElementIds([elementId]);
+    setPropertyTargetElementIds([elementId]);
     setPropertyPanelOpen(true);
   }
 
   /**
-   * Toggle an element in multi-selection.
+   * Toggle an element in the canvas multi-selection.
    *
-   * Multi-selection hides the property panel because batch style editing is not
-   * implemented yet. The selected elements can still be moved or deleted together.
+   * Every newly changed canvas selection initially becomes the property-panel
+   * target set. The user can later uncheck individual property targets without
+   * changing the canvas selection.
    */
   function handleToggleElementSelection(elementId: string) {
     const isAlreadySelected = selectedElementIds.includes(elementId);
@@ -1860,30 +1902,48 @@ function App() {
 
     setSelectedElementIds(nextSelectedElementIds);
     setSelectedElementId(nextSelectedElementIds.at(-1) ?? "");
+    setPropertyTargetElementIds(nextSelectedElementIds);
     setElementContextMenu(null);
     setPropertyPanelOpen(nextSelectedElementIds.length > 0);
   }
 
   /**
    * Select all elements inside the box-selection area.
-   *
-   * The property panel stays hidden for multi-selection because batch style
-   * editing is not implemented yet.
    */
   function handleSelectElements(elementIds: string[]) {
     setSelectedElementIds(elementIds);
     setSelectedElementId(elementIds.at(-1) ?? "");
+    setPropertyTargetElementIds(elementIds);
     setElementContextMenu(null);
     setCanvasContextMenu(null);
     setPropertyPanelOpen(elementIds.length > 0);
   }
 
   /**
-   * Clear selection from blank slide clicks and hide the property panel.
+   * Update the checked property-panel targets without changing canvas selection.
+   *
+   * At least one target must remain checked while elements are selected.
+   */
+  function handlePropertyTargetElementIdsChange(elementIds: string[]) {
+    const selectedIdSet = new Set(selectedElementIds);
+    const nextTargetIds = elementIds.filter((elementId) =>
+      selectedIdSet.has(elementId),
+    );
+
+    if (selectedElementIds.length > 0 && nextTargetIds.length === 0) {
+      return;
+    }
+
+    setPropertyTargetElementIds(nextTargetIds);
+  }
+
+  /**
+   * Clear both canvas selection and property-panel operation targets.
    */
   function handleClearElementSelection() {
     setSelectedElementId("");
     setSelectedElementIds([]);
+    setPropertyTargetElementIds([]);
     setElementContextMenu(null);
     setPropertyPanelOpen(false);
   }
@@ -2467,6 +2527,7 @@ function App() {
                   scale={canvasScale}
                   selectedElementId={selectedElement?.id}
                   selectedElementIds={selectedElementIds}
+                  propertyTargetElementIds={effectivePropertyTargetElementIds}
                   onSelectElement={handleSelectElement}
                   onToggleElementSelection={handleToggleElementSelection}
                   onSelectElements={handleSelectElements}
@@ -2574,7 +2635,11 @@ function App() {
             {showPropertyPanel ? (
               <div className="min-h-0 overflow-y-auto pr-1">
                 <PropertyPanel
-                  selectedElement={selectedElement}
+                  selectedElements={selectedElements}
+                  targetElementIds={effectivePropertyTargetElementIds}
+                  onTargetElementIdsChange={
+                    handlePropertyTargetElementIdsChange
+                  }
                   onUpdateElement={handleUpdateElement}
                   onDeleteElement={handleDeleteElement}
                   onLayerElement={handleLayerElement}

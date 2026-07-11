@@ -46,6 +46,15 @@ type ProjectUpdater = (
   currentProject: PresentationProject,
 ) => PresentationProject;
 
+type ElementUpdates = Partial<Omit<SlideElement, "style">> & {
+  style?: Partial<SlideElement["style"]>;
+};
+
+type ElementBatchUpdate = {
+  elementId: string;
+  updates: ElementUpdates;
+};
+
 const MAX_HISTORY_LENGTH = 60;
 
 const featureCards = [
@@ -603,13 +612,19 @@ function App() {
     function handleHistoryKeyDown(event: KeyboardEvent) {
       const target = event.target;
 
-      const isTyping =
+      /**
+       * Text-editing controls keep their native undo behavior.
+       *
+       * Select controls are intentionally excluded because changing an animation
+       * preset edits project data rather than editable text. Ctrl + Z must therefore
+       * undo the project immediately while the select still has focus.
+       */
+      const isTextEditing =
         target instanceof HTMLInputElement ||
         target instanceof HTMLTextAreaElement ||
-        target instanceof HTMLSelectElement ||
         (target instanceof HTMLElement && target.isContentEditable);
 
-      if (isTyping || mode === "present") {
+      if (isTextEditing || mode === "present") {
         return;
       }
 
@@ -1412,6 +1427,69 @@ function App() {
   }
 
   /**
+   * Update multiple elements in one project transaction.
+   *
+   * Every batch is committed through one project update, so changing ten checked
+   * elements still creates only one undo snapshot.
+   */
+  function handleUpdateElements(
+    batchUpdates: ElementBatchUpdate[],
+    options?: { recordHistory?: boolean },
+  ) {
+    if (batchUpdates.length === 0) {
+      return;
+    }
+
+    const updatesByElementId = new Map(
+      batchUpdates.map((item) => [item.elementId, item.updates]),
+    );
+
+    commitProjectChange((currentProject) => {
+      let changed = false;
+
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        return {
+          ...slide,
+          elements: slide.elements.map((element) => {
+            const updates = updatesByElementId.get(element.id);
+
+            if (!updates) {
+              return element;
+            }
+
+            changed = true;
+
+            return {
+              ...element,
+              ...updates,
+              style: updates.style
+                ? {
+                    ...element.style,
+                    ...updates.style,
+                  }
+                : element.style,
+            };
+          }),
+        };
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    }, options);
+  }
+
+  /**
    * Move one element or the whole current multi-selection.
    *
    * SlideCanvas reports the dragged element's next absolute position. App converts
@@ -1971,11 +2049,11 @@ function App() {
   }
 
   /**
-   * Change the layer order of one element or the current multi-selection.
+   * Change the layer order of one element or a specified element group.
    *
-   * When the requested element belongs to the current multi-selection, every
-   * selected element is moved together while preserving the order inside the
-   * group. Single-element operations keep their original behavior.
+   * Context-menu actions can omit explicitTargetElementIds to use the current
+   * canvas selection. The property panel passes its checked target IDs so layer
+   * actions affect only the checked subset.
    */
   function handleLayerElement(
     elementId: string,
@@ -1984,11 +2062,15 @@ function App() {
       | "send-backward"
       | "bring-to-front"
       | "send-to-back",
+    explicitTargetElementIds?: string[],
   ) {
     const targetElementIds =
-      selectedElementIds.includes(elementId) && selectedElementIds.length > 1
-        ? selectedElementIds
-        : [elementId];
+      explicitTargetElementIds && explicitTargetElementIds.length > 0
+        ? explicitTargetElementIds
+        : selectedElementIds.includes(elementId) &&
+            selectedElementIds.length > 1
+          ? selectedElementIds
+          : [elementId];
 
     const targetElementIdSet = new Set(targetElementIds);
 
@@ -2640,7 +2722,9 @@ function App() {
                   onTargetElementIdsChange={
                     handlePropertyTargetElementIdsChange
                   }
-                  onUpdateElement={handleUpdateElement}
+                  onUpdateElements={handleUpdateElements}
+                  onBeginPropertyChange={beginProjectHistoryGroup}
+                  onFinishPropertyChange={finishProjectHistoryGroup}
                   onDeleteElement={handleDeleteElement}
                   onLayerElement={handleLayerElement}
                 />

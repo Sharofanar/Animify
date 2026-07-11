@@ -16,13 +16,31 @@ type ElementUpdates = Partial<Omit<SlideElement, "style">> & {
   style?: Partial<SlideElement["style"]>;
 };
 
+type PropertyUpdateOptions = {
+  recordHistory?: boolean;
+};
+
+type ElementBatchUpdate = {
+  elementId: string;
+  updates: ElementUpdates;
+};
+
 type PropertyPanelProps = {
   selectedElements: SlideElement[];
   targetElementIds: string[];
   onTargetElementIdsChange?: (elementIds: string[]) => void;
-  onUpdateElement?: (elementId: string, updates: ElementUpdates) => void;
+  onUpdateElements?: (
+    batchUpdates: ElementBatchUpdate[],
+    options?: PropertyUpdateOptions,
+  ) => void;
+  onBeginPropertyChange?: () => void;
+  onFinishPropertyChange?: () => void;
   onDeleteElement?: (elementId: string) => void;
-  onLayerElement?: (elementId: string, action: LayerAction) => void;
+  onLayerElement?: (
+    elementId: string,
+    action: LayerAction,
+    targetElementIds?: string[],
+  ) => void;
 };
 
 const propertyTabs: Array<{
@@ -63,11 +81,30 @@ const elementTypeLabels: Record<SlideElement["type"], string> = {
   svg: "SVG",
 };
 
+/**
+ * Return one shared value when every target uses the same value.
+ *
+ * Undefined means the selected targets contain mixed values.
+ */
+function getSharedValue<T>(values: T[]): T | undefined {
+  if (values.length === 0) {
+    return undefined;
+  }
+
+  const firstValue = values[0];
+
+  return values.every((value) => Object.is(value, firstValue))
+    ? firstValue
+    : undefined;
+}
+
 export function PropertyPanel({
   selectedElements,
   targetElementIds,
   onTargetElementIdsChange,
-  onUpdateElement,
+  onUpdateElements,
+  onBeginPropertyChange,
+  onFinishPropertyChange,
   onDeleteElement,
   onLayerElement,
 }: PropertyPanelProps) {
@@ -78,12 +115,58 @@ export function PropertyPanel({
     targetElementIdSet.has(element.id),
   );
 
+  /**
+   * Animation controls are derived directly from project element data.
+   *
+   * Undo restores the project first, React recalculates these values, and the
+   * panel immediately returns to the old value or the mixed state.
+   */
+  const sharedAnimationPreset = getSharedValue(
+    targetElements.map((element) => element.animations[0]?.keyframes ?? "none"),
+  );
+
+  const sharedAnimationDuration = getSharedValue(
+    targetElements.map((element) => element.animations[0]?.duration ?? null),
+  );
+
+  const sharedAnimationDelay = getSharedValue(
+    targetElements.map((element) => element.animations[0]?.delay ?? null),
+  );
+
+  const allTargetsHaveAnimation =
+    targetElements.length > 0 &&
+    targetElements.every((element) => element.animations.length > 0);
+
+  /**
+   * Images do not contain editable text styles. Text, shape, and SVG elements
+   * can all use font size, weight, and color.
+   */
+  const fontTargetElements = targetElements.filter(
+    (element) => element.type !== "image",
+  );
+
+  const sharedFontSize = getSharedValue(
+    fontTargetElements.map((element) => element.style.fontSize ?? 16),
+  );
+
+  const sharedFontWeight = getSharedValue(
+    fontTargetElements.map((element) => element.style.fontWeight ?? 400),
+  );
+
+  const sharedFontColor = getSharedValue(
+    fontTargetElements.map((element) => element.style.color ?? "#0f172a"),
+  );
+
+  const sharedBackgroundColor = getSharedValue(
+    fontTargetElements.map(
+      (element) => element.style.backgroundColor ?? "#ffffff",
+    ),
+  );
+
   // The first checked element is used by single-target controls.
   const activeElement =
     targetElements.length === 1 ? targetElements[0] : undefined;
 
-  const layerAnchorElement = selectedElements[0];
-  const currentAnimation = activeElement?.animations[0];
   const multiSelectionActive = selectedElements.length > 1;
 
   function toggleTargetElement(elementId: string) {
@@ -114,90 +197,184 @@ export function PropertyPanel({
     onTargetElementIdsChange?.([elementId]);
   }
 
-  function updateContent(content: string) {
+  function updateContent(content: string, options?: PropertyUpdateOptions) {
     if (!activeElement) {
       return;
     }
 
-    onUpdateElement?.(activeElement.id, {
-      content,
-    });
+    onUpdateElements?.(
+      [
+        {
+          elementId: activeElement.id,
+          updates: {
+            content,
+          },
+        },
+      ],
+      options,
+    );
   }
 
+  /**
+   * Update one exact element style from the basic-property tab.
+   */
   function updateStyle(
     key: keyof SlideElement["style"],
     value: string | number,
+    options?: PropertyUpdateOptions,
   ) {
     if (!activeElement) {
       return;
     }
 
-    onUpdateElement?.(activeElement.id, {
-      style: {
-        [key]: value,
-      },
-    });
+    onUpdateElements?.(
+      [
+        {
+          elementId: activeElement.id,
+          updates: {
+            style: {
+              [key]: value,
+            },
+          },
+        },
+      ],
+      options,
+    );
   }
 
+  /**
+   * Apply one font-style value to every checked compatible element.
+   */
+  function updateFontStyle(
+    key: keyof SlideElement["style"],
+    value: string | number,
+    options?: PropertyUpdateOptions,
+  ) {
+    if (fontTargetElements.length === 0) {
+      return;
+    }
+
+    onUpdateElements?.(
+      fontTargetElements.map((element) => ({
+        elementId: element.id,
+        updates: {
+          style: {
+            [key]: value,
+          },
+        },
+      })),
+      options,
+    );
+  }
+
+  /**
+   * Apply one animation preset to every checked property target.
+   *
+   * Existing duration, delay, and easing values are preserved for each element.
+   * The entire batch is one project transaction and therefore one undo step.
+   */
   function updateAnimationPreset(value: string) {
-    if (!activeElement) {
+    if (targetElements.length === 0) {
       return;
     }
 
     if (value === "none") {
-      onUpdateElement?.(activeElement.id, {
-        animations: [],
-      });
+      onUpdateElements?.(
+        targetElements.map((element) => ({
+          elementId: element.id,
+          updates: {
+            animations: [],
+          },
+        })),
+      );
       return;
     }
 
-    const preset = animationPresets.find((item) => item.value === value);
+    const preset = animationPresets.find(
+      (item) => item.value === value || item.keyframes === value,
+    );
 
     if (!preset) {
       return;
     }
 
-    const oldAnimation = activeElement.animations[0];
+    const now = Date.now();
 
-    const animation: SlideElementAnimation = {
-      id: oldAnimation?.id ?? `animation-${Date.now()}`,
-      name: preset.name,
-      type: "enter",
-      duration: oldAnimation?.duration ?? 600,
-      delay: oldAnimation?.delay ?? 0,
-      easing: oldAnimation?.easing ?? "ease-out",
-      keyframes: preset.keyframes,
-    };
+    onUpdateElements?.(
+      targetElements.map((element, index) => {
+        const oldAnimation = element.animations[0];
 
-    onUpdateElement?.(activeElement.id, {
-      animations: [animation],
-    });
+        const animation: SlideElementAnimation = {
+          id: oldAnimation?.id ?? `animation-${element.id}-${now}-${index}`,
+          name: preset.name,
+          type: "enter",
+          duration: oldAnimation?.duration ?? 600,
+          delay: oldAnimation?.delay ?? 0,
+          easing: oldAnimation?.easing ?? "ease-out",
+          keyframes: preset.keyframes,
+        };
+
+        return {
+          elementId: element.id,
+          updates: {
+            animations: [animation],
+          },
+        };
+      }),
+    );
   }
 
-  function updateAnimationNumber(key: "duration" | "delay", value: number) {
-    if (!activeElement || activeElement.animations.length === 0) {
+  /**
+   * Update duration or delay for every checked element that has an animation.
+   */
+  function updateAnimationNumber(
+    key: "duration" | "delay",
+    value: number,
+    options?: PropertyUpdateOptions,
+  ) {
+    const animatedTargets = targetElements.filter(
+      (element) => element.animations.length > 0,
+    );
+
+    if (animatedTargets.length === 0) {
       return;
     }
 
-    const [firstAnimation, ...otherAnimations] = activeElement.animations;
+    onUpdateElements?.(
+      animatedTargets.map((element) => {
+        const [firstAnimation, ...otherAnimations] = element.animations;
 
-    onUpdateElement?.(activeElement.id, {
-      animations: [
-        {
-          ...firstAnimation,
-          [key]: value,
-        },
-        ...otherAnimations,
-      ],
-    });
+        return {
+          elementId: element.id,
+          updates: {
+            animations: [
+              {
+                ...firstAnimation,
+                [key]: value,
+              },
+              ...otherAnimations,
+            ],
+          },
+        };
+      }),
+      options,
+    );
   }
 
+  /**
+   * Apply layer changes only to the currently checked property targets.
+   *
+   * The canvas selection remains unchanged, so unchecked elements stay inside
+   * the outer multi-selection frame but do not participate in the layer action.
+   */
   function updateLayer(action: LayerAction) {
-    if (!layerAnchorElement) {
+    const layerAnchorElement = targetElements[0];
+
+    if (!layerAnchorElement || targetElementIds.length === 0) {
       return;
     }
 
-    onLayerElement?.(layerAnchorElement.id, action);
+    onLayerElement?.(layerAnchorElement.id, action, targetElementIds);
   }
 
   function deleteActiveElement() {
@@ -341,35 +518,59 @@ export function PropertyPanel({
         ) : null}
 
         {activeTab === "font" ? (
-          activeElement ? (
-            <FontTab element={activeElement} onUpdateStyle={updateStyle} />
+          fontTargetElements.length > 0 ? (
+            <FontTab
+              elements={fontTargetElements}
+              skippedElementCount={
+                targetElements.length - fontTargetElements.length
+              }
+              sharedFontSize={sharedFontSize}
+              sharedFontWeight={sharedFontWeight}
+              sharedFontColor={sharedFontColor}
+              sharedBackgroundColor={sharedBackgroundColor}
+              onUpdateStyle={updateFontStyle}
+              onBeginChange={onBeginPropertyChange}
+              onFinishChange={onFinishPropertyChange}
+            />
           ) : (
             <MultiTargetNotice
-              title="字体批量修改"
-              description="当前已勾选多个对象。下一阶段会把字号、字重和颜色同时应用到勾选的文本元素。"
+              title="没有可修改字体的对象"
+              description="当前勾选对象全部是图片。请选择文本、形状或 SVG 元素后再修改字体。"
             />
           )
         ) : null}
 
         {activeTab === "animation" ? (
-          activeElement ? (
+          targetElements.length > 0 ? (
             <AnimationTab
-              element={activeElement}
-              currentAnimation={currentAnimation}
+              elements={targetElements}
+              sharedPreset={sharedAnimationPreset}
+              sharedDuration={
+                typeof sharedAnimationDuration === "number"
+                  ? sharedAnimationDuration
+                  : undefined
+              }
+              sharedDelay={
+                typeof sharedAnimationDelay === "number"
+                  ? sharedAnimationDelay
+                  : undefined
+              }
+              allTargetsHaveAnimation={allTargetsHaveAnimation}
               onUpdatePreset={updateAnimationPreset}
               onUpdateNumber={updateAnimationNumber}
+              onBeginChange={onBeginPropertyChange}
+              onFinishChange={onFinishPropertyChange}
             />
           ) : (
             <MultiTargetNotice
-              title="动画批量修改"
-              description="操作对象已经建立。下一阶段会把动画类型、时长和延迟应用到当前勾选元素。"
+              title="没有动画操作对象"
+              description="请先在基础页勾选至少一个元素。"
             />
           )
         ) : null}
 
         {activeTab === "layer" ? (
           <LayerTab
-            selectedCount={selectedElements.length}
             singleTarget={activeElement}
             onUpdateLayer={updateLayer}
             onDeleteElement={deleteActiveElement}
@@ -485,44 +686,71 @@ function BasicTab({
 }
 
 function FontTab({
-  element,
+  elements,
+  skippedElementCount,
+  sharedFontSize,
+  sharedFontWeight,
+  sharedFontColor,
+  sharedBackgroundColor,
   onUpdateStyle,
+  onBeginChange,
+  onFinishChange,
 }: {
-  element: SlideElement;
+  elements: SlideElement[];
+  skippedElementCount: number;
+  sharedFontSize?: number;
+  sharedFontWeight?: number;
+  sharedFontColor?: string;
+  sharedBackgroundColor?: string;
   onUpdateStyle: (
     key: keyof SlideElement["style"],
     value: string | number,
+    options?: PropertyUpdateOptions,
   ) => void;
+  onBeginChange?: () => void;
+  onFinishChange?: () => void;
 }) {
   return (
     <div className="space-y-4">
+      <section className="rounded-2xl border border-violet-100 bg-violet-50/60 p-4">
+        <h3 className="text-sm font-black text-violet-700">批量字体</h3>
+        <p className="mt-2 text-xs leading-5 text-violet-500">
+          当前会修改 {elements.length} 个勾选对象
+          {skippedElementCount > 0
+            ? `，并跳过 ${skippedElementCount} 个图片元素`
+            : ""}
+          。
+        </p>
+      </section>
+
       <section className="rounded-2xl bg-slate-50 p-4">
         <h3 className="mb-3 text-sm font-black text-slate-800">字体与外观</h3>
 
         <div className="grid grid-cols-2 gap-3 text-sm">
           <NumberField
             label="字号"
-            value={element.style.fontSize ?? 16}
+            value={sharedFontSize ?? ""}
+            placeholder="混合"
             min={8}
-            onChange={(value) => onUpdateStyle("fontSize", value)}
+            onBeginChange={onBeginChange}
+            onFinishChange={onFinishChange}
+            onChange={(value) =>
+              onUpdateStyle("fontSize", value, { recordHistory: false })
+            }
           />
+
           <NumberField
             label="字重"
-            value={element.style.fontWeight ?? 400}
+            value={sharedFontWeight ?? ""}
+            placeholder="混合"
             min={100}
             max={900}
             step={100}
-            onChange={(value) => onUpdateStyle("fontWeight", value)}
-          />
-          <NumberField
-            label="圆角"
-            value={element.style.borderRadius ?? 0}
-            min={0}
-            onChange={(value) => onUpdateStyle("borderRadius", value)}
-          />
-          <ReadOnlyField
-            label="动画"
-            value={`${element.animations.length} 个`}
+            onBeginChange={onBeginChange}
+            onFinishChange={onFinishChange}
+            onChange={(value) =>
+              onUpdateStyle("fontWeight", value, { recordHistory: false })
+            }
           />
         </div>
       </section>
@@ -533,13 +761,24 @@ function FontTab({
         <div className="grid grid-cols-2 gap-3 text-sm">
           <ColorField
             label="文字颜色"
-            value={element.style.color ?? "#0f172a"}
-            onChange={(value) => onUpdateStyle("color", value)}
+            value={sharedFontColor}
+            mixed={sharedFontColor === undefined}
+            onBeginChange={onBeginChange}
+            onFinishChange={onFinishChange}
+            onChange={(value) =>
+              onUpdateStyle("color", value, { recordHistory: false })
+            }
           />
+
           <ColorField
             label="背景颜色"
-            value={element.style.backgroundColor ?? "#ffffff"}
-            onChange={(value) => onUpdateStyle("backgroundColor", value)}
+            value={sharedBackgroundColor}
+            mixed={sharedBackgroundColor === undefined}
+            onBeginChange={onBeginChange}
+            onFinishChange={onFinishChange}
+            onChange={(value) =>
+              onUpdateStyle("backgroundColor", value, { recordHistory: false })
+            }
           />
         </div>
       </section>
@@ -548,67 +787,110 @@ function FontTab({
 }
 
 function AnimationTab({
-  element,
-  currentAnimation,
+  elements,
+  sharedPreset,
+  sharedDuration,
+  sharedDelay,
+  allTargetsHaveAnimation,
   onUpdatePreset,
   onUpdateNumber,
+  onBeginChange,
+  onFinishChange,
 }: {
-  element: SlideElement;
-  currentAnimation?: SlideElementAnimation;
+  elements: SlideElement[];
+  sharedPreset?: string;
+  sharedDuration?: number;
+  sharedDelay?: number;
+  allTargetsHaveAnimation: boolean;
   onUpdatePreset: (value: string) => void;
-  onUpdateNumber: (key: "duration" | "delay", value: number) => void;
+  onUpdateNumber: (
+    key: "duration" | "delay",
+    value: number,
+    options?: PropertyUpdateOptions,
+  ) => void;
+  onBeginChange?: () => void;
+  onFinishChange?: () => void;
 }) {
   return (
-    <section className="rounded-2xl bg-violet-50 p-4">
-      <h3 className="mb-3 text-sm font-black text-violet-700">动画配置</h3>
+    <div className="space-y-4">
+      <section className="rounded-2xl border border-violet-100 bg-violet-50/60 p-4">
+        <h3 className="text-sm font-black text-violet-700">批量动画</h3>
+        <p className="mt-2 text-xs leading-5 text-violet-500">
+          当前动画修改会作用于 {elements.length} 个勾选对象。
+        </p>
+      </section>
 
-      <p className="mb-3 text-xs font-bold text-violet-500">
-        当前对象：{element.name}
-      </p>
+      <section className="rounded-2xl bg-violet-50 p-4">
+        <label className="block text-sm">
+          <span className="mb-1 block text-slate-500">进入动画</span>
 
-      <label className="block text-sm">
-        <span className="mb-1 block text-slate-500">进入动画</span>
-        <select
-          className="w-full rounded-xl bg-white px-3 py-2 text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-violet-300"
-          value={currentAnimation?.keyframes ?? "none"}
-          onChange={(event) => onUpdatePreset(event.target.value)}
-        >
-          <option value="none">无动画</option>
-          {animationPresets.map((preset) => (
-            <option key={preset.value} value={preset.keyframes}>
-              {preset.label}
-            </option>
-          ))}
-        </select>
-      </label>
+          <select
+            className="w-full rounded-xl bg-white px-3 py-2 text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-violet-300"
+            value={sharedPreset ?? "mixed"}
+            onChange={(event) => onUpdatePreset(event.target.value)}
+          >
+            {sharedPreset === undefined ? (
+              <option value="mixed" disabled>
+                混合
+              </option>
+            ) : null}
 
-      <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
-        <NumberField
-          label="时长(ms)"
-          value={currentAnimation?.duration ?? 600}
-          min={100}
-          step={100}
-          onChange={(value) => onUpdateNumber("duration", value)}
-        />
-        <NumberField
-          label="延迟(ms)"
-          value={currentAnimation?.delay ?? 0}
-          min={0}
-          step={100}
-          onChange={(value) => onUpdateNumber("delay", value)}
-        />
-      </div>
-    </section>
+            <option value="none">无动画</option>
+
+            {animationPresets.map((preset) => (
+              <option key={preset.value} value={preset.keyframes}>
+                {preset.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+          <NumberField
+            label="时长(ms)"
+            value={sharedDuration ?? ""}
+            placeholder="混合"
+            min={100}
+            step={100}
+            disabled={!allTargetsHaveAnimation}
+            onBeginChange={onBeginChange}
+            onFinishChange={onFinishChange}
+            onChange={(value) =>
+              onUpdateNumber("duration", value, { recordHistory: false })
+            }
+          />
+
+          <NumberField
+            label="延迟(ms)"
+            value={sharedDelay ?? ""}
+            placeholder="混合"
+            min={0}
+            step={100}
+            disabled={!allTargetsHaveAnimation}
+            onBeginChange={onBeginChange}
+            onFinishChange={onFinishChange}
+            onChange={(value) =>
+              onUpdateNumber("delay", value, { recordHistory: false })
+            }
+          />
+        </div>
+
+        {!allTargetsHaveAnimation ? (
+          <p className="mt-3 rounded-xl bg-white/80 p-3 text-xs leading-5 text-violet-500">
+            部分勾选对象尚未设置动画。先统一选择一种动画，
+            再批量修改时长和延迟。
+          </p>
+        ) : null}
+      </section>
+    </div>
   );
 }
 
 function LayerTab({
-  selectedCount,
   singleTarget,
   onUpdateLayer,
   onDeleteElement,
 }: {
-  selectedCount: number;
   singleTarget?: SlideElement;
   onUpdateLayer: (action: LayerAction) => void;
   onDeleteElement: () => void;
@@ -638,9 +920,8 @@ function LayerTab({
         </div>
 
         <p className="mt-3 text-xs leading-5 text-slate-400">
-          {selectedCount > 1
-            ? "当前图层按钮作用于幕布中的完整多选组。按属性勾选对象操作将在下一阶段接入。"
-            : "图层按钮作用于当前元素。"}
+          图层按钮只作用于当前勾选的属性操作对象。
+          未勾选元素会继续保留在幕布框选组中。
         </p>
       </section>
 
@@ -714,26 +995,45 @@ function NumberField({
   min,
   max,
   step = 1,
+  placeholder,
+  disabled = false,
+  onBeginChange,
+  onFinishChange,
   onChange,
 }: {
   label: string;
-  value: number;
+  value: number | "";
   min?: number;
   max?: number;
   step?: number;
+  placeholder?: string;
+  disabled?: boolean;
+  onBeginChange?: () => void;
+  onFinishChange?: () => void;
   onChange: (value: number) => void;
 }) {
   return (
     <label className="block">
       <span className="mb-1 block text-slate-400">{label}</span>
+
       <input
         type="number"
-        className="w-full rounded-xl bg-white px-3 py-2 text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-violet-300"
+        className="w-full rounded-xl bg-white px-3 py-2 text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-violet-300 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-300"
         value={value}
         min={min}
         max={max}
         step={step}
-        onChange={(event) => onChange(Number(event.target.value))}
+        placeholder={placeholder}
+        disabled={disabled}
+        onFocus={onBeginChange}
+        onBlur={onFinishChange}
+        onChange={(event) => {
+          if (event.target.value === "") {
+            return;
+          }
+
+          onChange(Number(event.target.value));
+        }}
       />
     </label>
   );
@@ -742,19 +1042,36 @@ function NumberField({
 function ColorField({
   label,
   value,
+  mixed = false,
+  onBeginChange,
+  onFinishChange,
   onChange,
 }: {
   label: string;
-  value: string;
+  value?: string;
+  mixed?: boolean;
+  onBeginChange?: () => void;
+  onFinishChange?: () => void;
   onChange: (value: string) => void;
 }) {
   return (
     <label className="block">
-      <span className="mb-1 block text-slate-400">{label}</span>
+      <span className="mb-1 flex items-center justify-between gap-2 text-slate-400">
+        <span>{label}</span>
+
+        {mixed ? (
+          <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-bold text-violet-500">
+            混合
+          </span>
+        ) : null}
+      </span>
+
       <input
         type="color"
         className="h-10 w-full cursor-pointer rounded-xl bg-white px-2 py-1 outline-none ring-1 ring-transparent transition focus:ring-violet-300"
-        value={value}
+        value={value ?? "#0f172a"}
+        onFocus={onBeginChange}
+        onBlur={onFinishChange}
         onChange={(event) => onChange(event.target.value)}
       />
     </label>

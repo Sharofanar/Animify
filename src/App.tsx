@@ -18,6 +18,11 @@ import { PropertyPanel } from "./components/editor/PropertyPanel";
 import { SlideCanvas } from "./components/editor/SlideCanvas";
 import { demoProject } from "./data/demoProject";
 import { exportProjectAsHtml } from "./utils/exportHtml";
+import {
+  createAnimationSceneFromLegacyElements,
+  createEmptyAnimationScene,
+  normalizeProjectAnimationScenes,
+} from "./utils/animationSchema";
 import type {
   PresentationAsset,
   PresentationProject,
@@ -193,19 +198,21 @@ function loadSavedProject(): PresentationProject {
   const savedProject = localStorage.getItem(STORAGE_KEY);
 
   if (!savedProject) {
-    return demoProject;
+    return normalizeProjectAnimationScenes(demoProject);
   }
 
   try {
     const parsedProject = JSON.parse(savedProject) as PresentationProject;
 
-    return {
+    const normalizedProject: PresentationProject = {
       ...parsedProject,
       assets: parsedProject.assets ?? {},
       slides: normalizeSlideTitles(parsedProject.slides),
     };
+
+    return normalizeProjectAnimationScenes(normalizedProject);
   } catch {
-    return demoProject;
+    return normalizeProjectAnimationScenes(demoProject);
   }
 }
 
@@ -242,6 +249,7 @@ function createBlankSlide(
     id: slideId,
     title: `第 ${slideNumber} 页`,
     backgroundColor: "#f8fafc",
+    animationScene: createEmptyAnimationScene(),
     elements: [
       {
         id: `element-title-${now}`,
@@ -288,22 +296,34 @@ function duplicateSlide(
   slideNumber: number,
 ): PresentationProject["slides"][number] {
   const now = Date.now();
+  const duplicatedSlideId = `slide-copy-${now}`;
+
+  const duplicatedElements = slide.elements.map((element, elementIndex) => ({
+    ...element,
+    id: `${element.id}-copy-${now}-${elementIndex}`,
+    style: {
+      ...element.style,
+    },
+    animations: element.animations.map((animation, animationIndex) => ({
+      ...animation,
+      id: `${animation.id}-copy-${now}-${elementIndex}-${animationIndex}`,
+    })),
+  }));
 
   return {
     ...slide,
-    id: `slide-copy-${now}`,
+    id: duplicatedSlideId,
     title: `第 ${slideNumber} 页`,
-    elements: slide.elements.map((element, elementIndex) => ({
-      ...element,
-      id: `${element.id}-copy-${now}-${elementIndex}`,
-      style: {
-        ...element.style,
-      },
-      animations: element.animations.map((animation, animationIndex) => ({
-        ...animation,
-        id: `${animation.id}-copy-${now}-${elementIndex}-${animationIndex}`,
-      })),
-    })),
+    elements: duplicatedElements,
+
+    /**
+     * Rebuild the V2 scene so every animation target points to the duplicated
+     * element IDs instead of the original slide elements.
+     */
+    animationScene: createAnimationSceneFromLegacyElements(
+      duplicatedSlideId,
+      duplicatedElements,
+    ),
   };
 }
 

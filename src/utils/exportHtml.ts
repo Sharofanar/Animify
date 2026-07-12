@@ -1,4 +1,5 @@
 import type { PresentationProject } from "../types/presentation";
+import { compileSlideAnimations } from "./animationCompiler";
 
 /**
  * Export the current Animify project as a standalone HTML file.
@@ -31,6 +32,24 @@ export function exportProjectAsHtml(project: PresentationProject) {
  */
 function createHtmlDocument(project: PresentationProject) {
   const serializedProject = escapeScriptJson(project);
+
+  /**
+   * Compile every slide before export.
+   *
+   * The exported player receives the same browser-ready animation data used by
+   * SlideCanvas, so canvas preview, presentation mode, and HTML export share one
+   * animation compiler.
+   */
+  const compiledAnimationsBySlide = Object.fromEntries(
+    project.slides.map((slide) => [
+      slide.id,
+      compileSlideAnimations(slide.animationScene),
+    ]),
+  );
+
+  const serializedCompiledAnimations = escapeScriptJson(
+    compiledAnimationsBySlide,
+  );
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -100,7 +119,7 @@ function createHtmlDocument(project: PresentationProject) {
       pointer-events: none;
     }
 
-        .element-content {
+    .element-content {
       width: 100%;
       height: 100%;
       display: flex;
@@ -110,62 +129,6 @@ function createHtmlDocument(project: PresentationProject) {
       white-space: pre-wrap;
       text-align: center;
       line-height: 1.2;
-    }
-
-    @keyframes fade-in-up {
-      from {
-        opacity: 0;
-        transform: translateY(28px);
-      }
-
-      to {
-        opacity: 1;
-        transform: translateY(0);
-      }
-    }
-
-    @keyframes fade-in {
-      from {
-        opacity: 0;
-      }
-
-      to {
-        opacity: 1;
-      }
-    }
-
-    @keyframes scale-in {
-      from {
-        opacity: 0;
-        transform: scale(0.92);
-      }
-
-      to {
-        opacity: 1;
-        transform: scale(1);
-      }
-    }
-
-    @keyframes pulse {
-      0%,
-      100% {
-        transform: scale(1);
-      }
-
-      50% {
-        transform: scale(1.05);
-      }
-    }
-
-    @keyframes float {
-      0%,
-      100% {
-        transform: translateY(0);
-      }
-
-      50% {
-        transform: translateY(-14px);
-      }
     }
 
     .controls {
@@ -235,6 +198,8 @@ function createHtmlDocument(project: PresentationProject) {
 
   <script>
     const project = ${serializedProject};
+    const compiledAnimationsBySlide = ${serializedCompiledAnimations};
+
     // Exported presentations should always start from the first slide,
     // no matter which slide was active when the user clicked export.
     let activeSlideIndex = 0;
@@ -260,96 +225,92 @@ function createHtmlDocument(project: PresentationProject) {
 
       return project.assets[assetId];
     }
-    
-    function getAnimationFrames(animationName) {
-      // Keep these names aligned with PropertyPanel animationPresets.
-      // The editor currently saves animation.keyframes as:
-      // "fade-in", "slide-up", or "zoom-in".
-      if (animationName === "fade-in") {
-        return [
-          { opacity: 0 },
-          { opacity: 1 },
-        ];
-      }
 
-      if (animationName === "slide-up") {
-        return [
-          { opacity: 0, transform: "translateY(28px)" },
-          { opacity: 1, transform: "translateY(0)" },
-        ];
-      }
+    /**
+     * Play Animation Schema V2 compiler output on the exported slide.
+     *
+     * Animation data is already compiled before export, so this player only needs
+     * to create Web Animations API instances from the serialized keyframes.
+     */
+    function playSlideAnimations(slideNode, compiledSlideAnimations) {
+      const animationNodes = slideNode.querySelectorAll("[data-element-id]");
 
-      if (animationName === "zoom-in") {
-        return [
-          { opacity: 0, transform: "scale(0.92)" },
-          { opacity: 1, transform: "scale(1)" },
-        ];
-      }
-
-      // Backward-compatible names used by the original demo data or older exports.
-      if (animationName === "fade-in-up") {
-        return [
-          { opacity: 0, transform: "translateY(28px)" },
-          { opacity: 1, transform: "translateY(0)" },
-        ];
-      }
-
-      if (animationName === "scale-in") {
-        return [
-          { opacity: 0, transform: "scale(0.92)" },
-          { opacity: 1, transform: "scale(1)" },
-        ];
-      }
-
-      if (animationName === "pulse") {
-        return [
-          { transform: "scale(1)" },
-          { transform: "scale(1.05)" },
-          { transform: "scale(1)" },
-        ];
-      }
-
-      if (animationName === "float") {
-        return [
-          { transform: "translateY(0)" },
-          { transform: "translateY(-14px)" },
-          { transform: "translateY(0)" },
-        ];
-      }
-
-      return null;
-    }
-
-    function playSlideAnimations(slideNode) {
-      const animatedNodes = slideNode.querySelectorAll("[data-animation-name]");
-
-      animatedNodes.forEach((node) => {
-        const animationName = node.dataset.animationName;
-        const animationFrames = getAnimationFrames(animationName);
-
-        if (!animationFrames) {
-          return;
-        }
-
-        // Cancel existing animations first so changing slides or resizing the
-        // browser can replay the animation from the beginning.
+      animationNodes.forEach((node) => {
+        // Cancel existing animations before replaying a slide or handling resize.
         node.getAnimations().forEach((animation) => {
           animation.cancel();
         });
 
-        node.animate(animationFrames, {
-          duration: Number(node.dataset.animationDuration || 600),
-          delay: Number(node.dataset.animationDelay || 0),
-          easing: node.dataset.animationEasing || "ease-out",
-          fill: "both",
+        const elementId = node.dataset.elementId;
+        const elementAnimations =
+          compiledSlideAnimations?.byElementId?.[elementId] || [];
+
+        elementAnimations.forEach((compiledAnimation) => {
+          const keyframes = (compiledAnimation.keyframes || []).map((frame) => {
+            const keyframe = {
+              offset: Number(frame.offset ?? 0),
+            };
+
+            if (typeof frame.opacity === "number") {
+              keyframe.opacity = frame.opacity;
+            }
+
+            if (typeof frame.transform === "string") {
+              keyframe.transform = frame.transform;
+            }
+
+            if (typeof frame.easing === "string") {
+              keyframe.easing = frame.easing;
+            }
+
+            return keyframe;
+          });
+
+          if (keyframes.length === 0) {
+            return;
+          }
+
+          const timing = compiledAnimation.timing || {};
+
+          const runningAnimation = node.animate(keyframes, {
+            delay: Math.max(0, Number(timing.delay ?? 0)),
+            duration: Math.max(1, Number(timing.duration ?? 1)),
+            fill: timing.fill || "both",
+            iterations: Math.max(1, Number(timing.iterations ?? 1)),
+            direction: timing.direction || "normal",
+
+            // Every compiled keyframe can contain its own segment easing.
+            easing: "linear",
+          });
+
+          runningAnimation.playbackRate =
+            Number(compiledAnimation.playbackRate) > 0
+              ? Number(compiledAnimation.playbackRate)
+              : 1;
         });
       });
     }
 
-          function createElementNode(element) {
+    function createElementNode(element, compiledSlideAnimations) {
       const style = element.style || {};
-      const animation = element.animations?.[0];
       const asset = getAsset(element.assetId);
+
+      const elementAnimations =
+        compiledSlideAnimations?.byElementId?.[element.id] || [];
+
+      /**
+       * Only backward-filling animations need their first frame applied before
+       * element.animate() starts. This prevents entrance animations from briefly
+       * flashing their final state during the first rendered frame.
+       */
+      const initialAnimation = elementAnimations.find((animation) => {
+        const fill = animation.timing?.fill;
+
+        return fill === "backwards" || fill === "both";
+      });
+
+      const initialFrame = initialAnimation?.keyframes?.[0];
+
       const node = document.createElement("div");
       const contentNode = document.createElement("div");
 
@@ -364,21 +325,21 @@ function createHtmlDocument(project: PresentationProject) {
       node.style.opacity = String(style.opacity ?? 1);
 
       contentNode.className = "element-content";
+      contentNode.dataset.elementId = element.id;
       contentNode.style.color = style.color ?? "#0f172a";
       contentNode.style.backgroundColor = style.backgroundColor ?? "transparent";
       contentNode.style.fontSize = String(style.fontSize ?? 16) + "px";
       contentNode.style.fontWeight = String(style.fontWeight ?? 400);
       contentNode.style.borderRadius = String(style.borderRadius ?? 0) + "px";
 
-            
-      // Store animation metadata on the inner content node. The exported player
-      // will actively replay these animations after each slide render.
-      if (animation) {
-        contentNode.dataset.animationName = animation.keyframes;
-        contentNode.dataset.animationDuration = String(animation.duration ?? 600);
-        contentNode.dataset.animationDelay = String(animation.delay ?? 0);
-        contentNode.dataset.animationEasing = animation.easing || "ease-out";
+      if (typeof initialFrame?.opacity === "number") {
+        contentNode.style.opacity = String(initialFrame.opacity);
       }
+
+      if (typeof initialFrame?.transform === "string") {
+        contentNode.style.transform = initialFrame.transform;
+      }
+
 
       // Image elements only store assetId on the slide. Resolve the real image
       // data from project.assets so exported presentations show the image
@@ -410,6 +371,13 @@ function createHtmlDocument(project: PresentationProject) {
         return;
       }
 
+      const compiledSlideAnimations =
+        compiledAnimationsBySlide[slide.id] || {
+          revision: 0,
+          byElementId: {},
+          diagnostics: [],
+        };
+
       const viewportWidth = window.innerWidth;
       const viewportHeight = window.innerHeight;
       const scale = Math.min(
@@ -426,7 +394,9 @@ function createHtmlDocument(project: PresentationProject) {
       slideNode.style.transform = \`scale(\${scale})\`;
 
       for (const element of slide.elements || []) {
-        slideNode.appendChild(createElementNode(element));
+        slideNode.appendChild(
+          createElementNode(element, compiledSlideAnimations),
+        );
       }
 
       app.replaceChildren(slideNode);
@@ -435,7 +405,7 @@ function createHtmlDocument(project: PresentationProject) {
       // requestAnimationFrame makes page switching more reliable, especially
       // when the browser needs one frame to apply the newly inserted elements.
       requestAnimationFrame(() => {
-        playSlideAnimations(slideNode);
+        playSlideAnimations(slideNode, compiledSlideAnimations);
       });
 
       slideCounter.textContent = \`\${activeSlideIndex + 1} / \${project.slides.length}\`;
@@ -498,8 +468,10 @@ function createHtmlDocument(project: PresentationProject) {
  * Replacing '<' prevents a project string from accidentally closing the script
  * tag, for example through '</script>' inside user-entered text.
  */
-function escapeScriptJson(project: PresentationProject) {
-  return JSON.stringify(project).replaceAll("<", "\\u003c");
+function escapeScriptJson(value: unknown) {
+  const serializedValue = JSON.stringify(value);
+
+  return (serializedValue ?? "null").replaceAll("<", "\\u003c");
 }
 
 function escapeHtml(value: string) {

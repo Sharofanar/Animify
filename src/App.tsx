@@ -23,6 +23,7 @@ import {
   createEmptyAnimationScene,
   normalizeProjectAnimationScenes,
 } from "./utils/animationSchema";
+import { applyElementBatchUpdatesToSlide } from "./utils/animationCommands";
 import type {
   PresentationAsset,
   PresentationProject,
@@ -1449,8 +1450,9 @@ function App() {
   /**
    * Update multiple elements in one project transaction.
    *
-   * Every batch is committed through one project update, so changing ten checked
-   * elements still creates only one undo snapshot.
+   * The command layer applies the element changes and keeps the legacy animation
+   * array synchronized with Animation Schema V2. One batch still creates only one
+   * undo snapshot.
    */
   function handleUpdateElements(
     batchUpdates: ElementBatchUpdate[],
@@ -1460,10 +1462,6 @@ function App() {
       return;
     }
 
-    const updatesByElementId = new Map(
-      batchUpdates.map((item) => [item.elementId, item.updates]),
-    );
-
     commitProjectChange((currentProject) => {
       let changed = false;
 
@@ -1472,29 +1470,14 @@ function App() {
           return slide;
         }
 
-        return {
-          ...slide,
-          elements: slide.elements.map((element) => {
-            const updates = updatesByElementId.get(element.id);
+        const nextSlide = applyElementBatchUpdatesToSlide(slide, batchUpdates);
 
-            if (!updates) {
-              return element;
-            }
+        if (nextSlide === slide) {
+          return slide;
+        }
 
-            changed = true;
-
-            return {
-              ...element,
-              ...updates,
-              style: updates.style
-                ? {
-                    ...element.style,
-                    ...updates.style,
-                  }
-                : element.style,
-            };
-          }),
-        };
+        changed = true;
+        return nextSlide;
       });
 
       if (!changed) {

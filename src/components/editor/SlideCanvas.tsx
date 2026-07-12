@@ -1,6 +1,7 @@
 import { useDroppable } from "@dnd-kit/core";
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -13,6 +14,10 @@ import type {
   Slide,
   SlideElement,
 } from "../../types/presentation";
+import {
+  compileSlideAnimations,
+  type CompiledElementAnimation,
+} from "../../utils/animationCompiler";
 
 const SLIDE_WIDTH = 1280;
 const SLIDE_HEIGHT = 720;
@@ -214,6 +219,24 @@ export function SlideCanvas({
   const { isOver, setNodeRef } = useDroppable({
     id: "slide-canvas-droppable",
   });
+
+  /**
+   * Compile the V2 animation scene only when the scene object changes.
+   *
+   * Selection, movement, and other editor-only rerenders reuse the same compiler
+   * result instead of rebuilding every animation.
+   */
+  const compiledSlideAnimations = useMemo(
+    () => compileSlideAnimations(slide.animationScene),
+    [slide.animationScene],
+  );
+
+  /**
+   * Old projects are normally normalized before rendering. This fallback remains
+   * available in case a malformed or unmigrated slide reaches the canvas.
+   */
+  const legacyAnimationFallback =
+    !slide.animationScene || slide.animationScene.schemaVersion !== 2;
 
   function setDropZoneRef(node: HTMLDivElement | null) {
     setNodeRef(node);
@@ -586,10 +609,15 @@ export function SlideCanvas({
       ) : null}
 
       {slide.elements.map((element) => {
-        const firstAnimation = element.animations[0];
-        const animationKey = firstAnimation
-          ? `${element.id}-${firstAnimation.keyframes}-${firstAnimation.duration}-${firstAnimation.delay}-${animationPreviewKey}`
-          : `${element.id}-${animationPreviewKey}`;
+        const compiledAnimations =
+          compiledSlideAnimations.byElementId[element.id] ?? [];
+
+        /**
+         * animationPreviewKey remounts the visual node when the user explicitly asks
+         * to replay the current slide animations.
+         */
+        const animationKey = `${element.id}-${animationPreviewKey}`;
+
         const asset = element.assetId ? assets[element.assetId] : undefined;
         const selectionIndex = selectedElementIds.indexOf(element.id);
         const selectionNumber =
@@ -605,6 +633,8 @@ export function SlideCanvas({
             element={element}
             asset={asset}
             scale={scale}
+            compiledAnimations={compiledAnimations}
+            legacyAnimationFallback={legacyAnimationFallback}
             selected={
               element.id === selectedElementId ||
               selectedElementIds.includes(element.id)
@@ -751,6 +781,8 @@ function SlideElementView({
   element,
   asset,
   scale,
+  compiledAnimations,
+  legacyAnimationFallback,
   selected,
   selectionNumber,
   propertyTargeted = false,
@@ -771,6 +803,8 @@ function SlideElementView({
   element: SlideElement;
   asset?: PresentationAsset;
   scale: number;
+  compiledAnimations: CompiledElementAnimation[];
+  legacyAnimationFallback: boolean;
   selected: boolean;
   selectionNumber?: number;
   propertyTargeted?: boolean;
@@ -796,9 +830,10 @@ function SlideElementView({
   ) => void;
 }) {
   const style = element.style;
-  const animation = element.animations[0];
+  const legacyAnimation = element.animations[0];
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const elementNodeRef = useRef<HTMLDivElement | null>(null);
+  const animationNodeRef = useRef<HTMLSpanElement | null>(null);
   const [draftContent, setDraftContent] = useState(element.content);
 
   const dragStateRef = useRef<{
@@ -833,6 +868,67 @@ function SlideElementView({
     textareaRef.current?.select();
   }, [isEditing]);
 
+  /**
+   * Play compiled Animation Schema V2 clips through the Web Animations API.
+   *
+   * Animations run on the inner content node so editor positioning and element
+   * rotation on the outer node remain independent.
+   */
+  useEffect(() => {
+    const animationNode = animationNodeRef.current;
+
+    if (!animationNode || isEditing || compiledAnimations.length === 0) {
+      return;
+    }
+
+    const runningAnimations = compiledAnimations.map((compiledAnimation) => {
+      const keyframes = compiledAnimation.keyframes.map(
+        (frame): Keyframe => ({
+          offset: frame.offset,
+          ...(frame.opacity !== undefined ? { opacity: frame.opacity } : {}),
+          ...(frame.transform !== undefined
+            ? { transform: frame.transform }
+            : {}),
+          ...(frame.easing !== undefined ? { easing: frame.easing } : {}),
+        }),
+      );
+
+      const runningAnimation = animationNode.animate(keyframes, {
+        delay: compiledAnimation.timing.delay,
+        duration: compiledAnimation.timing.duration,
+        fill: compiledAnimation.timing.fill,
+        iterations: compiledAnimation.timing.iterations,
+        direction: compiledAnimation.timing.direction,
+
+        /**
+         * Individual keyframes already contain their own easing values.
+         */
+        easing: "linear",
+      });
+
+      runningAnimation.playbackRate = compiledAnimation.playbackRate;
+
+      return runningAnimation;
+    });
+
+    return () => {
+      runningAnimations.forEach((runningAnimation) => {
+        runningAnimation.cancel();
+      });
+    };
+  }, [compiledAnimations, isEditing]);
+
+  /**
+   * Apply the first compiled frame before the browser animation starts.
+   *
+   * This prevents entrance animations from briefly flashing their final state
+   * during the frame before the Web Animations effect is created.
+   */
+  const initialCompiledFrame =
+    !isEditing && compiledAnimations.length > 0
+      ? compiledAnimations[0].keyframes[0]
+      : undefined;
+
   const outerStyle: CSSProperties = {
     left: style.x * scale,
     top: style.y * scale,
@@ -848,11 +944,22 @@ function SlideElementView({
     fontSize: (style.fontSize ?? 16) * scale,
     fontWeight: style.fontWeight ?? 400,
     borderRadius: (style.borderRadius ?? 0) * scale,
-    animation: animation
-      ? `${animation.keyframes} ${animation.duration}ms ${animation.easing} ${animation.delay}ms both`
-      : undefined,
-  };
 
+    /**
+     * The initial V2 frame prevents an entrance-animation flash before useEffect
+     * starts the Web Animations instance.
+     */
+    opacity: initialCompiledFrame?.opacity,
+    transform: initialCompiledFrame?.transform,
+
+    /**
+     * Legacy CSS playback is used only when no valid V2 scene reached the canvas.
+     */
+    animation:
+      legacyAnimationFallback && legacyAnimation
+        ? `${legacyAnimation.keyframes} ${legacyAnimation.duration}ms ${legacyAnimation.easing} ${legacyAnimation.delay}ms both`
+        : undefined,
+  };
   function commitContent() {
     const nextStyle = measureTextElementSize(element, draftContent);
 
@@ -1187,6 +1294,7 @@ function SlideElementView({
         />
       ) : (
         <span
+          ref={animationNodeRef}
           className="flex h-full w-full items-center justify-center whitespace-pre-wrap wrap-break-word"
           style={innerStyle}
         >

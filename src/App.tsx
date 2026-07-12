@@ -2722,6 +2722,7 @@ function App() {
                 <PropertyPanel
                   selectedElements={selectedElements}
                   targetElementIds={effectivePropertyTargetElementIds}
+                  animationScene={activeSlide?.animationScene}
                   onTargetElementIdsChange={
                     handlePropertyTargetElementIdsChange
                   }

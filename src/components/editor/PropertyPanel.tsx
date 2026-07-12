@@ -1,8 +1,10 @@
 import { useState } from "react";
 import type {
+  AnimationScene,
   SlideElement,
   SlideElementAnimation,
 } from "../../types/presentation";
+import { AnimationTrackInspector } from "./AnimationTrackInspector";
 
 type LayerAction =
   | "bring-forward"
@@ -28,6 +30,7 @@ type ElementBatchUpdate = {
 type PropertyPanelProps = {
   selectedElements: SlideElement[];
   targetElementIds: string[];
+  animationScene?: AnimationScene;
   onTargetElementIdsChange?: (elementIds: string[]) => void;
   onUpdateElements?: (
     batchUpdates: ElementBatchUpdate[],
@@ -101,6 +104,7 @@ function getSharedValue<T>(values: T[]): T | undefined {
 export function PropertyPanel({
   selectedElements,
   targetElementIds,
+  animationScene,
   onTargetElementIdsChange,
   onUpdateElements,
   onBeginPropertyChange,
@@ -544,6 +548,7 @@ export function PropertyPanel({
           targetElements.length > 0 ? (
             <AnimationTab
               elements={targetElements}
+              animationScene={animationScene}
               sharedPreset={sharedAnimationPreset}
               sharedDuration={
                 typeof sharedAnimationDuration === "number"
@@ -788,6 +793,7 @@ function FontTab({
 
 function AnimationTab({
   elements,
+  animationScene,
   sharedPreset,
   sharedDuration,
   sharedDelay,
@@ -798,6 +804,7 @@ function AnimationTab({
   onFinishChange,
 }: {
   elements: SlideElement[];
+  animationScene?: AnimationScene;
   sharedPreset?: string;
   sharedDuration?: number;
   sharedDelay?: number;
@@ -882,6 +889,8 @@ function AnimationTab({
           </p>
         ) : null}
       </section>
+
+      <AnimationTrackInspector scene={animationScene} elements={elements} />
     </div>
   );
 }

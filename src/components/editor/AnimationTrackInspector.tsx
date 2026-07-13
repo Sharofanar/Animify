@@ -7,10 +7,21 @@ import type {
   AnimationValue,
   SlideElement,
 } from "../../types/presentation";
+import type { UpdateAnimationKeyframeValueCommand } from "../../utils/animationCommands";
+
+type InspectorUpdateOptions = {
+  recordHistory?: boolean;
+};
 
 type AnimationTrackInspectorProps = {
   scene?: AnimationScene;
   elements: SlideElement[];
+  onUpdateKeyframeValue?: (
+    command: UpdateAnimationKeyframeValueCommand,
+    options?: InspectorUpdateOptions,
+  ) => void;
+  onBeginChange?: () => void;
+  onFinishChange?: () => void;
 };
 
 type VisibleClip = {
@@ -29,6 +40,9 @@ type VisibleClip = {
 export function AnimationTrackInspector({
   scene,
   elements,
+  onUpdateKeyframeValue,
+  onBeginChange,
+  onFinishChange,
 }: AnimationTrackInspectorProps) {
   const selectedElementIds = new Set(elements.map((element) => element.id));
 
@@ -48,12 +62,12 @@ export function AnimationTrackInspector({
         <div>
           <h3 className="text-sm font-black text-slate-800">V2 动画轨道</h3>
           <p className="mt-1 text-xs leading-5 text-slate-500">
-            直接读取当前页面 animationScene 中的 Clip、Track 和 Keyframe。
+            当前先开放数值关键帧编辑，位置、增删和缓动将在后续阶段开放。
           </p>
         </div>
 
         <span className="shrink-0 rounded-full bg-slate-200 px-2.5 py-1 text-[11px] font-black text-slate-500">
-          只读
+          数值可编辑
         </span>
       </div>
 
@@ -64,6 +78,9 @@ export function AnimationTrackInspector({
               key={item.clip.id}
               item={item}
               defaultOpen={index === 0}
+              onUpdateKeyframeValue={onUpdateKeyframeValue}
+              onBeginChange={onBeginChange}
+              onFinishChange={onFinishChange}
             />
           ))}
         </div>
@@ -84,9 +101,18 @@ export function AnimationTrackInspector({
 function AnimationClipCard({
   item,
   defaultOpen,
+  onUpdateKeyframeValue,
+  onBeginChange,
+  onFinishChange,
 }: {
   item: VisibleClip;
   defaultOpen: boolean;
+  onUpdateKeyframeValue?: (
+    command: UpdateAnimationKeyframeValueCommand,
+    options?: InspectorUpdateOptions,
+  ) => void;
+  onBeginChange?: () => void;
+  onFinishChange?: () => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const { clip, sequenceName, targetNames } = item;
@@ -143,7 +169,14 @@ function AnimationClipCard({
           <div className="mt-3 space-y-3">
             {clip.tracks.length > 0 ? (
               clip.tracks.map((track) => (
-                <AnimationTrackCard key={track.id} track={track} />
+                <AnimationTrackCard
+                  key={track.id}
+                  clipId={clip.id}
+                  track={track}
+                  onUpdateKeyframeValue={onUpdateKeyframeValue}
+                  onBeginChange={onBeginChange}
+                  onFinishChange={onFinishChange}
+                />
               ))
             ) : (
               <p className="rounded-xl bg-slate-50 p-3 text-xs text-slate-400">
@@ -157,7 +190,22 @@ function AnimationClipCard({
   );
 }
 
-function AnimationTrackCard({ track }: { track: AnimationTrack }) {
+function AnimationTrackCard({
+  clipId,
+  track,
+  onUpdateKeyframeValue,
+  onBeginChange,
+  onFinishChange,
+}: {
+  clipId: string;
+  track: AnimationTrack;
+  onUpdateKeyframeValue?: (
+    command: UpdateAnimationKeyframeValueCommand,
+    options?: InspectorUpdateOptions,
+  ) => void;
+  onBeginChange?: () => void;
+  onFinishChange?: () => void;
+}) {
   const sortedKeyframes = [...track.keyframes].sort(
     (left, right) => left.offset - right.offset,
   );
@@ -200,9 +248,22 @@ function AnimationTrackCard({ track }: { track: AnimationTrack }) {
             </span>
 
             <span className="min-w-0">
-              <span className="block truncate font-bold text-slate-700">
-                {formatAnimationValue(keyframe.value, track.property)}
-              </span>
+              {typeof keyframe.value === "number" ? (
+                <NumericKeyframeInput
+                  value={keyframe.value}
+                  property={track.property}
+                  clipId={clipId}
+                  trackId={track.id}
+                  keyframeId={keyframe.id}
+                  onUpdateKeyframeValue={onUpdateKeyframeValue}
+                  onBeginChange={onBeginChange}
+                  onFinishChange={onFinishChange}
+                />
+              ) : (
+                <span className="block truncate font-bold text-slate-700">
+                  {formatAnimationValue(keyframe.value, track.property)}
+                </span>
+              )}
 
               <span className="mt-0.5 block truncate text-[10px] text-slate-400">
                 {keyframe.hold ? "保持关键帧" : formatEasing(keyframe.easing)}
@@ -212,6 +273,144 @@ function AnimationTrackCard({ track }: { track: AnimationTrack }) {
         ))}
       </div>
     </section>
+  );
+}
+
+/**
+ * Keep a temporary text draft while the user edits one numeric keyframe.
+ *
+ * The draft may be empty during editing. A valid number is committed when the
+ * input loses focus. Leaving an empty or invalid draft restores the last stored
+ * project value without creating a history entry.
+ */
+function NumericKeyframeInput({
+  value,
+  property,
+  clipId,
+  trackId,
+  keyframeId,
+  onUpdateKeyframeValue,
+  onBeginChange,
+  onFinishChange,
+}: {
+  value: number;
+  property: AnimationTrack["property"];
+  clipId: string;
+  trackId: string;
+  keyframeId: string;
+  onUpdateKeyframeValue?: (
+    command: UpdateAnimationKeyframeValueCommand,
+    options?: InspectorUpdateOptions,
+  ) => void;
+  onBeginChange?: () => void;
+  onFinishChange?: () => void;
+}) {
+  /**
+   * The input draft is separate from the stored animation value so the field
+   * can temporarily become completely empty while the user is typing.
+   */
+  const [draftValue, setDraftValue] = useState(String(value));
+
+  /**
+   * While focused, the input displays its temporary editable draft.
+   *
+   * Outside editing mode it reads the latest project value directly, so undo,
+   * redo, and external animation changes appear immediately without an effect.
+   */
+  const [isEditing, setIsEditing] = useState(false);
+
+  const displayedValue = isEditing ? draftValue : String(value);
+
+  function normalizeValue(nextValue: number) {
+    if (property === "opacity") {
+      return Math.min(1, Math.max(0, nextValue));
+    }
+
+    return nextValue;
+  }
+
+  function commitDraftValue() {
+    const trimmedValue = draftValue.trim();
+
+    /**
+     * An empty field means cancel this edit and restore the stored value.
+     */
+    if (trimmedValue === "") {
+      setDraftValue(String(value));
+      return;
+    }
+
+    const parsedValue = Number(trimmedValue);
+
+    /**
+     * Invalid input is treated the same as cancellation.
+     */
+    if (!Number.isFinite(parsedValue)) {
+      setDraftValue(String(value));
+      return;
+    }
+
+    const nextValue = normalizeValue(parsedValue);
+
+    setDraftValue(String(nextValue));
+
+    if (Object.is(nextValue, value)) {
+      return;
+    }
+
+    onUpdateKeyframeValue?.(
+      {
+        clipId,
+        trackId,
+        keyframeId,
+        value: nextValue,
+      },
+      {
+        recordHistory: false,
+      },
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <input
+        type="number"
+        className="min-w-0 flex-1 rounded-lg bg-slate-50 px-2 py-1 font-bold text-slate-700 outline-none ring-1 ring-transparent transition focus:bg-white focus:ring-violet-300"
+        value={displayedValue}
+        min={property === "opacity" ? 0 : undefined}
+        max={property === "opacity" ? 1 : undefined}
+        step={getNumericInputStep(property)}
+        onFocus={() => {
+          /**
+           * Start every editing session from the latest stored project value.
+           */
+          setDraftValue(String(value));
+          setIsEditing(true);
+          onBeginChange?.();
+        }}
+        onChange={(event) => {
+          /**
+           * Do not immediately write into the project. Keeping the raw draft
+           * allows empty text, negative signs, and decimal input while typing.
+           */
+          setDraftValue(event.target.value);
+        }}
+        onBlur={() => {
+          commitDraftValue();
+          setIsEditing(false);
+          onFinishChange?.();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.currentTarget.blur();
+          }
+        }}
+      />
+
+      <span className="shrink-0 text-[10px] font-bold text-slate-400">
+        {getPropertyUnit(property)}
+      </span>
+    </div>
   );
 }
 
@@ -451,6 +650,18 @@ function formatEasing(easing?: AnimationEasing) {
     case "custom-curve":
       return `自定义曲线：${easing.points.length} 个控制点`;
   }
+}
+
+function getNumericInputStep(property: AnimationTrack["property"]) {
+  if (
+    property === "opacity" ||
+    property === "transform.scaleX" ||
+    property === "transform.scaleY"
+  ) {
+    return 0.01;
+  }
+
+  return 1;
 }
 
 function formatNumber(value: number) {

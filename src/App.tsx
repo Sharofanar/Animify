@@ -23,7 +23,11 @@ import {
   createEmptyAnimationScene,
   normalizeProjectAnimationScenes,
 } from "./utils/animationSchema";
-import { applyElementBatchUpdatesToSlide } from "./utils/animationCommands";
+import {
+  applyElementBatchUpdatesToSlide,
+  updateAnimationKeyframeValueInSlide,
+  type UpdateAnimationKeyframeValueCommand,
+} from "./utils/animationCommands";
 import type {
   PresentationAsset,
   PresentationProject,
@@ -1493,6 +1497,46 @@ function App() {
   }
 
   /**
+   * Update one Animation Schema V2 keyframe value.
+   *
+   * The animation command edits only animationScene. Continuous number input can
+   * join one history group, so typing several digits still creates one undo step.
+   */
+  function handleUpdateAnimationKeyframeValue(
+    command: UpdateAnimationKeyframeValueCommand,
+    options?: { recordHistory?: boolean },
+  ) {
+    commitProjectChange((currentProject) => {
+      let changed = false;
+
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        const nextSlide = updateAnimationKeyframeValueInSlide(slide, command);
+
+        if (nextSlide === slide) {
+          return slide;
+        }
+
+        changed = true;
+        return nextSlide;
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    }, options);
+  }
+
+  /**
    * Move one element or the whole current multi-selection.
    *
    * SlideCanvas reports the dragged element's next absolute position. App converts
@@ -2723,6 +2767,9 @@ function App() {
                   selectedElements={selectedElements}
                   targetElementIds={effectivePropertyTargetElementIds}
                   animationScene={activeSlide?.animationScene}
+                  onUpdateAnimationKeyframeValue={
+                    handleUpdateAnimationKeyframeValue
+                  }
                   onTargetElementIdsChange={
                     handlePropertyTargetElementIdsChange
                   }

@@ -5,6 +5,7 @@ import type {
   SlideElementAnimation,
 } from "../../types/presentation";
 import { AnimationTrackInspector } from "./AnimationTrackInspector";
+import type { UpdateAnimationKeyframeValueCommand } from "../../utils/animationCommands";
 
 type LayerAction =
   | "bring-forward"
@@ -31,6 +32,10 @@ type PropertyPanelProps = {
   selectedElements: SlideElement[];
   targetElementIds: string[];
   animationScene?: AnimationScene;
+  onUpdateAnimationKeyframeValue?: (
+    command: UpdateAnimationKeyframeValueCommand,
+    options?: PropertyUpdateOptions,
+  ) => void;
   onTargetElementIdsChange?: (elementIds: string[]) => void;
   onUpdateElements?: (
     batchUpdates: ElementBatchUpdate[],
@@ -105,6 +110,7 @@ export function PropertyPanel({
   selectedElements,
   targetElementIds,
   animationScene,
+  onUpdateAnimationKeyframeValue,
   onTargetElementIdsChange,
   onUpdateElements,
   onBeginPropertyChange,
@@ -549,6 +555,7 @@ export function PropertyPanel({
             <AnimationTab
               elements={targetElements}
               animationScene={animationScene}
+              onUpdateKeyframeValue={onUpdateAnimationKeyframeValue}
               sharedPreset={sharedAnimationPreset}
               sharedDuration={
                 typeof sharedAnimationDuration === "number"
@@ -794,6 +801,7 @@ function FontTab({
 function AnimationTab({
   elements,
   animationScene,
+  onUpdateKeyframeValue,
   sharedPreset,
   sharedDuration,
   sharedDelay,
@@ -805,6 +813,10 @@ function AnimationTab({
 }: {
   elements: SlideElement[];
   animationScene?: AnimationScene;
+  onUpdateKeyframeValue?: (
+    command: UpdateAnimationKeyframeValueCommand,
+    options?: PropertyUpdateOptions,
+  ) => void;
   sharedPreset?: string;
   sharedDuration?: number;
   sharedDelay?: number;
@@ -890,7 +902,13 @@ function AnimationTab({
         ) : null}
       </section>
 
-      <AnimationTrackInspector scene={animationScene} elements={elements} />
+      <AnimationTrackInspector
+        scene={animationScene}
+        elements={elements}
+        onUpdateKeyframeValue={onUpdateKeyframeValue}
+        onBeginChange={onBeginChange}
+        onFinishChange={onFinishChange}
+      />
     </div>
   );
 }

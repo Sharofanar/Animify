@@ -26,6 +26,25 @@ export type UpdateAnimationKeyframeValueCommand = {
   value: AnimationValue;
 };
 
+export type UpdateAnimationKeyframeOffsetCommand = {
+  clipId: string;
+  trackId: string;
+  keyframeId: string;
+
+  /**
+   * Normalized position inside the animation track, from 0 to 1.
+   */
+  offset: number;
+};
+
+/**
+ * Basic timeline editing keeps adjacent keyframes at least 0.1% apart.
+ *
+ * Advanced overlapping and instant-jump keyframes can be enabled later through
+ * a dedicated expert editing mode.
+ */
+const MINIMUM_KEYFRAME_OFFSET_GAP = 0.001;
+
 /**
  * Apply a batch of element updates to one slide.
  *
@@ -163,6 +182,140 @@ export function updateAnimationKeyframeValueInSlide(
        * Customized prevents future compatibility logic from treating this Clip
        * as an untouched copy of its source preset.
        */
+      customized: true,
+    },
+  };
+
+  return {
+    ...slide,
+    animationScene: {
+      ...scene,
+      revision: Math.max(1, scene.revision + 1),
+      clips: {
+        ...scene.clips,
+        [clip.id]: nextClip,
+      },
+    },
+  };
+}
+
+/**
+ * Update one Animation Schema V2 keyframe position.
+ *
+ * The editor displays the position as a percentage, while animationScene stores
+ * it as a normalized offset from 0 to 1. Keyframes are sorted after the update
+ * so the inspector and compiler always read them in timeline order.
+ */
+export function updateAnimationKeyframeOffsetInSlide(
+  slide: Slide,
+  command: UpdateAnimationKeyframeOffsetCommand,
+): Slide {
+  const scene = slide.animationScene;
+  const clip = scene?.clips[command.clipId];
+
+  if (
+    !scene ||
+    scene.schemaVersion !== 2 ||
+    !clip ||
+    !Number.isFinite(command.offset)
+  ) {
+    return slide;
+  }
+
+  const trackIndex = clip.tracks.findIndex(
+    (track) => track.id === command.trackId,
+  );
+
+  if (trackIndex < 0) {
+    return slide;
+  }
+
+  const track = clip.tracks[trackIndex];
+  const keyframeIndex = track.keyframes.findIndex(
+    (keyframe) => keyframe.id === command.keyframeId,
+  );
+
+  if (keyframeIndex < 0) {
+    return slide;
+  }
+
+  const oldKeyframe = track.keyframes[keyframeIndex];
+
+  /**
+   * Determine the current keyframe's neighbors in timeline order.
+   *
+   * Keyframe IDs remain stable even when the array is reordered, so the command
+   * can safely calculate limits from a sorted copy.
+   */
+  const sortedKeyframes = [...track.keyframes].sort(
+    (left, right) =>
+      left.offset - right.offset || left.id.localeCompare(right.id),
+  );
+
+  const sortedKeyframeIndex = sortedKeyframes.findIndex(
+    (keyframe) => keyframe.id === command.keyframeId,
+  );
+
+  if (sortedKeyframeIndex < 0) {
+    return slide;
+  }
+
+  const previousKeyframe = sortedKeyframes[sortedKeyframeIndex - 1];
+  const followingKeyframe = sortedKeyframes[sortedKeyframeIndex + 1];
+
+  let minimumOffset = previousKeyframe
+    ? Math.min(1, previousKeyframe.offset + MINIMUM_KEYFRAME_OFFSET_GAP)
+    : 0;
+
+  let maximumOffset = followingKeyframe
+    ? Math.max(0, followingKeyframe.offset - MINIMUM_KEYFRAME_OFFSET_GAP)
+    : 1;
+
+  /**
+   * Malformed legacy data may already contain keyframes that are too close.
+   * In that exceptional case, keep this keyframe fixed instead of allowing it to
+   * cross another keyframe.
+   */
+  if (minimumOffset > maximumOffset) {
+    minimumOffset = oldKeyframe.offset;
+    maximumOffset = oldKeyframe.offset;
+  }
+
+  const nextOffset = Math.min(
+    maximumOffset,
+    Math.max(minimumOffset, command.offset),
+  );
+
+  if (Object.is(oldKeyframe.offset, nextOffset)) {
+    return slide;
+  }
+
+  const nextKeyframes = track.keyframes
+    .map((keyframe) =>
+      keyframe.id === command.keyframeId
+        ? {
+            ...keyframe,
+            offset: nextOffset,
+          }
+        : keyframe,
+    )
+    .sort(
+      (left, right) =>
+        left.offset - right.offset,
+    );
+
+  const nextTracks = [...clip.tracks];
+
+  nextTracks[trackIndex] = {
+    ...track,
+    keyframes: nextKeyframes,
+  };
+
+  const nextClip: AnimationClip = {
+    ...clip,
+    tracks: nextTracks,
+    metadata: {
+      ...clip.metadata,
       customized: true,
     },
   };

@@ -7,7 +7,15 @@ import type {
   AnimationValue,
   SlideElement,
 } from "../../types/presentation";
-import type { UpdateAnimationKeyframeValueCommand } from "../../utils/animationCommands";
+import type {
+  UpdateAnimationKeyframeOffsetCommand,
+  UpdateAnimationKeyframeValueCommand,
+} from "../../utils/animationCommands";
+
+/**
+ * Keep the inspector's input limits consistent with the V2 command layer.
+ */
+const MINIMUM_KEYFRAME_OFFSET_GAP = 0.001;
 
 type InspectorUpdateOptions = {
   recordHistory?: boolean;
@@ -18,6 +26,10 @@ type AnimationTrackInspectorProps = {
   elements: SlideElement[];
   onUpdateKeyframeValue?: (
     command: UpdateAnimationKeyframeValueCommand,
+    options?: InspectorUpdateOptions,
+  ) => void;
+  onUpdateKeyframeOffset?: (
+    command: UpdateAnimationKeyframeOffsetCommand,
     options?: InspectorUpdateOptions,
   ) => void;
   onBeginChange?: () => void;
@@ -41,6 +53,7 @@ export function AnimationTrackInspector({
   scene,
   elements,
   onUpdateKeyframeValue,
+  onUpdateKeyframeOffset,
   onBeginChange,
   onFinishChange,
 }: AnimationTrackInspectorProps) {
@@ -62,12 +75,12 @@ export function AnimationTrackInspector({
         <div>
           <h3 className="text-sm font-black text-slate-800">V2 动画轨道</h3>
           <p className="mt-1 text-xs leading-5 text-slate-500">
-            当前先开放数值关键帧编辑，位置、增删和缓动将在后续阶段开放。
+            当前已开放关键帧数值和位置编辑，增删与缓动将在后续阶段开放。
           </p>
         </div>
 
         <span className="shrink-0 rounded-full bg-slate-200 px-2.5 py-1 text-[11px] font-black text-slate-500">
-          数值可编辑
+          数值/位置可编辑
         </span>
       </div>
 
@@ -79,6 +92,7 @@ export function AnimationTrackInspector({
               item={item}
               defaultOpen={index === 0}
               onUpdateKeyframeValue={onUpdateKeyframeValue}
+              onUpdateKeyframeOffset={onUpdateKeyframeOffset}
               onBeginChange={onBeginChange}
               onFinishChange={onFinishChange}
             />
@@ -102,6 +116,7 @@ function AnimationClipCard({
   item,
   defaultOpen,
   onUpdateKeyframeValue,
+  onUpdateKeyframeOffset,
   onBeginChange,
   onFinishChange,
 }: {
@@ -109,6 +124,10 @@ function AnimationClipCard({
   defaultOpen: boolean;
   onUpdateKeyframeValue?: (
     command: UpdateAnimationKeyframeValueCommand,
+    options?: InspectorUpdateOptions,
+  ) => void;
+  onUpdateKeyframeOffset?: (
+    command: UpdateAnimationKeyframeOffsetCommand,
     options?: InspectorUpdateOptions,
   ) => void;
   onBeginChange?: () => void;
@@ -174,6 +193,7 @@ function AnimationClipCard({
                   clipId={clip.id}
                   track={track}
                   onUpdateKeyframeValue={onUpdateKeyframeValue}
+                  onUpdateKeyframeOffset={onUpdateKeyframeOffset}
                   onBeginChange={onBeginChange}
                   onFinishChange={onFinishChange}
                 />
@@ -194,6 +214,7 @@ function AnimationTrackCard({
   clipId,
   track,
   onUpdateKeyframeValue,
+  onUpdateKeyframeOffset,
   onBeginChange,
   onFinishChange,
 }: {
@@ -201,6 +222,10 @@ function AnimationTrackCard({
   track: AnimationTrack;
   onUpdateKeyframeValue?: (
     command: UpdateAnimationKeyframeValueCommand,
+    options?: InspectorUpdateOptions,
+  ) => void;
+  onUpdateKeyframeOffset?: (
+    command: UpdateAnimationKeyframeOffsetCommand,
     options?: InspectorUpdateOptions,
   ) => void;
   onBeginChange?: () => void;
@@ -241,11 +266,21 @@ function AnimationTrackCard({
         {sortedKeyframes.map((keyframe) => (
           <div
             key={keyframe.id}
-            className="grid grid-cols-[54px_minmax(0,1fr)] gap-2 rounded-lg bg-white px-2.5 py-2 text-[11px]"
+            className="grid grid-cols-[78px_minmax(0,1fr)] gap-2 rounded-lg bg-white px-2.5 py-2 text-[11px]"
           >
-            <span className="font-black text-violet-600">
-              {formatOffset(keyframe.offset)}
-            </span>
+            <KeyframeOffsetInput
+              value={keyframe.offset}
+              offsetBounds={getKeyframeOffsetBounds(
+                sortedKeyframes,
+                keyframe.id,
+              )}
+              clipId={clipId}
+              trackId={track.id}
+              keyframeId={keyframe.id}
+              onUpdateKeyframeOffset={onUpdateKeyframeOffset}
+              onBeginChange={onBeginChange}
+              onFinishChange={onFinishChange}
+            />
 
             <span className="min-w-0">
               {typeof keyframe.value === "number" ? (
@@ -273,6 +308,130 @@ function AnimationTrackCard({
         ))}
       </div>
     </section>
+  );
+}
+
+/**
+ * Edit one keyframe's normalized timeline offset as a percentage.
+ *
+ * animationScene stores 0 to 1, while the user-facing input displays 0% to
+ * 100%. The temporary draft may be empty; leaving an empty or invalid field
+ * restores the latest stored percentage without creating a project change.
+ */
+function KeyframeOffsetInput({
+  value,
+  offsetBounds,
+  clipId,
+  trackId,
+  keyframeId,
+  onUpdateKeyframeOffset,
+  onBeginChange,
+  onFinishChange,
+}: {
+  value: number;
+  offsetBounds: {
+    minimumOffset: number;
+    maximumOffset: number;
+  };
+  clipId: string;
+  trackId: string;
+  keyframeId: string;
+  onUpdateKeyframeOffset?: (
+    command: UpdateAnimationKeyframeOffsetCommand,
+    options?: InspectorUpdateOptions,
+  ) => void;
+  onBeginChange?: () => void;
+  onFinishChange?: () => void;
+}) {
+  const storedPercentage = Number((value * 100).toFixed(4));
+
+  const minimumPercentage = Number(
+    (offsetBounds.minimumOffset * 100).toFixed(4),
+  );
+
+  const maximumPercentage = Number(
+    (offsetBounds.maximumOffset * 100).toFixed(4),
+  );
+
+  const [draftValue, setDraftValue] = useState(String(storedPercentage));
+  const [isEditing, setIsEditing] = useState(false);
+
+  const displayedValue = isEditing ? draftValue : String(storedPercentage);
+
+  function commitDraftValue() {
+    const trimmedValue = draftValue.trim();
+
+    if (trimmedValue === "") {
+      setDraftValue(String(storedPercentage));
+      return;
+    }
+
+    const parsedValue = Number(trimmedValue);
+
+    if (!Number.isFinite(parsedValue)) {
+      setDraftValue(String(storedPercentage));
+      return;
+    }
+
+    const clampedPercentage = Math.min(
+      maximumPercentage,
+      Math.max(minimumPercentage, parsedValue),
+    );
+
+    const normalizedOffset = Number((clampedPercentage / 100).toFixed(6));
+
+    setDraftValue(String(Number(clampedPercentage.toFixed(4))));
+
+    if (Object.is(normalizedOffset, value)) {
+      return;
+    }
+
+    onUpdateKeyframeOffset?.(
+      {
+        clipId,
+        trackId,
+        keyframeId,
+        offset: normalizedOffset,
+      },
+      {
+        recordHistory: false,
+      },
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1">
+      <input
+        type="number"
+        aria-label="关键帧位置百分比"
+        title={`当前允许范围：${minimumPercentage}% ～ ${maximumPercentage}%`}
+        className="min-w-0 flex-1 rounded-lg bg-violet-50 px-2 py-1 font-black text-violet-600 outline-none ring-1 ring-transparent transition focus:bg-white focus:ring-violet-300"
+        value={displayedValue}
+        min={minimumPercentage}
+        max={maximumPercentage}
+        step={0.1}
+        onFocus={() => {
+          setDraftValue(String(storedPercentage));
+          setIsEditing(true);
+          onBeginChange?.();
+        }}
+        onChange={(event) => {
+          setDraftValue(event.target.value);
+        }}
+        onBlur={() => {
+          commitDraftValue();
+          setIsEditing(false);
+          onFinishChange?.();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.currentTarget.blur();
+          }
+        }}
+      />
+
+      <span className="shrink-0 text-[10px] font-black text-violet-500">%</span>
+    </div>
   );
 }
 
@@ -412,6 +571,65 @@ function NumericKeyframeInput({
       </span>
     </div>
   );
+}
+
+/**
+ * Calculate the editable range for one keyframe in basic timeline mode.
+ *
+ * Neighboring keyframes cannot be crossed and retain a 0.1% separation.
+ */
+function getKeyframeOffsetBounds(
+  keyframes: AnimationTrack["keyframes"],
+  keyframeId: string,
+) {
+  const sortedKeyframes = [...keyframes].sort(
+    (left, right) =>
+      left.offset - right.offset ||
+      left.id.localeCompare(right.id),
+  );
+
+  const keyframeIndex = sortedKeyframes.findIndex(
+    (keyframe) => keyframe.id === keyframeId,
+  );
+
+  if (keyframeIndex < 0) {
+    return {
+      minimumOffset: 0,
+      maximumOffset: 1,
+    };
+  }
+
+  const currentKeyframe = sortedKeyframes[keyframeIndex];
+  const previousKeyframe = sortedKeyframes[keyframeIndex - 1];
+  const followingKeyframe = sortedKeyframes[keyframeIndex + 1];
+
+  const minimumOffset = previousKeyframe
+    ? Math.min(
+        1,
+        previousKeyframe.offset +
+          MINIMUM_KEYFRAME_OFFSET_GAP,
+      )
+    : 0;
+
+  const maximumOffset = followingKeyframe
+    ? Math.max(
+        0,
+        followingKeyframe.offset -
+          MINIMUM_KEYFRAME_OFFSET_GAP,
+      )
+    : 1;
+
+  if (minimumOffset > maximumOffset) {
+    return {
+      minimumOffset: currentKeyframe.offset,
+      maximumOffset: currentKeyframe.offset,
+    };
+  }
+
+  return {
+    minimumOffset,
+    maximumOffset,
+  };
 }
 
 function KeyframePositionBar({

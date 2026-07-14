@@ -25,7 +25,9 @@ import {
 } from "./utils/animationSchema";
 import {
   applyElementBatchUpdatesToSlide,
+  updateAnimationKeyframeOffsetInSlide,
   updateAnimationKeyframeValueInSlide,
+  type UpdateAnimationKeyframeOffsetCommand,
   type UpdateAnimationKeyframeValueCommand,
 } from "./utils/animationCommands";
 import type {
@@ -1537,6 +1539,46 @@ function App() {
   }
 
   /**
+   * Update one Animation Schema V2 keyframe timeline position.
+   *
+   * Offset input uses the same history grouping as keyframe value input, so one
+   * focus-to-blur editing session creates only one undo step.
+   */
+  function handleUpdateAnimationKeyframeOffset(
+    command: UpdateAnimationKeyframeOffsetCommand,
+    options?: { recordHistory?: boolean },
+  ) {
+    commitProjectChange((currentProject) => {
+      let changed = false;
+
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        const nextSlide = updateAnimationKeyframeOffsetInSlide(slide, command);
+
+        if (nextSlide === slide) {
+          return slide;
+        }
+
+        changed = true;
+        return nextSlide;
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    }, options);
+  }
+
+  /**
    * Move one element or the whole current multi-selection.
    *
    * SlideCanvas reports the dragged element's next absolute position. App converts
@@ -2769,6 +2811,9 @@ function App() {
                   animationScene={activeSlide?.animationScene}
                   onUpdateAnimationKeyframeValue={
                     handleUpdateAnimationKeyframeValue
+                  }
+                  onUpdateAnimationKeyframeOffset={
+                    handleUpdateAnimationKeyframeOffset
                   }
                   onTargetElementIdsChange={
                     handlePropertyTargetElementIdsChange

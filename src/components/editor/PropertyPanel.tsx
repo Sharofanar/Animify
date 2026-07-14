@@ -5,7 +5,10 @@ import type {
   SlideElementAnimation,
 } from "../../types/presentation";
 import { AnimationTrackInspector } from "./AnimationTrackInspector";
-import type { UpdateAnimationKeyframeValueCommand } from "../../utils/animationCommands";
+import type {
+  UpdateAnimationKeyframeOffsetCommand,
+  UpdateAnimationKeyframeValueCommand,
+} from "../../utils/animationCommands";
 
 type LayerAction =
   | "bring-forward"
@@ -34,6 +37,10 @@ type PropertyPanelProps = {
   animationScene?: AnimationScene;
   onUpdateAnimationKeyframeValue?: (
     command: UpdateAnimationKeyframeValueCommand,
+    options?: PropertyUpdateOptions,
+  ) => void;
+  onUpdateAnimationKeyframeOffset?: (
+    command: UpdateAnimationKeyframeOffsetCommand,
     options?: PropertyUpdateOptions,
   ) => void;
   onTargetElementIdsChange?: (elementIds: string[]) => void;
@@ -111,6 +118,7 @@ export function PropertyPanel({
   targetElementIds,
   animationScene,
   onUpdateAnimationKeyframeValue,
+  onUpdateAnimationKeyframeOffset,
   onTargetElementIdsChange,
   onUpdateElements,
   onBeginPropertyChange,
@@ -556,6 +564,7 @@ export function PropertyPanel({
               elements={targetElements}
               animationScene={animationScene}
               onUpdateKeyframeValue={onUpdateAnimationKeyframeValue}
+              onUpdateKeyframeOffset={onUpdateAnimationKeyframeOffset}
               sharedPreset={sharedAnimationPreset}
               sharedDuration={
                 typeof sharedAnimationDuration === "number"
@@ -802,6 +811,7 @@ function AnimationTab({
   elements,
   animationScene,
   onUpdateKeyframeValue,
+  onUpdateKeyframeOffset,
   sharedPreset,
   sharedDuration,
   sharedDelay,
@@ -815,6 +825,10 @@ function AnimationTab({
   animationScene?: AnimationScene;
   onUpdateKeyframeValue?: (
     command: UpdateAnimationKeyframeValueCommand,
+    options?: PropertyUpdateOptions,
+  ) => void;
+  onUpdateKeyframeOffset?: (
+    command: UpdateAnimationKeyframeOffsetCommand,
     options?: PropertyUpdateOptions,
   ) => void;
   sharedPreset?: string;
@@ -906,6 +920,7 @@ function AnimationTab({
         scene={animationScene}
         elements={elements}
         onUpdateKeyframeValue={onUpdateKeyframeValue}
+        onUpdateKeyframeOffset={onUpdateKeyframeOffset}
         onBeginChange={onBeginChange}
         onFinishChange={onFinishChange}
       />

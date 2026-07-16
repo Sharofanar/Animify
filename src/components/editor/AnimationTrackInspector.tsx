@@ -11,6 +11,7 @@ import type {
   AddAnimationKeyframeCommand,
   DeleteAnimationKeyframeCommand,
   UpdateAnimationClipTimingCommand,
+  UpdateAnimationKeyframeEasingCommand,
   UpdateAnimationKeyframeOffsetCommand,
   UpdateAnimationKeyframeValueCommand,
 } from "../../utils/animationCommands";
@@ -19,6 +20,37 @@ import type {
  * Keep the inspector's input limits consistent with the V2 command layer.
  */
 const MINIMUM_KEYFRAME_OFFSET_GAP = 0.001;
+
+const CSS_EASING_OPTIONS = [
+  {
+    value: "linear",
+    label: "线性",
+  },
+  {
+    value: "ease",
+    label: "Ease",
+  },
+  {
+    value: "ease-in",
+    label: "缓入",
+  },
+  {
+    value: "ease-out",
+    label: "缓出",
+  },
+  {
+    value: "ease-in-out",
+    label: "缓入缓出",
+  },
+] as const;
+
+type CssEasingValue = (typeof CSS_EASING_OPTIONS)[number]["value"];
+
+type EasingEditorSelection =
+  | CssEasingValue
+  | "cubic-bezier"
+  | "steps"
+  | "unsupported";
 
 type InspectorUpdateOptions = {
   recordHistory?: boolean;
@@ -33,6 +65,10 @@ type AnimationTrackInspectorProps = {
   ) => void;
   onUpdateKeyframeValue?: (
     command: UpdateAnimationKeyframeValueCommand,
+    options?: InspectorUpdateOptions,
+  ) => void;
+  onUpdateKeyframeEasing?: (
+    command: UpdateAnimationKeyframeEasingCommand,
     options?: InspectorUpdateOptions,
   ) => void;
   onUpdateKeyframeOffset?: (
@@ -63,6 +99,7 @@ export function AnimationTrackInspector({
   elements,
   onUpdateClipTiming,
   onUpdateKeyframeValue,
+  onUpdateKeyframeEasing,
   onUpdateKeyframeOffset,
   onAddKeyframe,
   onDeleteKeyframe,
@@ -87,12 +124,12 @@ export function AnimationTrackInspector({
         <div>
           <h3 className="text-sm font-black text-slate-800">V2 动画轨道</h3>
           <p className="mt-1 text-xs leading-5 text-slate-500">
-            当前已开放 Clip 播放参数，以及关键帧数值、位置和增删。
+            当前已开放 Clip 播放参数，以及关键帧数值、位置、增删和区间缓动。
           </p>
         </div>
 
         <span className="shrink-0 rounded-full bg-slate-200 px-2.5 py-1 text-[11px] font-black text-slate-500">
-          关键帧可编辑
+          缓动可编辑
         </span>
       </div>
 
@@ -105,6 +142,7 @@ export function AnimationTrackInspector({
               defaultOpen={index === 0}
               onUpdateClipTiming={onUpdateClipTiming}
               onUpdateKeyframeValue={onUpdateKeyframeValue}
+              onUpdateKeyframeEasing={onUpdateKeyframeEasing}
               onUpdateKeyframeOffset={onUpdateKeyframeOffset}
               onAddKeyframe={onAddKeyframe}
               onDeleteKeyframe={onDeleteKeyframe}
@@ -132,6 +170,7 @@ function AnimationClipCard({
   defaultOpen,
   onUpdateClipTiming,
   onUpdateKeyframeValue,
+  onUpdateKeyframeEasing,
   onUpdateKeyframeOffset,
   onAddKeyframe,
   onDeleteKeyframe,
@@ -146,6 +185,10 @@ function AnimationClipCard({
   ) => void;
   onUpdateKeyframeValue?: (
     command: UpdateAnimationKeyframeValueCommand,
+    options?: InspectorUpdateOptions,
+  ) => void;
+  onUpdateKeyframeEasing?: (
+    command: UpdateAnimationKeyframeEasingCommand,
     options?: InspectorUpdateOptions,
   ) => void;
   onUpdateKeyframeOffset?: (
@@ -355,6 +398,7 @@ function AnimationClipCard({
                   clipId={clip.id}
                   track={track}
                   onUpdateKeyframeValue={onUpdateKeyframeValue}
+                  onUpdateKeyframeEasing={onUpdateKeyframeEasing}
                   onUpdateKeyframeOffset={onUpdateKeyframeOffset}
                   onAddKeyframe={onAddKeyframe}
                   onDeleteKeyframe={onDeleteKeyframe}
@@ -496,6 +540,7 @@ function AnimationTrackCard({
   clipId,
   track,
   onUpdateKeyframeValue,
+  onUpdateKeyframeEasing,
   onUpdateKeyframeOffset,
   onAddKeyframe,
   onDeleteKeyframe,
@@ -506,6 +551,10 @@ function AnimationTrackCard({
   track: AnimationTrack;
   onUpdateKeyframeValue?: (
     command: UpdateAnimationKeyframeValueCommand,
+    options?: InspectorUpdateOptions,
+  ) => void;
+  onUpdateKeyframeEasing?: (
+    command: UpdateAnimationKeyframeEasingCommand,
     options?: InspectorUpdateOptions,
   ) => void;
   onUpdateKeyframeOffset?: (
@@ -580,76 +629,515 @@ function AnimationTrackCard({
       <KeyframePositionBar keyframes={sortedKeyframes} />
 
       <div className="mt-3 space-y-2">
-        {sortedKeyframes.map((keyframe) => (
-          <div
-            key={keyframe.id}
-            className="grid grid-cols-[78px_minmax(0,1fr)] gap-2 rounded-lg bg-white px-2.5 py-2 text-[11px]"
-          >
-            <KeyframeOffsetInput
-              value={keyframe.offset}
-              offsetBounds={getKeyframeOffsetBounds(
-                sortedKeyframes,
-                keyframe.id,
-              )}
-              clipId={clipId}
-              trackId={track.id}
-              keyframeId={keyframe.id}
-              onUpdateKeyframeOffset={onUpdateKeyframeOffset}
-              onBeginChange={onBeginChange}
-              onFinishChange={onFinishChange}
-            />
+        {sortedKeyframes.map((keyframe, keyframeIndex) => {
+          const followingKeyframe = sortedKeyframes[keyframeIndex + 1];
 
-            <div className="min-w-0">
-              <div className="flex items-start gap-2">
-                <div className="min-w-0 flex-1">
-                  {typeof keyframe.value === "number" ? (
-                    <NumericKeyframeInput
-                      value={keyframe.value}
-                      property={track.property}
-                      clipId={clipId}
-                      trackId={track.id}
-                      keyframeId={keyframe.id}
-                      onUpdateKeyframeValue={onUpdateKeyframeValue}
-                      onBeginChange={onBeginChange}
-                      onFinishChange={onFinishChange}
-                    />
-                  ) : (
-                    <span className="block truncate font-bold text-slate-700">
-                      {formatAnimationValue(keyframe.value, track.property)}
-                    </span>
-                  )}
+          return (
+            <div
+              key={keyframe.id}
+              className="grid grid-cols-[78px_minmax(0,1fr)] gap-2 rounded-lg bg-white px-2.5 py-2 text-[11px]"
+            >
+              <KeyframeOffsetInput
+                value={keyframe.offset}
+                offsetBounds={getKeyframeOffsetBounds(
+                  sortedKeyframes,
+                  keyframe.id,
+                )}
+                clipId={clipId}
+                trackId={track.id}
+                keyframeId={keyframe.id}
+                onUpdateKeyframeOffset={onUpdateKeyframeOffset}
+                onBeginChange={onBeginChange}
+                onFinishChange={onFinishChange}
+              />
+
+              <div className="min-w-0">
+                <div className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    {typeof keyframe.value === "number" ? (
+                      <NumericKeyframeInput
+                        value={keyframe.value}
+                        property={track.property}
+                        clipId={clipId}
+                        trackId={track.id}
+                        keyframeId={keyframe.id}
+                        onUpdateKeyframeValue={onUpdateKeyframeValue}
+                        onBeginChange={onBeginChange}
+                        onFinishChange={onFinishChange}
+                      />
+                    ) : (
+                      <span className="block truncate font-bold text-slate-700">
+                        {formatAnimationValue(keyframe.value, track.property)}
+                      </span>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-lg bg-rose-50 px-2 py-1 text-[10px] font-black text-rose-500 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300"
+                    disabled={!onDeleteKeyframe || !canDeleteKeyframe}
+                    title={
+                      canDeleteKeyframe
+                        ? "删除此关键帧"
+                        : "每条轨道至少保留两个关键帧"
+                    }
+                    aria-label={`删除 ${formatOffset(keyframe.offset)} 关键帧`}
+                    onClick={() =>
+                      onDeleteKeyframe?.({
+                        clipId,
+                        trackId: track.id,
+                        keyframeId: keyframe.id,
+                      })
+                    }
+                  >
+                    删除
+                  </button>
                 </div>
 
-                <button
-                  type="button"
-                  className="shrink-0 rounded-lg bg-rose-50 px-2 py-1 text-[10px] font-black text-rose-500 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300"
-                  disabled={!onDeleteKeyframe || !canDeleteKeyframe}
-                  title={
-                    canDeleteKeyframe
-                      ? "删除此关键帧"
-                      : "每条轨道至少保留两个关键帧"
-                  }
-                  aria-label={`删除 ${formatOffset(keyframe.offset)} 关键帧`}
-                  onClick={() =>
-                    onDeleteKeyframe?.({
-                      clipId,
-                      trackId: track.id,
-                      keyframeId: keyframe.id,
-                    })
-                  }
-                >
-                  删除
-                </button>
+                {followingKeyframe ? (
+                  <KeyframeEasingEditor
+                    easing={keyframe.easing}
+                    nextOffset={followingKeyframe.offset}
+                    clipId={clipId}
+                    trackId={track.id}
+                    keyframeId={keyframe.id}
+                    onUpdateKeyframeEasing={onUpdateKeyframeEasing}
+                    onBeginChange={onBeginChange}
+                    onFinishChange={onFinishChange}
+                  />
+                ) : (
+                  <span className="mt-2 block rounded-lg bg-slate-50 px-2 py-1.5 text-[10px] text-slate-400">
+                    末尾关键帧没有后续区间，不设置缓动。
+                  </span>
+                )}
               </div>
-
-              <span className="mt-1 block truncate text-[10px] text-slate-400">
-                {keyframe.hold ? "保持关键帧" : formatEasing(keyframe.easing)}
-              </span>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </section>
+  );
+}
+
+/**
+ * Edit easing for the segment beginning at one keyframe.
+ */
+function KeyframeEasingEditor({
+  easing,
+  nextOffset,
+  clipId,
+  trackId,
+  keyframeId,
+  onUpdateKeyframeEasing,
+  onBeginChange,
+  onFinishChange,
+}: {
+  easing?: AnimationEasing;
+  nextOffset: number;
+  clipId: string;
+  trackId: string;
+  keyframeId: string;
+  onUpdateKeyframeEasing?: (
+    command: UpdateAnimationKeyframeEasingCommand,
+    options?: InspectorUpdateOptions,
+  ) => void;
+  onBeginChange?: () => void;
+  onFinishChange?: () => void;
+}) {
+  const selection =
+    getEasingEditorSelection(easing);
+
+  const cubicBezier =
+    easing?.type === "cubic-bezier"
+      ? easing
+      : {
+          type: "cubic-bezier" as const,
+          x1: 0.25,
+          y1: 0.1,
+          x2: 0.25,
+          y2: 1,
+        };
+
+  const steps =
+    easing?.type === "steps"
+      ? easing
+      : {
+          type: "steps" as const,
+          count: 4,
+          position: "end" as const,
+        };
+
+  function commitEasing(
+    nextEasing: AnimationEasing,
+    options?: InspectorUpdateOptions,
+  ) {
+    onUpdateKeyframeEasing?.(
+      {
+        clipId,
+        trackId,
+        keyframeId,
+        easing: nextEasing,
+      },
+      options,
+    );
+  }
+
+  return (
+    <section className="mt-2 rounded-lg border border-violet-100 bg-violet-50/50 p-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] font-black text-violet-600">
+          缓动至{" "}
+          {formatOffset(nextOffset)}
+        </span>
+
+        <span className="text-[9px] text-violet-400">
+          同时间点轨道同步
+        </span>
+      </div>
+
+      <select
+        className="mt-2 w-full rounded-lg bg-white px-2 py-1.5 text-[11px] font-bold text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-violet-300 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-300"
+        value={selection}
+        disabled={!onUpdateKeyframeEasing}
+        onChange={(event) => {
+          const nextSelection =
+            event.target
+              .value as EasingEditorSelection;
+
+          if (
+            nextSelection ===
+            "unsupported"
+          ) {
+            return;
+          }
+
+          commitEasing(
+            createEasingFromSelection(
+              nextSelection,
+              easing,
+            ),
+          );
+        }}
+      >
+        {selection === "unsupported" ? (
+          <option
+            value="unsupported"
+            disabled
+          >
+            {formatEasing(easing)}
+          </option>
+        ) : null}
+
+        {CSS_EASING_OPTIONS.map(
+          (option) => (
+            <option
+              key={option.value}
+              value={option.value}
+            >
+              {option.label}
+            </option>
+          ),
+        )}
+
+        <option value="cubic-bezier">
+          自定义贝塞尔
+        </option>
+
+        <option value="steps">
+          阶梯缓动
+        </option>
+      </select>
+
+      {selection === "cubic-bezier" ? (
+        <div className="mt-2 grid grid-cols-4 gap-1.5">
+          <EasingNumberInput
+            label="X1"
+            value={cubicBezier.x1}
+            min={0}
+            max={1}
+            step={0.01}
+            disabled={
+              !onUpdateKeyframeEasing
+            }
+            onBeginChange={
+              onBeginChange
+            }
+            onFinishChange={
+              onFinishChange
+            }
+            onCommit={(x1) =>
+              commitEasing(
+                {
+                  ...cubicBezier,
+                  x1,
+                },
+                {
+                  recordHistory: false,
+                },
+              )
+            }
+          />
+
+          <EasingNumberInput
+            label="Y1"
+            value={cubicBezier.y1}
+            min={-4}
+            max={4}
+            step={0.01}
+            disabled={
+              !onUpdateKeyframeEasing
+            }
+            onBeginChange={
+              onBeginChange
+            }
+            onFinishChange={
+              onFinishChange
+            }
+            onCommit={(y1) =>
+              commitEasing(
+                {
+                  ...cubicBezier,
+                  y1,
+                },
+                {
+                  recordHistory: false,
+                },
+              )
+            }
+          />
+
+          <EasingNumberInput
+            label="X2"
+            value={cubicBezier.x2}
+            min={0}
+            max={1}
+            step={0.01}
+            disabled={
+              !onUpdateKeyframeEasing
+            }
+            onBeginChange={
+              onBeginChange
+            }
+            onFinishChange={
+              onFinishChange
+            }
+            onCommit={(x2) =>
+              commitEasing(
+                {
+                  ...cubicBezier,
+                  x2,
+                },
+                {
+                  recordHistory: false,
+                },
+              )
+            }
+          />
+
+          <EasingNumberInput
+            label="Y2"
+            value={cubicBezier.y2}
+            min={-4}
+            max={4}
+            step={0.01}
+            disabled={
+              !onUpdateKeyframeEasing
+            }
+            onBeginChange={
+              onBeginChange
+            }
+            onFinishChange={
+              onFinishChange
+            }
+            onCommit={(y2) =>
+              commitEasing(
+                {
+                  ...cubicBezier,
+                  y2,
+                },
+                {
+                  recordHistory: false,
+                },
+              )
+            }
+          />
+        </div>
+      ) : null}
+
+      {selection === "steps" ? (
+        <div className="mt-2 grid grid-cols-2 gap-2">
+          <EasingNumberInput
+            label="阶梯数量"
+            value={steps.count}
+            min={1}
+            max={100}
+            step={1}
+            disabled={
+              !onUpdateKeyframeEasing
+            }
+            onBeginChange={
+              onBeginChange
+            }
+            onFinishChange={
+              onFinishChange
+            }
+            onCommit={(count) =>
+              commitEasing(
+                {
+                  ...steps,
+                  count: Math.round(count),
+                },
+                {
+                  recordHistory: false,
+                },
+              )
+            }
+          />
+
+          <label className="block">
+            <span className="mb-1 block text-[9px] font-bold text-slate-400">
+              跳变位置
+            </span>
+
+            <select
+              className="w-full rounded-lg bg-white px-2 py-1.5 text-[11px] font-bold text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-violet-300 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-300"
+              value={steps.position}
+              disabled={
+                !onUpdateKeyframeEasing
+              }
+              onChange={(event) =>
+                commitEasing({
+                  ...steps,
+                  position:
+                    event.target
+                      .value as
+                      | "start"
+                      | "end",
+                })
+              }
+            >
+              <option value="end">
+                区间末尾
+              </option>
+              <option value="start">
+                区间开头
+              </option>
+            </select>
+          </label>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/**
+ * Numeric input used by cubic-bezier and steps easing parameters.
+ *
+ * The value can be cleared while editing. Empty or invalid content restores the
+ * stored project value when focus leaves the field.
+ */
+function EasingNumberInput({
+  label,
+  value,
+  min,
+  max,
+  step,
+  disabled,
+  onCommit,
+  onBeginChange,
+  onFinishChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  disabled: boolean;
+  onCommit: (value: number) => void;
+  onBeginChange?: () => void;
+  onFinishChange?: () => void;
+}) {
+  const [draftValue, setDraftValue] =
+    useState(String(value));
+
+  const [isEditing, setIsEditing] =
+    useState(false);
+
+  const displayedValue = isEditing
+    ? draftValue
+    : String(value);
+
+  function commitDraftValue() {
+    const trimmedValue =
+      draftValue.trim();
+
+    if (trimmedValue === "") {
+      setDraftValue(String(value));
+      return;
+    }
+
+    const parsedValue =
+      Number(trimmedValue);
+
+    if (!Number.isFinite(parsedValue)) {
+      setDraftValue(String(value));
+      return;
+    }
+
+    const clampedValue = Math.min(
+      max,
+      Math.max(min, parsedValue),
+    );
+
+    setDraftValue(
+      String(clampedValue),
+    );
+
+    if (
+      Object.is(clampedValue, value)
+    ) {
+      return;
+    }
+
+    onCommit(clampedValue);
+  }
+
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[9px] font-bold text-slate-400">
+        {label}
+      </span>
+
+      <input
+        type="number"
+        className="w-full rounded-lg bg-white px-2 py-1.5 text-[11px] font-black text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-violet-300 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-300"
+        value={displayedValue}
+        min={min}
+        max={max}
+        step={step}
+        disabled={disabled}
+        onFocus={() => {
+          setDraftValue(String(value));
+          setIsEditing(true);
+          onBeginChange?.();
+        }}
+        onChange={(event) =>
+          setDraftValue(
+            event.target.value,
+          )
+        }
+        onBlur={() => {
+          commitDraftValue();
+          setIsEditing(false);
+          onFinishChange?.();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.currentTarget.blur();
+          }
+        }}
+      />
+    </label>
   );
 }
 
@@ -1193,6 +1681,60 @@ function getPropertyUnit(property: AnimationTrack["property"]) {
   }
 
   return "";
+}
+
+function getEasingEditorSelection(
+  easing?: AnimationEasing,
+): EasingEditorSelection {
+  if (!easing) {
+    return "linear";
+  }
+
+  if (easing.type === "css") {
+    const supported = CSS_EASING_OPTIONS.some(
+      (option) => option.value === easing.value,
+    );
+
+    return supported ? (easing.value as CssEasingValue) : "unsupported";
+  }
+
+  if (easing.type === "cubic-bezier" || easing.type === "steps") {
+    return easing.type;
+  }
+
+  return "unsupported";
+}
+
+function createEasingFromSelection(
+  selection: Exclude<EasingEditorSelection, "unsupported">,
+  currentEasing?: AnimationEasing,
+): AnimationEasing {
+  if (selection === "cubic-bezier") {
+    return currentEasing?.type === "cubic-bezier"
+      ? currentEasing
+      : {
+          type: "cubic-bezier",
+          x1: 0.25,
+          y1: 0.1,
+          x2: 0.25,
+          y2: 1,
+        };
+  }
+
+  if (selection === "steps") {
+    return currentEasing?.type === "steps"
+      ? currentEasing
+      : {
+          type: "steps",
+          count: 4,
+          position: "end",
+        };
+  }
+
+  return {
+    type: "css",
+    value: selection,
+  };
 }
 
 function formatEasing(easing?: AnimationEasing) {

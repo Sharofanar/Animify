@@ -29,11 +29,13 @@ import {
   applyElementBatchUpdatesToSlide,
   deleteAnimationKeyframeFromSlide,
   updateAnimationClipTimingInSlide,
+  updateAnimationKeyframeEasingInSlide,
   updateAnimationKeyframeOffsetInSlide,
   updateAnimationKeyframeValueInSlide,
   type AddAnimationKeyframeCommand,
   type DeleteAnimationKeyframeCommand,
   type UpdateAnimationClipTimingCommand,
+  type UpdateAnimationKeyframeEasingCommand,
   type UpdateAnimationKeyframeOffsetCommand,
   type UpdateAnimationKeyframeValueCommand,
 } from "./utils/animationCommands";
@@ -1593,6 +1595,46 @@ function App() {
   }
 
   /**
+   * Update easing for the animation segment beginning at one V2 keyframe.
+   *
+   * Select changes are discrete history entries. Custom numeric parameters use
+   * the existing focus-to-blur history group.
+   */
+  function handleUpdateAnimationKeyframeEasing(
+    command: UpdateAnimationKeyframeEasingCommand,
+    options?: { recordHistory?: boolean },
+  ) {
+    commitProjectChange((currentProject) => {
+      let changed = false;
+
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        const nextSlide = updateAnimationKeyframeEasingInSlide(slide, command);
+
+        if (nextSlide === slide) {
+          return slide;
+        }
+
+        changed = true;
+        return nextSlide;
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    }, options);
+  }
+
+  /**
    * Update one V2 Clip's timing and playback parameters.
    *
    * Number fields use the existing focus-to-blur history group, while select
@@ -2978,6 +3020,7 @@ function App() {
         onReplayAnimation={() => setAnimationPreviewKey((key) => key + 1)}
         onUpdateClipTiming={handleUpdateAnimationClipTiming}
         onUpdateKeyframeValue={handleUpdateAnimationKeyframeValue}
+        onUpdateKeyframeEasing={handleUpdateAnimationKeyframeEasing}
         onUpdateKeyframeOffset={handleUpdateAnimationKeyframeOffset}
         onAddKeyframe={handleAddAnimationKeyframe}
         onDeleteKeyframe={handleDeleteAnimationKeyframe}

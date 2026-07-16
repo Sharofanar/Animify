@@ -1,5 +1,6 @@
 import type {
   AnimationClip,
+  AnimationEasing,
   AnimationKeyframe,
   AnimationScene,
   AnimationValue,
@@ -38,6 +39,19 @@ export type UpdateAnimationKeyframeOffsetCommand = {
   offset: number;
 };
 
+export type UpdateAnimationKeyframeEasingCommand = {
+  clipId: string;
+  trackId: string;
+  keyframeId: string;
+
+  /**
+   * Easing controls the segment beginning at the selected keyframe.
+   *
+   * Undefined represents the compiler's default linear interpolation.
+   */
+  easing?: AnimationEasing;
+};
+
 export type AddAnimationKeyframeCommand = {
   clipId: string;
   trackId: string;
@@ -67,6 +81,12 @@ export type UpdateAnimationClipTimingCommand = {
  * a dedicated expert editing mode.
  */
 const MINIMUM_KEYFRAME_OFFSET_GAP = 0.001;
+
+/**
+ * Keyframes created through percentage inputs may contain tiny floating-point
+ * differences. Treat practically identical offsets as the same Clip segment.
+ */
+const EASING_OFFSET_MATCH_TOLERANCE = 0.000001;
 
 /**
  * Apply a batch of element updates to one slide.
@@ -354,6 +374,154 @@ export function updateAnimationKeyframeOffsetInSlide(
 }
 
 /**
+ * Update the easing for one V2 animation segment.
+ *
+ * Compiler V1 merges separate property tracks into one browser animation.
+ * Therefore, keyframes beginning at the same Clip offset share one easing.
+ * This keeps opacity, transform, canvas preview, presentation, and HTML export
+ * behavior consistent until independent per-track playback is introduced.
+ */
+export function updateAnimationKeyframeEasingInSlide(
+  slide: Slide,
+  command: UpdateAnimationKeyframeEasingCommand,
+): Slide {
+  const scene = slide.animationScene;
+  const clip = scene?.clips[command.clipId];
+
+  if (!scene || scene.schemaVersion !== 2 || !clip) {
+    return slide;
+  }
+
+  const targetTrack = clip.tracks.find(
+    (track) => track.id === command.trackId,
+  );
+
+  if (!targetTrack) {
+    return slide;
+  }
+
+  const sortedTargetKeyframes = [
+    ...targetTrack.keyframes,
+  ].sort(
+    (left, right) =>
+      left.offset - right.offset ||
+      left.id.localeCompare(right.id),
+  );
+
+  const targetKeyframeIndex =
+    sortedTargetKeyframes.findIndex(
+      (keyframe) =>
+        keyframe.id === command.keyframeId,
+    );
+
+  /**
+   * The final keyframe has no following segment, so easing would have no
+   * playback effect and should not be stored through the basic editor.
+   */
+  if (
+    targetKeyframeIndex < 0 ||
+    targetKeyframeIndex >=
+      sortedTargetKeyframes.length - 1
+  ) {
+    return slide;
+  }
+
+  const targetOffset =
+    sortedTargetKeyframes[targetKeyframeIndex]
+      .offset;
+
+  const normalizedEasing =
+    normalizeAnimationEasing(command.easing);
+
+  let changed = false;
+
+  const nextTracks = clip.tracks.map((track) => {
+    const sortedKeyframes = [
+      ...track.keyframes,
+    ].sort(
+      (left, right) =>
+        left.offset - right.offset ||
+        left.id.localeCompare(right.id),
+    );
+
+    const matchingKeyframeIndex =
+      sortedKeyframes.findIndex(
+        (keyframe) =>
+          Math.abs(
+            keyframe.offset - targetOffset,
+          ) <= EASING_OFFSET_MATCH_TOLERANCE,
+      );
+
+    /**
+     * Only keyframes that begin a real segment participate in synchronized
+     * easing. A final keyframe has no outgoing interval.
+     */
+    if (
+      matchingKeyframeIndex < 0 ||
+      matchingKeyframeIndex >=
+        sortedKeyframes.length - 1
+    ) {
+      return track;
+    }
+
+    const matchingKeyframe =
+      sortedKeyframes[matchingKeyframeIndex];
+
+    if (
+      animationEasingsEqual(
+        matchingKeyframe.easing,
+        normalizedEasing,
+      )
+    ) {
+      return track;
+    }
+
+    changed = true;
+
+    return {
+      ...track,
+      keyframes: track.keyframes.map(
+        (keyframe) =>
+          keyframe.id === matchingKeyframe.id
+            ? {
+                ...keyframe,
+                easing: normalizedEasing,
+              }
+            : keyframe,
+      ),
+    };
+  });
+
+  if (!changed) {
+    return slide;
+  }
+
+  const nextClip: AnimationClip = {
+    ...clip,
+    tracks: nextTracks,
+    metadata: {
+      ...clip.metadata,
+      customized: true,
+    },
+  };
+
+  return {
+    ...slide,
+    animationScene: {
+      ...scene,
+      revision: Math.max(
+        1,
+        scene.revision + 1,
+      ),
+      clips: {
+        ...scene.clips,
+        [clip.id]: nextClip,
+      },
+    },
+  };
+}
+
+/**
  * Add one keyframe to the largest available gap in a V2 animation track.
  *
  * The new position is placed at the middle of the largest gap between two
@@ -382,8 +550,7 @@ export function addAnimationKeyframeToSlide(
   const track = clip.tracks[trackIndex];
   const sortedKeyframes = [...track.keyframes].sort(
     (left, right) =>
-      left.offset - right.offset ||
-      left.id.localeCompare(right.id),
+      left.offset - right.offset || left.id.localeCompare(right.id),
   );
 
   /**
@@ -396,18 +563,12 @@ export function addAnimationKeyframeToSlide(
 
   let leftKeyframe = sortedKeyframes[0];
   let rightKeyframe = sortedKeyframes[1];
-  let largestGap =
-    rightKeyframe.offset - leftKeyframe.offset;
+  let largestGap = rightKeyframe.offset - leftKeyframe.offset;
 
-  for (
-    let index = 1;
-    index < sortedKeyframes.length - 1;
-    index += 1
-  ) {
+  for (let index = 1; index < sortedKeyframes.length - 1; index += 1) {
     const currentLeft = sortedKeyframes[index];
     const currentRight = sortedKeyframes[index + 1];
-    const currentGap =
-      currentRight.offset - currentLeft.offset;
+    const currentGap = currentRight.offset - currentLeft.offset;
 
     if (currentGap > largestGap) {
       leftKeyframe = currentLeft;
@@ -423,26 +584,16 @@ export function addAnimationKeyframeToSlide(
     return slide;
   }
 
-  const newOffset = Number(
-    (
-      leftKeyframe.offset +
-      largestGap / 2
-    ).toFixed(6),
-  );
+  const newOffset = Number((leftKeyframe.offset + largestGap / 2).toFixed(6));
 
-  const interpolationProgress =
-    (newOffset - leftKeyframe.offset) /
-    largestGap;
+  const interpolationProgress = (newOffset - leftKeyframe.offset) / largestGap;
 
   const existingKeyframeIds = new Set(
     track.keyframes.map((keyframe) => keyframe.id),
   );
 
   const newKeyframe: AnimationKeyframe = {
-    id: createUniqueKeyframeId(
-      track.id,
-      existingKeyframeIds,
-    ),
+    id: createUniqueKeyframeId(track.id, existingKeyframeIds),
     offset: newOffset,
     value: interpolateAnimationValue(
       leftKeyframe.value,
@@ -457,25 +608,15 @@ export function addAnimationKeyframeToSlide(
     easing: leftKeyframe.easing,
   };
 
-  const nextKeyframes = [
-    ...track.keyframes,
-    newKeyframe,
-  ].sort(
+  const nextKeyframes = [...track.keyframes, newKeyframe].sort(
     (left, right) =>
-      left.offset - right.offset ||
-      left.id.localeCompare(right.id),
+      left.offset - right.offset || left.id.localeCompare(right.id),
   );
 
-  return replaceAnimationTrackInSlide(
-    slide,
-    scene,
-    clip,
-    trackIndex,
-    {
-      ...track,
-      keyframes: nextKeyframes,
-    },
-  );
+  return replaceAnimationTrackInSlide(slide, scene, clip, trackIndex, {
+    ...track,
+    keyframes: nextKeyframes,
+  });
 }
 
 /**
@@ -510,8 +651,7 @@ export function deleteAnimationKeyframeFromSlide(
   }
 
   const keyframeExists = track.keyframes.some(
-    (keyframe) =>
-      keyframe.id === command.keyframeId,
+    (keyframe) => keyframe.id === command.keyframeId,
   );
 
   if (!keyframeExists) {
@@ -519,26 +659,16 @@ export function deleteAnimationKeyframeFromSlide(
   }
 
   const nextKeyframes = track.keyframes
-    .filter(
-      (keyframe) =>
-        keyframe.id !== command.keyframeId,
-    )
+    .filter((keyframe) => keyframe.id !== command.keyframeId)
     .sort(
       (left, right) =>
-        left.offset - right.offset ||
-        left.id.localeCompare(right.id),
+        left.offset - right.offset || left.id.localeCompare(right.id),
     );
 
-  return replaceAnimationTrackInSlide(
-    slide,
-    scene,
-    clip,
-    trackIndex,
-    {
-      ...track,
-      keyframes: nextKeyframes,
-    },
-  );
+  return replaceAnimationTrackInSlide(slide, scene, clip, trackIndex, {
+    ...track,
+    keyframes: nextKeyframes,
+  });
 }
 
 /**
@@ -580,10 +710,7 @@ export function updateAnimationClipTimingInSlide(
     typeof updates.startMs === "number" &&
     Number.isFinite(updates.startMs)
   ) {
-    const nextStartMs = Math.max(
-      0,
-      Math.round(updates.startMs),
-    );
+    const nextStartMs = Math.max(0, Math.round(updates.startMs));
 
     if (nextStartMs !== nextClip.startMs) {
       nextClip = {
@@ -599,10 +726,7 @@ export function updateAnimationClipTimingInSlide(
     typeof updates.durationMs === "number" &&
     Number.isFinite(updates.durationMs)
   ) {
-    const nextDurationMs = Math.max(
-      1,
-      Math.round(updates.durationMs),
-    );
+    const nextDurationMs = Math.max(1, Math.round(updates.durationMs));
 
     if (nextDurationMs !== nextClip.durationMs) {
       nextClip = {
@@ -654,17 +778,9 @@ export function updateAnimationClipTimingInSlide(
      * Extremely small or large playback rates are difficult to control and can
      * make browser animation timing appear frozen, so basic mode limits them.
      */
-    const nextPlaybackRate = Math.min(
-      16,
-      Math.max(0.05, updates.playbackRate),
-    );
+    const nextPlaybackRate = Math.min(16, Math.max(0.05, updates.playbackRate));
 
-    if (
-      !Object.is(
-        nextPlaybackRate,
-        nextClip.playbackRate ?? 1,
-      )
-    ) {
+    if (!Object.is(nextPlaybackRate, nextClip.playbackRate ?? 1)) {
       nextClip = {
         ...nextClip,
         playbackRate: nextPlaybackRate,
@@ -695,8 +811,7 @@ export function updateAnimationClipTimingInSlide(
    * Looping, direction, and Clip speed remain V2-only settings.
    */
   const nextElements =
-    legacyAnimationId &&
-    (updatesStartMs || updatesDurationMs)
+    legacyAnimationId && (updatesStartMs || updatesDurationMs)
       ? slide.elements.map((element) => {
           if (!targetElementIds.has(element.id)) {
             return element;
@@ -704,36 +819,34 @@ export function updateAnimationClipTimingInSlide(
 
           let animationChanged = false;
 
-          const nextAnimations = element.animations.map(
-            (animation) => {
-              if (animation.id !== legacyAnimationId) {
-                return animation;
-              }
+          const nextAnimations = element.animations.map((animation) => {
+            if (animation.id !== legacyAnimationId) {
+              return animation;
+            }
 
-              const nextDelay = updatesStartMs
-                ? nextClip.startMs
-                : animation.delay;
+            const nextDelay = updatesStartMs
+              ? nextClip.startMs
+              : animation.delay;
 
-              const nextDuration = updatesDurationMs
-                ? nextClip.durationMs
-                : animation.duration;
+            const nextDuration = updatesDurationMs
+              ? nextClip.durationMs
+              : animation.duration;
 
-              if (
-                nextDelay === animation.delay &&
-                nextDuration === animation.duration
-              ) {
-                return animation;
-              }
+            if (
+              nextDelay === animation.delay &&
+              nextDuration === animation.duration
+            ) {
+              return animation;
+            }
 
-              animationChanged = true;
+            animationChanged = true;
 
-              return {
-                ...animation,
-                delay: nextDelay,
-                duration: nextDuration,
-              };
-            },
-          );
+            return {
+              ...animation,
+              delay: nextDelay,
+              duration: nextDuration,
+            };
+          });
 
           if (!animationChanged) {
             return element;
@@ -797,6 +910,100 @@ function replaceAnimationTrackInSlide(
 }
 
 /**
+ * Normalize user-facing easing parameters before writing them into the scene.
+ */
+function normalizeAnimationEasing(
+  easing?: AnimationEasing,
+): AnimationEasing | undefined {
+  if (!easing) {
+    return undefined;
+  }
+
+  switch (easing.type) {
+    case "css":
+      return {
+        type: "css",
+        value:
+          easing.value.trim() || "linear",
+      };
+
+    case "cubic-bezier":
+      return {
+        type: "cubic-bezier",
+
+        /**
+         * CSS requires the horizontal control points to remain between 0 and 1.
+         * Vertical values may overshoot; basic mode limits them to a practical
+         * editable range.
+         */
+        x1: normalizeFiniteNumber(
+          easing.x1,
+          0.25,
+          0,
+          1,
+        ),
+        y1: normalizeFiniteNumber(
+          easing.y1,
+          0.1,
+          -4,
+          4,
+        ),
+        x2: normalizeFiniteNumber(
+          easing.x2,
+          0.25,
+          0,
+          1,
+        ),
+        y2: normalizeFiniteNumber(
+          easing.y2,
+          1,
+          -4,
+          4,
+        ),
+      };
+
+    case "steps":
+      return {
+        type: "steps",
+        count: Math.round(
+          normalizeFiniteNumber(
+            easing.count,
+            4,
+            1,
+            100,
+          ),
+        ),
+        position: easing.position,
+      };
+
+    /**
+     * Future advanced editors already have compatible storage types. Preserve
+     * them unchanged even though V1 does not create them.
+     */
+    case "spring":
+    case "bounce":
+    case "custom-curve":
+      return easing;
+  }
+}
+
+function normalizeFiniteNumber(
+  value: number,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  const finiteValue = Number.isFinite(value)
+    ? value
+    : fallback;
+
+  return Math.min(
+    maximum,
+    Math.max(minimum, finiteValue),
+  );
+}
+
+/**
  * Create a keyframe ID that cannot collide with the existing track IDs.
  */
 function createUniqueKeyframeId(
@@ -826,94 +1033,41 @@ function interpolateAnimationValue(
   rightValue: AnimationValue,
   progress: number,
 ): AnimationValue {
-  const safeProgress = Math.min(
-    1,
-    Math.max(0, progress),
-  );
+  const safeProgress = Math.min(1, Math.max(0, progress));
 
-  if (
-    typeof leftValue === "number" &&
-    typeof rightValue === "number"
-  ) {
-    return interpolateNumber(
-      leftValue,
-      rightValue,
-      safeProgress,
-    );
+  if (typeof leftValue === "number" && typeof rightValue === "number") {
+    return interpolateNumber(leftValue, rightValue, safeProgress);
   }
 
-  if (
-    typeof leftValue !== "object" ||
-    typeof rightValue !== "object"
-  ) {
-    return safeProgress < 0.5
-      ? leftValue
-      : rightValue;
+  if (typeof leftValue !== "object" || typeof rightValue !== "object") {
+    return safeProgress < 0.5 ? leftValue : rightValue;
   }
 
   if ("r" in leftValue && "r" in rightValue) {
     return {
-      r: interpolateNumber(
-        leftValue.r,
-        rightValue.r,
-        safeProgress,
-      ),
-      g: interpolateNumber(
-        leftValue.g,
-        rightValue.g,
-        safeProgress,
-      ),
-      b: interpolateNumber(
-        leftValue.b,
-        rightValue.b,
-        safeProgress,
-      ),
-      a: interpolateNumber(
-        leftValue.a,
-        rightValue.a,
-        safeProgress,
-      ),
+      r: interpolateNumber(leftValue.r, rightValue.r, safeProgress),
+      g: interpolateNumber(leftValue.g, rightValue.g, safeProgress),
+      b: interpolateNumber(leftValue.b, rightValue.b, safeProgress),
+      a: interpolateNumber(leftValue.a, rightValue.a, safeProgress),
     };
   }
 
   if ("z" in leftValue && "z" in rightValue) {
     return {
-      x: interpolateNumber(
-        leftValue.x,
-        rightValue.x,
-        safeProgress,
-      ),
-      y: interpolateNumber(
-        leftValue.y,
-        rightValue.y,
-        safeProgress,
-      ),
-      z: interpolateNumber(
-        leftValue.z,
-        rightValue.z,
-        safeProgress,
-      ),
+      x: interpolateNumber(leftValue.x, rightValue.x, safeProgress),
+      y: interpolateNumber(leftValue.y, rightValue.y, safeProgress),
+      z: interpolateNumber(leftValue.z, rightValue.z, safeProgress),
     };
   }
 
   if ("x" in leftValue && "x" in rightValue) {
     return {
-      x: interpolateNumber(
-        leftValue.x,
-        rightValue.x,
-        safeProgress,
-      ),
-      y: interpolateNumber(
-        leftValue.y,
-        rightValue.y,
-        safeProgress,
-      ),
+      x: interpolateNumber(leftValue.x, rightValue.x, safeProgress),
+      y: interpolateNumber(leftValue.y, rightValue.y, safeProgress),
     };
   }
 
-  return safeProgress < 0.5
-    ? leftValue
-    : rightValue;
+  return safeProgress < 0.5 ? leftValue : rightValue;
 }
 
 function interpolateNumber(
@@ -921,12 +1075,7 @@ function interpolateNumber(
   endValue: number,
   progress: number,
 ) {
-  return Number(
-    (
-      startValue +
-      (endValue - startValue) * progress
-    ).toFixed(6),
-  );
+  return Number((startValue + (endValue - startValue) * progress).toFixed(6));
 }
 
 /**
@@ -1211,6 +1360,21 @@ function removeEmptyLegacySequence(scene: AnimationScene, slideId: string) {
   scene.sequenceOrder = scene.sequenceOrder.filter(
     (currentSequenceId) => currentSequenceId !== sequenceId,
   );
+}
+
+function animationEasingsEqual(
+  left?: AnimationEasing,
+  right?: AnimationEasing,
+) {
+  if (Object.is(left, right)) {
+    return true;
+  }
+
+  if (!left || !right) {
+    return false;
+  }
+
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function animationValuesEqual(left: AnimationValue, right: AnimationValue) {

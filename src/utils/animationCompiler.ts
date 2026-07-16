@@ -297,7 +297,13 @@ function compileFrameAtOffset(
 
   let opacity: number | undefined;
   let hasTransformTrack = false;
-  let easing: string | undefined;
+
+  /**
+   * Prefer easing explicitly stored on a keyframe beginning at this exact global
+   * offset. This prevents an earlier property track from hiding easing edited on
+   * another track at the same Clip segment.
+   */
+  let easing = getExactKeyframeEasing(preparedTracks, offset);
 
   for (const preparedTrack of preparedTracks) {
     const value = sampleNumericTrack(preparedTrack.keyframes, offset);
@@ -420,6 +426,35 @@ function sampleNumericTrack(
     const progress = (offset - left.offset) / (right.offset - left.offset);
 
     return leftValue + (rightValue - leftValue) * progress;
+  }
+
+  return undefined;
+}
+
+/**
+ * Find an easing explicitly attached to a keyframe at the compiled offset.
+ *
+ * The command layer synchronizes easing for matching offsets, so the first
+ * exact easing found is a stable representation of the whole Clip segment.
+ */
+function getExactKeyframeEasing(
+  preparedTracks: PreparedTrack[],
+  offset: number,
+) {
+  for (const preparedTrack of preparedTracks) {
+    const exactKeyframe =
+      preparedTrack.keyframes.find(
+        (keyframe) =>
+          Math.abs(
+            keyframe.offset - offset,
+          ) <= 0.000001,
+      );
+
+    if (exactKeyframe?.easing) {
+      return easingToCss(
+        exactKeyframe.easing,
+      );
+    }
   }
 
   return undefined;

@@ -9,6 +9,7 @@ import type {
   AddAnimationKeyframeCommand,
   DeleteAnimationKeyframeCommand,
   UpdateAnimationClipTimingCommand,
+  UpdateAnimationKeyframeEasingCommand,
   UpdateAnimationKeyframeOffsetCommand,
   UpdateAnimationKeyframeValueCommand,
 } from "../../utils/animationCommands";
@@ -31,6 +32,10 @@ type AnimationFloatingPanelProps = {
   ) => void;
   onUpdateKeyframeValue?: (
     command: UpdateAnimationKeyframeValueCommand,
+    options?: AnimationEditOptions,
+  ) => void;
+  onUpdateKeyframeEasing?: (
+    command: UpdateAnimationKeyframeEasingCommand,
     options?: AnimationEditOptions,
   ) => void;
   onUpdateKeyframeOffset?: (
@@ -116,6 +121,7 @@ export function AnimationFloatingPanel({
   onReplayAnimation,
   onUpdateClipTiming,
   onUpdateKeyframeValue,
+  onUpdateKeyframeEasing,
   onUpdateKeyframeOffset,
   onAddKeyframe,
   onDeleteKeyframe,
@@ -305,6 +311,7 @@ export function AnimationFloatingPanel({
             elements={elements}
             onUpdateClipTiming={onUpdateClipTiming}
             onUpdateKeyframeValue={onUpdateKeyframeValue}
+            onUpdateKeyframeEasing={onUpdateKeyframeEasing}
             onUpdateKeyframeOffset={onUpdateKeyframeOffset}
             onAddKeyframe={onAddKeyframe}
             onDeleteKeyframe={onDeleteKeyframe}

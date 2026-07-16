@@ -28,10 +28,12 @@ import {
   addAnimationKeyframeToSlide,
   applyElementBatchUpdatesToSlide,
   deleteAnimationKeyframeFromSlide,
+  updateAnimationClipTimingInSlide,
   updateAnimationKeyframeOffsetInSlide,
   updateAnimationKeyframeValueInSlide,
   type AddAnimationKeyframeCommand,
   type DeleteAnimationKeyframeCommand,
+  type UpdateAnimationClipTimingCommand,
   type UpdateAnimationKeyframeOffsetCommand,
   type UpdateAnimationKeyframeValueCommand,
 } from "./utils/animationCommands";
@@ -1591,6 +1593,46 @@ function App() {
   }
 
   /**
+   * Update one V2 Clip's timing and playback parameters.
+   *
+   * Number fields use the existing focus-to-blur history group, while select
+   * changes such as direction are committed as one discrete undo step.
+   */
+  function handleUpdateAnimationClipTiming(
+    command: UpdateAnimationClipTimingCommand,
+    options?: { recordHistory?: boolean },
+  ) {
+    commitProjectChange((currentProject) => {
+      let changed = false;
+
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        const nextSlide = updateAnimationClipTimingInSlide(slide, command);
+
+        if (nextSlide === slide) {
+          return slide;
+        }
+
+        changed = true;
+        return nextSlide;
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    }, options);
+  }
+
+  /**
    * Add one keyframe through one project transaction.
    *
    * Button actions are discrete changes, so every click creates exactly one undo
@@ -2934,6 +2976,7 @@ function App() {
         onClose={() => setAnimationPanelOpen(false)}
         onSelectElement={handleSelectElement}
         onReplayAnimation={() => setAnimationPreviewKey((key) => key + 1)}
+        onUpdateClipTiming={handleUpdateAnimationClipTiming}
         onUpdateKeyframeValue={handleUpdateAnimationKeyframeValue}
         onUpdateKeyframeOffset={handleUpdateAnimationKeyframeOffset}
         onAddKeyframe={handleAddAnimationKeyframe}

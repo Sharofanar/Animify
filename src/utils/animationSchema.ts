@@ -241,6 +241,7 @@ export function createAnimationSceneFromLegacyElements(
         fill: "both",
         iterations: 1,
         direction: "normal",
+        playbackRate: 1,
         tracks: createLegacyTracks(clipId, animation),
         sourcePreset: {
           presetId: animation.keyframes,

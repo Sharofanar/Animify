@@ -173,10 +173,17 @@ export function compileSlideAnimations(
                 ? sequence.playback.direction
                 : clip.direction,
           },
+          /**
+           * Sequence speed controls the whole sequence, while Clip speed controls this
+           * individual animation. Multiplying them keeps both layers composable.
+           */
           playbackRate:
-            sequence.playback.playbackRate > 0
+            (sequence.playback.playbackRate > 0
               ? sequence.playback.playbackRate
-              : 1,
+              : 1) *
+            (typeof clip.playbackRate === "number" && clip.playbackRate > 0
+              ? clip.playbackRate
+              : 1),
         };
 
         const elementAnimations = compiled.byElementId[target.elementId] ?? [];

@@ -49,6 +49,17 @@ export type DeleteAnimationKeyframeCommand = {
   keyframeId: string;
 };
 
+export type UpdateAnimationClipTimingCommand = {
+  clipId: string;
+  updates: {
+    startMs?: number;
+    durationMs?: number;
+    iterations?: number;
+    direction?: AnimationClip["direction"];
+    playbackRate?: number;
+  };
+};
+
 /**
  * Basic timeline editing keeps adjacent keyframes at least 0.1% apart.
  *
@@ -528,6 +539,225 @@ export function deleteAnimationKeyframeFromSlide(
       keyframes: nextKeyframes,
     },
   );
+}
+
+/**
+ * Update timing and playback settings on one Animation Schema V2 Clip.
+ *
+ * Start time and duration are mirrored back into the matching legacy
+ * element.animations entry. This keeps the narrow quick-property panel in sync
+ * while animationScene remains the authoritative advanced-animation source.
+ */
+export function updateAnimationClipTimingInSlide(
+  slide: Slide,
+  command: UpdateAnimationClipTimingCommand,
+): Slide {
+  const scene = slide.animationScene;
+  const clip = scene?.clips[command.clipId];
+
+  if (!scene || scene.schemaVersion !== 2 || !clip) {
+    return slide;
+  }
+
+  const updates = command.updates;
+  let nextClip: AnimationClip = {
+    ...clip,
+  };
+  let changed = false;
+
+  const updatesStartMs = Object.prototype.hasOwnProperty.call(
+    updates,
+    "startMs",
+  );
+
+  const updatesDurationMs = Object.prototype.hasOwnProperty.call(
+    updates,
+    "durationMs",
+  );
+
+  if (
+    updatesStartMs &&
+    typeof updates.startMs === "number" &&
+    Number.isFinite(updates.startMs)
+  ) {
+    const nextStartMs = Math.max(
+      0,
+      Math.round(updates.startMs),
+    );
+
+    if (nextStartMs !== nextClip.startMs) {
+      nextClip = {
+        ...nextClip,
+        startMs: nextStartMs,
+      };
+      changed = true;
+    }
+  }
+
+  if (
+    updatesDurationMs &&
+    typeof updates.durationMs === "number" &&
+    Number.isFinite(updates.durationMs)
+  ) {
+    const nextDurationMs = Math.max(
+      1,
+      Math.round(updates.durationMs),
+    );
+
+    if (nextDurationMs !== nextClip.durationMs) {
+      nextClip = {
+        ...nextClip,
+        durationMs: nextDurationMs,
+      };
+      changed = true;
+    }
+  }
+
+  if (
+    typeof updates.iterations === "number" &&
+    Number.isFinite(updates.iterations)
+  ) {
+    /**
+     * Basic mode uses whole repeat counts. Fractional repeats may be exposed
+     * later through an expert playback mode.
+     */
+    const nextIterations = Math.min(
+      100,
+      Math.max(1, Math.round(updates.iterations)),
+    );
+
+    if (nextIterations !== nextClip.iterations) {
+      nextClip = {
+        ...nextClip,
+        iterations: nextIterations,
+      };
+      changed = true;
+    }
+  }
+
+  if (
+    updates.direction !== undefined &&
+    updates.direction !== nextClip.direction
+  ) {
+    nextClip = {
+      ...nextClip,
+      direction: updates.direction,
+    };
+    changed = true;
+  }
+
+  if (
+    typeof updates.playbackRate === "number" &&
+    Number.isFinite(updates.playbackRate)
+  ) {
+    /**
+     * Extremely small or large playback rates are difficult to control and can
+     * make browser animation timing appear frozen, so basic mode limits them.
+     */
+    const nextPlaybackRate = Math.min(
+      16,
+      Math.max(0.05, updates.playbackRate),
+    );
+
+    if (
+      !Object.is(
+        nextPlaybackRate,
+        nextClip.playbackRate ?? 1,
+      )
+    ) {
+      nextClip = {
+        ...nextClip,
+        playbackRate: nextPlaybackRate,
+      };
+      changed = true;
+    }
+  }
+
+  if (!changed) {
+    return slide;
+  }
+
+  nextClip = {
+    ...nextClip,
+    metadata: {
+      ...nextClip.metadata,
+      customized: true,
+    },
+  };
+
+  const legacyAnimationId = getLegacyAnimationId(clip);
+  const targetElementIds = new Set(
+    clip.targets.map((target) => target.elementId),
+  );
+
+  /**
+   * Only delay and duration have equivalents in the temporary legacy model.
+   * Looping, direction, and Clip speed remain V2-only settings.
+   */
+  const nextElements =
+    legacyAnimationId &&
+    (updatesStartMs || updatesDurationMs)
+      ? slide.elements.map((element) => {
+          if (!targetElementIds.has(element.id)) {
+            return element;
+          }
+
+          let animationChanged = false;
+
+          const nextAnimations = element.animations.map(
+            (animation) => {
+              if (animation.id !== legacyAnimationId) {
+                return animation;
+              }
+
+              const nextDelay = updatesStartMs
+                ? nextClip.startMs
+                : animation.delay;
+
+              const nextDuration = updatesDurationMs
+                ? nextClip.durationMs
+                : animation.duration;
+
+              if (
+                nextDelay === animation.delay &&
+                nextDuration === animation.duration
+              ) {
+                return animation;
+              }
+
+              animationChanged = true;
+
+              return {
+                ...animation,
+                delay: nextDelay,
+                duration: nextDuration,
+              };
+            },
+          );
+
+          if (!animationChanged) {
+            return element;
+          }
+
+          return {
+            ...element,
+            animations: nextAnimations,
+          };
+        })
+      : slide.elements;
+
+  return {
+    ...slide,
+    elements: nextElements,
+    animationScene: {
+      ...scene,
+      revision: Math.max(1, scene.revision + 1),
+      clips: {
+        ...scene.clips,
+        [clip.id]: nextClip,
+      },
+    },
+  };
 }
 
 /**

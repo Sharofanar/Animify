@@ -8,6 +8,7 @@ import type { AnimationScene, SlideElement } from "../../types/presentation";
 import type {
   AddAnimationKeyframeCommand,
   DeleteAnimationKeyframeCommand,
+  UpdateAnimationClipTimingCommand,
   UpdateAnimationKeyframeOffsetCommand,
   UpdateAnimationKeyframeValueCommand,
 } from "../../utils/animationCommands";
@@ -24,6 +25,10 @@ type AnimationFloatingPanelProps = {
   onClose?: () => void;
   onSelectElement?: (elementId: string) => void;
   onReplayAnimation?: () => void;
+  onUpdateClipTiming?: (
+    command: UpdateAnimationClipTimingCommand,
+    options?: AnimationEditOptions,
+  ) => void;
   onUpdateKeyframeValue?: (
     command: UpdateAnimationKeyframeValueCommand,
     options?: AnimationEditOptions,
@@ -109,6 +114,7 @@ export function AnimationFloatingPanel({
   onClose,
   onSelectElement,
   onReplayAnimation,
+  onUpdateClipTiming,
   onUpdateKeyframeValue,
   onUpdateKeyframeOffset,
   onAddKeyframe,
@@ -297,6 +303,7 @@ export function AnimationFloatingPanel({
           <AnimationTrackInspector
             scene={scene}
             elements={elements}
+            onUpdateClipTiming={onUpdateClipTiming}
             onUpdateKeyframeValue={onUpdateKeyframeValue}
             onUpdateKeyframeOffset={onUpdateKeyframeOffset}
             onAddKeyframe={onAddKeyframe}

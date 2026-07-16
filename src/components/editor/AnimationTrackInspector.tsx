@@ -10,6 +10,7 @@ import type {
 import type {
   AddAnimationKeyframeCommand,
   DeleteAnimationKeyframeCommand,
+  UpdateAnimationClipTimingCommand,
   UpdateAnimationKeyframeOffsetCommand,
   UpdateAnimationKeyframeValueCommand,
 } from "../../utils/animationCommands";
@@ -26,6 +27,10 @@ type InspectorUpdateOptions = {
 type AnimationTrackInspectorProps = {
   scene?: AnimationScene;
   elements: SlideElement[];
+  onUpdateClipTiming?: (
+    command: UpdateAnimationClipTimingCommand,
+    options?: InspectorUpdateOptions,
+  ) => void;
   onUpdateKeyframeValue?: (
     command: UpdateAnimationKeyframeValueCommand,
     options?: InspectorUpdateOptions,
@@ -56,6 +61,7 @@ type VisibleClip = {
 export function AnimationTrackInspector({
   scene,
   elements,
+  onUpdateClipTiming,
   onUpdateKeyframeValue,
   onUpdateKeyframeOffset,
   onAddKeyframe,
@@ -81,7 +87,7 @@ export function AnimationTrackInspector({
         <div>
           <h3 className="text-sm font-black text-slate-800">V2 动画轨道</h3>
           <p className="mt-1 text-xs leading-5 text-slate-500">
-            当前已开放关键帧数值、位置和增删，缓动编辑将在后续阶段开放。
+            当前已开放 Clip 播放参数，以及关键帧数值、位置和增删。
           </p>
         </div>
 
@@ -97,6 +103,7 @@ export function AnimationTrackInspector({
               key={item.clip.id}
               item={item}
               defaultOpen={index === 0}
+              onUpdateClipTiming={onUpdateClipTiming}
               onUpdateKeyframeValue={onUpdateKeyframeValue}
               onUpdateKeyframeOffset={onUpdateKeyframeOffset}
               onAddKeyframe={onAddKeyframe}
@@ -123,6 +130,7 @@ export function AnimationTrackInspector({
 function AnimationClipCard({
   item,
   defaultOpen,
+  onUpdateClipTiming,
   onUpdateKeyframeValue,
   onUpdateKeyframeOffset,
   onAddKeyframe,
@@ -132,6 +140,10 @@ function AnimationClipCard({
 }: {
   item: VisibleClip;
   defaultOpen: boolean;
+  onUpdateClipTiming?: (
+    command: UpdateAnimationClipTimingCommand,
+    options?: InspectorUpdateOptions,
+  ) => void;
   onUpdateKeyframeValue?: (
     command: UpdateAnimationKeyframeValueCommand,
     options?: InspectorUpdateOptions,
@@ -174,18 +186,156 @@ function AnimationClipCard({
         <div className="border-t border-violet-100 p-3">
           <div className="grid grid-cols-2 gap-2 text-[11px]">
             <InspectorMetadata label="序列" value={sequenceName} />
+
             <InspectorMetadata
               label="类型"
               value={getCategoryLabel(clip.category)}
             />
-            <InspectorMetadata label="开始" value={`${clip.startMs} ms`} />
-            <InspectorMetadata label="时长" value={`${clip.durationMs} ms`} />
-            <InspectorMetadata label="循环" value={`${clip.iterations} 次`} />
-            <InspectorMetadata
-              label="方向"
-              value={getDirectionLabel(clip.direction)}
-            />
           </div>
+
+          <section className="mt-3 rounded-xl border border-violet-100 bg-violet-50/50 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h4 className="text-xs font-black text-slate-700">
+                  Clip 播放参数
+                </h4>
+
+                <p className="mt-1 text-[10px] leading-4 text-slate-400">
+                  修改当前动画片段的时间、循环、方向和独立播放速度。
+                </p>
+              </div>
+
+              <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[9px] font-black text-violet-500 shadow-sm">
+                V2
+              </span>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <ClipNumberInput
+                label="开始时间"
+                value={clip.startMs}
+                min={0}
+                step={10}
+                suffix="ms"
+                disabled={!onUpdateClipTiming}
+                onBeginChange={onBeginChange}
+                onFinishChange={onFinishChange}
+                onCommit={(startMs) =>
+                  onUpdateClipTiming?.(
+                    {
+                      clipId: clip.id,
+                      updates: {
+                        startMs,
+                      },
+                    },
+                    {
+                      recordHistory: false,
+                    },
+                  )
+                }
+              />
+
+              <ClipNumberInput
+                label="持续时间"
+                value={clip.durationMs}
+                min={1}
+                step={10}
+                suffix="ms"
+                disabled={!onUpdateClipTiming}
+                onBeginChange={onBeginChange}
+                onFinishChange={onFinishChange}
+                onCommit={(durationMs) =>
+                  onUpdateClipTiming?.(
+                    {
+                      clipId: clip.id,
+                      updates: {
+                        durationMs,
+                      },
+                    },
+                    {
+                      recordHistory: false,
+                    },
+                  )
+                }
+              />
+
+              <ClipNumberInput
+                label="循环次数"
+                value={clip.iterations}
+                min={1}
+                max={100}
+                step={1}
+                suffix="次"
+                disabled={!onUpdateClipTiming}
+                onBeginChange={onBeginChange}
+                onFinishChange={onFinishChange}
+                onCommit={(iterations) =>
+                  onUpdateClipTiming?.(
+                    {
+                      clipId: clip.id,
+                      updates: {
+                        iterations,
+                      },
+                    },
+                    {
+                      recordHistory: false,
+                    },
+                  )
+                }
+              />
+
+              <ClipNumberInput
+                label="播放速度"
+                value={clip.playbackRate ?? 1}
+                min={0.05}
+                max={16}
+                step={0.1}
+                suffix="×"
+                disabled={!onUpdateClipTiming}
+                onBeginChange={onBeginChange}
+                onFinishChange={onFinishChange}
+                onCommit={(playbackRate) =>
+                  onUpdateClipTiming?.(
+                    {
+                      clipId: clip.id,
+                      updates: {
+                        playbackRate,
+                      },
+                    },
+                    {
+                      recordHistory: false,
+                    },
+                  )
+                }
+              />
+            </div>
+
+            <label className="mt-2 block">
+              <span className="mb-1 block text-[10px] font-bold text-slate-400">
+                播放方向
+              </span>
+
+              <select
+                className="w-full rounded-xl bg-white px-3 py-2 text-xs font-bold text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-violet-300 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-300"
+                value={clip.direction}
+                disabled={!onUpdateClipTiming}
+                onChange={(event) =>
+                  onUpdateClipTiming?.({
+                    clipId: clip.id,
+                    updates: {
+                      direction: event.target
+                        .value as AnimationClip["direction"],
+                    },
+                  })
+                }
+              >
+                <option value="normal">正向</option>
+                <option value="reverse">反向</option>
+                <option value="alternate">正向往返</option>
+                <option value="alternate-reverse">反向往返</option>
+              </select>
+            </label>
+          </section>
 
           {clip.sourcePreset ? (
             <p className="mt-3 rounded-xl bg-violet-50 px-3 py-2 text-[11px] text-violet-500">
@@ -221,6 +371,124 @@ function AnimationClipCard({
         </div>
       ) : null}
     </article>
+  );
+}
+
+/**
+ * Edit one numeric Clip parameter with a temporary text draft.
+ *
+ * The field may be completely empty while typing. Leaving an empty or invalid
+ * field restores the latest stored project value without generating a change.
+ */
+function ClipNumberInput({
+  label,
+  value,
+  min,
+  max,
+  step,
+  suffix,
+  disabled,
+  onCommit,
+  onBeginChange,
+  onFinishChange,
+}: {
+  label: string;
+  value: number;
+  min?: number;
+  max?: number;
+  step: number;
+  suffix: string;
+  disabled: boolean;
+  onCommit: (value: number) => void;
+  onBeginChange?: () => void;
+  onFinishChange?: () => void;
+}) {
+  const [draftValue, setDraftValue] = useState(
+    String(value),
+  );
+  const [isEditing, setIsEditing] =
+    useState(false);
+
+  const displayedValue = isEditing
+    ? draftValue
+    : String(value);
+
+  function commitDraftValue() {
+    const trimmedValue = draftValue.trim();
+
+    if (trimmedValue === "") {
+      setDraftValue(String(value));
+      return;
+    }
+
+    const parsedValue = Number(trimmedValue);
+
+    if (!Number.isFinite(parsedValue)) {
+      setDraftValue(String(value));
+      return;
+    }
+
+    const minimumValue =
+      min === undefined
+        ? parsedValue
+        : Math.max(min, parsedValue);
+
+    const clampedValue =
+      max === undefined
+        ? minimumValue
+        : Math.min(max, minimumValue);
+
+    setDraftValue(String(clampedValue));
+
+    if (Object.is(clampedValue, value)) {
+      return;
+    }
+
+    onCommit(clampedValue);
+  }
+
+  return (
+    <label className="block">
+      <span className="mb-1 block text-[10px] font-bold text-slate-400">
+        {label}
+      </span>
+
+      <span className="flex items-center rounded-xl bg-white px-2 ring-1 ring-transparent transition focus-within:ring-violet-300">
+        <input
+          type="number"
+          className="min-w-0 flex-1 bg-transparent px-1 py-2 text-xs font-black text-slate-700 outline-none disabled:cursor-not-allowed disabled:text-slate-300"
+          value={displayedValue}
+          min={min}
+          max={max}
+          step={step}
+          disabled={disabled}
+          onFocus={() => {
+            setDraftValue(String(value));
+            setIsEditing(true);
+            onBeginChange?.();
+          }}
+          onChange={(event) => {
+            setDraftValue(
+              event.target.value,
+            );
+          }}
+          onBlur={() => {
+            commitDraftValue();
+            setIsEditing(false);
+            onFinishChange?.();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            }
+          }}
+        />
+
+        <span className="shrink-0 text-[10px] font-black text-slate-400">
+          {suffix}
+        </span>
+      </span>
+    </label>
   );
 }
 
@@ -847,19 +1115,6 @@ function getCategoryLabel(category: AnimationClip["category"]) {
       return "交互";
     case "custom":
       return "自定义";
-  }
-}
-
-function getDirectionLabel(direction: AnimationClip["direction"]) {
-  switch (direction) {
-    case "normal":
-      return "正向";
-    case "reverse":
-      return "反向";
-    case "alternate":
-      return "往返";
-    case "alternate-reverse":
-      return "反向往返";
   }
 }
 

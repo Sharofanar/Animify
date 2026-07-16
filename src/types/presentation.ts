@@ -218,6 +218,15 @@ export type AnimationClip = {
   fill: AnimationFillMode;
   iterations: number;
   direction: AnimationDirection;
+
+  /**
+   * Clip-local playback speed.
+   *
+   * Older saved projects may not contain this field, so readers must treat an
+   * absent value as 1. Sequence playback rate is multiplied by this value.
+   */
+  playbackRate?: number;
+
   tracks: AnimationTrack[];
   stagger?: AnimationStagger;
   sourcePreset?: {

@@ -14,6 +14,7 @@ import {
   type ChangeEvent,
 } from "react";
 import { ComponentLibrary } from "./components/editor/ComponentLibrary";
+import { AnimationFloatingPanel } from "./components/editor/AnimationFloatingPanel";
 import { PropertyPanel } from "./components/editor/PropertyPanel";
 import { SlideCanvas } from "./components/editor/SlideCanvas";
 import { demoProject } from "./data/demoProject";
@@ -24,9 +25,13 @@ import {
   normalizeProjectAnimationScenes,
 } from "./utils/animationSchema";
 import {
+  addAnimationKeyframeToSlide,
   applyElementBatchUpdatesToSlide,
+  deleteAnimationKeyframeFromSlide,
   updateAnimationKeyframeOffsetInSlide,
   updateAnimationKeyframeValueInSlide,
+  type AddAnimationKeyframeCommand,
+  type DeleteAnimationKeyframeCommand,
   type UpdateAnimationKeyframeOffsetCommand,
   type UpdateAnimationKeyframeValueCommand,
 } from "./utils/animationCommands";
@@ -438,6 +443,13 @@ function App() {
   const [animationPreviewKey, setAnimationPreviewKey] = useState(0);
   const [presentToolbarOpen, setPresentToolbarOpen] = useState(false);
   const [propertyPanelOpen, setPropertyPanelOpen] = useState(true);
+
+  /**
+   * The floating animation workspace is hidden outside animation mode, but its
+   * open state and dragged position remain available when the user returns.
+   */
+  const [animationPanelOpen, setAnimationPanelOpen] = useState(true);
+
   const [elementContextMenu, setElementContextMenu] =
     useState<ElementContextMenuState>(null);
   const [canvasContextMenu, setCanvasContextMenu] =
@@ -1579,6 +1591,79 @@ function App() {
   }
 
   /**
+   * Add one keyframe through one project transaction.
+   *
+   * Button actions are discrete changes, so every click creates exactly one undo
+   * snapshot without opening a continuous property-editing history group.
+   */
+  function handleAddAnimationKeyframe(command: AddAnimationKeyframeCommand) {
+    commitProjectChange((currentProject) => {
+      let changed = false;
+
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        const nextSlide = addAnimationKeyframeToSlide(slide, command);
+
+        if (nextSlide === slide) {
+          return slide;
+        }
+
+        changed = true;
+        return nextSlide;
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    });
+  }
+
+  /**
+   * Delete one keyframe through one project transaction.
+   */
+  function handleDeleteAnimationKeyframe(
+    command: DeleteAnimationKeyframeCommand,
+  ) {
+    commitProjectChange((currentProject) => {
+      let changed = false;
+
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        const nextSlide = deleteAnimationKeyframeFromSlide(slide, command);
+
+        if (nextSlide === slide) {
+          return slide;
+        }
+
+        changed = true;
+        return nextSlide;
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    });
+  }
+
+  /**
    * Move one element or the whole current multi-selection.
    *
    * SlideCanvas reports the dragged element's next absolute position. App converts
@@ -2052,6 +2137,10 @@ function App() {
     setSelectedElementIds([elementId]);
     setPropertyTargetElementIds([elementId]);
     setPropertyPanelOpen(true);
+
+    if (mode === "animation") {
+      setAnimationPanelOpen(true);
+    }
   }
 
   /**
@@ -2072,6 +2161,9 @@ function App() {
     setPropertyTargetElementIds(nextSelectedElementIds);
     setElementContextMenu(null);
     setPropertyPanelOpen(nextSelectedElementIds.length > 0);
+    if (mode === "animation" && nextSelectedElementIds.length > 0) {
+      setAnimationPanelOpen(true);
+    }
   }
 
   /**
@@ -2084,6 +2176,9 @@ function App() {
     setElementContextMenu(null);
     setCanvasContextMenu(null);
     setPropertyPanelOpen(elementIds.length > 0);
+    if (mode === "animation" && elementIds.length > 0) {
+      setAnimationPanelOpen(true);
+    }
   }
 
   /**
@@ -2497,6 +2592,14 @@ function App() {
     handleAddElement(draggedType, getDropPosition(event));
   }
 
+  /**
+   * Enter animation mode and show the floating V2 animation workspace.
+   */
+  function handleOpenAnimationWorkspace() {
+    setMode("animation");
+    setAnimationPanelOpen(true);
+  }
+
   return (
     <DndContext onDragEnd={handleDragEnd}>
       <main className="h-screen overflow-hidden bg-slate-100 text-slate-950">
@@ -2553,7 +2656,7 @@ function App() {
                       ? "bg-white text-violet-600 shadow-sm"
                       : "text-slate-500 hover:text-slate-900"
                   }`}
-                  onClick={() => setMode("animation")}
+                  onClick={handleOpenAnimationWorkspace}
                 >
                   动画
                 </button>
@@ -2808,13 +2911,7 @@ function App() {
                 <PropertyPanel
                   selectedElements={selectedElements}
                   targetElementIds={effectivePropertyTargetElementIds}
-                  animationScene={activeSlide?.animationScene}
-                  onUpdateAnimationKeyframeValue={
-                    handleUpdateAnimationKeyframeValue
-                  }
-                  onUpdateAnimationKeyframeOffset={
-                    handleUpdateAnimationKeyframeOffset
-                  }
+                  onOpenAnimationWorkspace={handleOpenAnimationWorkspace}
                   onTargetElementIdsChange={
                     handlePropertyTargetElementIdsChange
                   }
@@ -2829,6 +2926,21 @@ function App() {
           </section>
         </section>
       </main>
+
+      <AnimationFloatingPanel
+        visible={mode === "animation" && animationPanelOpen}
+        scene={activeSlide.animationScene}
+        elements={selectedElements}
+        onClose={() => setAnimationPanelOpen(false)}
+        onSelectElement={handleSelectElement}
+        onReplayAnimation={() => setAnimationPreviewKey((key) => key + 1)}
+        onUpdateKeyframeValue={handleUpdateAnimationKeyframeValue}
+        onUpdateKeyframeOffset={handleUpdateAnimationKeyframeOffset}
+        onAddKeyframe={handleAddAnimationKeyframe}
+        onDeleteKeyframe={handleDeleteAnimationKeyframe}
+        onBeginChange={beginProjectHistoryGroup}
+        onFinishChange={finishProjectHistoryGroup}
+      />
 
       {elementContextMenu ? (
         <div

@@ -1,14 +1,8 @@
 import { useState } from "react";
 import type {
-  AnimationScene,
   SlideElement,
   SlideElementAnimation,
 } from "../../types/presentation";
-import { AnimationTrackInspector } from "./AnimationTrackInspector";
-import type {
-  UpdateAnimationKeyframeOffsetCommand,
-  UpdateAnimationKeyframeValueCommand,
-} from "../../utils/animationCommands";
 
 type LayerAction =
   | "bring-forward"
@@ -34,15 +28,7 @@ type ElementBatchUpdate = {
 type PropertyPanelProps = {
   selectedElements: SlideElement[];
   targetElementIds: string[];
-  animationScene?: AnimationScene;
-  onUpdateAnimationKeyframeValue?: (
-    command: UpdateAnimationKeyframeValueCommand,
-    options?: PropertyUpdateOptions,
-  ) => void;
-  onUpdateAnimationKeyframeOffset?: (
-    command: UpdateAnimationKeyframeOffsetCommand,
-    options?: PropertyUpdateOptions,
-  ) => void;
+  onOpenAnimationWorkspace?: () => void;
   onTargetElementIdsChange?: (elementIds: string[]) => void;
   onUpdateElements?: (
     batchUpdates: ElementBatchUpdate[],
@@ -116,9 +102,7 @@ function getSharedValue<T>(values: T[]): T | undefined {
 export function PropertyPanel({
   selectedElements,
   targetElementIds,
-  animationScene,
-  onUpdateAnimationKeyframeValue,
-  onUpdateAnimationKeyframeOffset,
+  onOpenAnimationWorkspace,
   onTargetElementIdsChange,
   onUpdateElements,
   onBeginPropertyChange,
@@ -562,9 +546,7 @@ export function PropertyPanel({
           targetElements.length > 0 ? (
             <AnimationTab
               elements={targetElements}
-              animationScene={animationScene}
-              onUpdateKeyframeValue={onUpdateAnimationKeyframeValue}
-              onUpdateKeyframeOffset={onUpdateAnimationKeyframeOffset}
+              onOpenAnimationWorkspace={onOpenAnimationWorkspace}
               sharedPreset={sharedAnimationPreset}
               sharedDuration={
                 typeof sharedAnimationDuration === "number"
@@ -809,9 +791,7 @@ function FontTab({
 
 function AnimationTab({
   elements,
-  animationScene,
-  onUpdateKeyframeValue,
-  onUpdateKeyframeOffset,
+  onOpenAnimationWorkspace,
   sharedPreset,
   sharedDuration,
   sharedDelay,
@@ -822,15 +802,7 @@ function AnimationTab({
   onFinishChange,
 }: {
   elements: SlideElement[];
-  animationScene?: AnimationScene;
-  onUpdateKeyframeValue?: (
-    command: UpdateAnimationKeyframeValueCommand,
-    options?: PropertyUpdateOptions,
-  ) => void;
-  onUpdateKeyframeOffset?: (
-    command: UpdateAnimationKeyframeOffsetCommand,
-    options?: PropertyUpdateOptions,
-  ) => void;
+  onOpenAnimationWorkspace?: () => void;
   sharedPreset?: string;
   sharedDuration?: number;
   sharedDelay?: number;
@@ -916,14 +888,23 @@ function AnimationTab({
         ) : null}
       </section>
 
-      <AnimationTrackInspector
-        scene={animationScene}
-        elements={elements}
-        onUpdateKeyframeValue={onUpdateKeyframeValue}
-        onUpdateKeyframeOffset={onUpdateKeyframeOffset}
-        onBeginChange={onBeginChange}
-        onFinishChange={onFinishChange}
-      />
+      <section className="rounded-2xl border border-violet-100 bg-white p-4">
+        <h3 className="text-sm font-black text-slate-800">高级动画编辑</h3>
+
+        <p className="mt-2 text-xs leading-5 text-slate-500">
+          关键帧数值、位置、增加和删除将在独立动画工作区中编辑，
+          避免挤压右侧快捷属性栏。
+        </p>
+
+        <button
+          type="button"
+          className="mt-3 w-full rounded-xl bg-violet-500 px-4 py-2.5 text-sm font-black text-white shadow-sm transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+          disabled={!onOpenAnimationWorkspace}
+          onClick={onOpenAnimationWorkspace}
+        >
+          进入动画工作区
+        </button>
+      </section>
     </div>
   );
 }

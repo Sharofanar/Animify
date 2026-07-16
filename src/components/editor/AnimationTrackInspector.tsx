@@ -8,6 +8,8 @@ import type {
   SlideElement,
 } from "../../types/presentation";
 import type {
+  AddAnimationKeyframeCommand,
+  DeleteAnimationKeyframeCommand,
   UpdateAnimationKeyframeOffsetCommand,
   UpdateAnimationKeyframeValueCommand,
 } from "../../utils/animationCommands";
@@ -32,6 +34,8 @@ type AnimationTrackInspectorProps = {
     command: UpdateAnimationKeyframeOffsetCommand,
     options?: InspectorUpdateOptions,
   ) => void;
+  onAddKeyframe?: (command: AddAnimationKeyframeCommand) => void;
+  onDeleteKeyframe?: (command: DeleteAnimationKeyframeCommand) => void;
   onBeginChange?: () => void;
   onFinishChange?: () => void;
 };
@@ -43,17 +47,19 @@ type VisibleClip = {
 };
 
 /**
- * Read Animation Schema V2 clips, tracks, and keyframes for the currently
- * checked property-panel targets.
+ * Read and edit Animation Schema V2 clips, tracks, and keyframes for the
+ * currently checked property-panel targets.
  *
- * This first version is intentionally read-only. Editing commands will be added
- * only after the stored track structure has been visually verified.
+ * Every edit is forwarded through explicit V2 animation commands instead of
+ * mutating inspector-local data.
  */
 export function AnimationTrackInspector({
   scene,
   elements,
   onUpdateKeyframeValue,
   onUpdateKeyframeOffset,
+  onAddKeyframe,
+  onDeleteKeyframe,
   onBeginChange,
   onFinishChange,
 }: AnimationTrackInspectorProps) {
@@ -75,12 +81,12 @@ export function AnimationTrackInspector({
         <div>
           <h3 className="text-sm font-black text-slate-800">V2 动画轨道</h3>
           <p className="mt-1 text-xs leading-5 text-slate-500">
-            当前已开放关键帧数值和位置编辑，增删与缓动将在后续阶段开放。
+            当前已开放关键帧数值、位置和增删，缓动编辑将在后续阶段开放。
           </p>
         </div>
 
         <span className="shrink-0 rounded-full bg-slate-200 px-2.5 py-1 text-[11px] font-black text-slate-500">
-          数值/位置可编辑
+          关键帧可编辑
         </span>
       </div>
 
@@ -93,6 +99,8 @@ export function AnimationTrackInspector({
               defaultOpen={index === 0}
               onUpdateKeyframeValue={onUpdateKeyframeValue}
               onUpdateKeyframeOffset={onUpdateKeyframeOffset}
+              onAddKeyframe={onAddKeyframe}
+              onDeleteKeyframe={onDeleteKeyframe}
               onBeginChange={onBeginChange}
               onFinishChange={onFinishChange}
             />
@@ -117,6 +125,8 @@ function AnimationClipCard({
   defaultOpen,
   onUpdateKeyframeValue,
   onUpdateKeyframeOffset,
+  onAddKeyframe,
+  onDeleteKeyframe,
   onBeginChange,
   onFinishChange,
 }: {
@@ -130,6 +140,8 @@ function AnimationClipCard({
     command: UpdateAnimationKeyframeOffsetCommand,
     options?: InspectorUpdateOptions,
   ) => void;
+  onAddKeyframe?: (command: AddAnimationKeyframeCommand) => void;
+  onDeleteKeyframe?: (command: DeleteAnimationKeyframeCommand) => void;
   onBeginChange?: () => void;
   onFinishChange?: () => void;
 }) {
@@ -194,6 +206,8 @@ function AnimationClipCard({
                   track={track}
                   onUpdateKeyframeValue={onUpdateKeyframeValue}
                   onUpdateKeyframeOffset={onUpdateKeyframeOffset}
+                  onAddKeyframe={onAddKeyframe}
+                  onDeleteKeyframe={onDeleteKeyframe}
                   onBeginChange={onBeginChange}
                   onFinishChange={onFinishChange}
                 />
@@ -215,6 +229,8 @@ function AnimationTrackCard({
   track,
   onUpdateKeyframeValue,
   onUpdateKeyframeOffset,
+  onAddKeyframe,
+  onDeleteKeyframe,
   onBeginChange,
   onFinishChange,
 }: {
@@ -228,12 +244,26 @@ function AnimationTrackCard({
     command: UpdateAnimationKeyframeOffsetCommand,
     options?: InspectorUpdateOptions,
   ) => void;
+  onAddKeyframe?: (command: AddAnimationKeyframeCommand) => void;
+  onDeleteKeyframe?: (command: DeleteAnimationKeyframeCommand) => void;
   onBeginChange?: () => void;
   onFinishChange?: () => void;
 }) {
   const sortedKeyframes = [...track.keyframes].sort(
-    (left, right) => left.offset - right.offset,
+    (left, right) =>
+      left.offset - right.offset || left.id.localeCompare(right.id),
   );
+
+  /**
+   * A keyframe can be inserted only when at least one adjacent gap has enough
+   * room to preserve the minimum separation on both sides.
+   */
+  const canAddKeyframe = hasAvailableKeyframeGap(sortedKeyframes);
+
+  /**
+   * Basic mode always keeps at least two keyframes on every animation track.
+   */
+  const canDeleteKeyframe = sortedKeyframes.length > 2;
 
   return (
     <section
@@ -254,9 +284,28 @@ function AnimationTrackCard({
           </p>
         </div>
 
-        <div className="flex shrink-0 gap-1">
+        <div className="flex shrink-0 flex-wrap justify-end gap-1">
           <TrackBadge value={getValueModeLabel(track.valueMode)} />
           <TrackBadge value={getBlendModeLabel(track.blendMode)} />
+
+          <button
+            type="button"
+            className="rounded-full bg-violet-100 px-2 py-1 text-[9px] font-black text-violet-600 transition hover:bg-violet-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-300"
+            disabled={!onAddKeyframe || !canAddKeyframe}
+            title={
+              canAddKeyframe
+                ? "在最大关键帧空隙中添加关键帧"
+                : "当前轨道没有足够的关键帧空隙"
+            }
+            onClick={() =>
+              onAddKeyframe?.({
+                clipId,
+                trackId: track.id,
+              })
+            }
+          >
+            ＋关键帧
+          </button>
         </div>
       </div>
 
@@ -282,28 +331,53 @@ function AnimationTrackCard({
               onFinishChange={onFinishChange}
             />
 
-            <span className="min-w-0">
-              {typeof keyframe.value === "number" ? (
-                <NumericKeyframeInput
-                  value={keyframe.value}
-                  property={track.property}
-                  clipId={clipId}
-                  trackId={track.id}
-                  keyframeId={keyframe.id}
-                  onUpdateKeyframeValue={onUpdateKeyframeValue}
-                  onBeginChange={onBeginChange}
-                  onFinishChange={onFinishChange}
-                />
-              ) : (
-                <span className="block truncate font-bold text-slate-700">
-                  {formatAnimationValue(keyframe.value, track.property)}
-                </span>
-              )}
+            <div className="min-w-0">
+              <div className="flex items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  {typeof keyframe.value === "number" ? (
+                    <NumericKeyframeInput
+                      value={keyframe.value}
+                      property={track.property}
+                      clipId={clipId}
+                      trackId={track.id}
+                      keyframeId={keyframe.id}
+                      onUpdateKeyframeValue={onUpdateKeyframeValue}
+                      onBeginChange={onBeginChange}
+                      onFinishChange={onFinishChange}
+                    />
+                  ) : (
+                    <span className="block truncate font-bold text-slate-700">
+                      {formatAnimationValue(keyframe.value, track.property)}
+                    </span>
+                  )}
+                </div>
 
-              <span className="mt-0.5 block truncate text-[10px] text-slate-400">
+                <button
+                  type="button"
+                  className="shrink-0 rounded-lg bg-rose-50 px-2 py-1 text-[10px] font-black text-rose-500 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300"
+                  disabled={!onDeleteKeyframe || !canDeleteKeyframe}
+                  title={
+                    canDeleteKeyframe
+                      ? "删除此关键帧"
+                      : "每条轨道至少保留两个关键帧"
+                  }
+                  aria-label={`删除 ${formatOffset(keyframe.offset)} 关键帧`}
+                  onClick={() =>
+                    onDeleteKeyframe?.({
+                      clipId,
+                      trackId: track.id,
+                      keyframeId: keyframe.id,
+                    })
+                  }
+                >
+                  删除
+                </button>
+              </div>
+
+              <span className="mt-1 block truncate text-[10px] text-slate-400">
                 {keyframe.hold ? "保持关键帧" : formatEasing(keyframe.easing)}
               </span>
-            </span>
+            </div>
           </div>
         ))}
       </div>
@@ -574,6 +648,37 @@ function NumericKeyframeInput({
 }
 
 /**
+ * Check whether at least one adjacent-keyframe gap can contain another frame
+ * while preserving the minimum basic-mode separation on both sides.
+ */
+function hasAvailableKeyframeGap(
+  keyframes: AnimationTrack["keyframes"],
+) {
+  if (keyframes.length < 2) {
+    return false;
+  }
+
+  for (
+    let index = 0;
+    index < keyframes.length - 1;
+    index += 1
+  ) {
+    const gap =
+      keyframes[index + 1].offset -
+      keyframes[index].offset;
+
+    if (
+      gap >
+      MINIMUM_KEYFRAME_OFFSET_GAP * 2
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Calculate the editable range for one keyframe in basic timeline mode.
  *
  * Neighboring keyframes cannot be crossed and retain a 0.1% separation.
@@ -584,8 +689,7 @@ function getKeyframeOffsetBounds(
 ) {
   const sortedKeyframes = [...keyframes].sort(
     (left, right) =>
-      left.offset - right.offset ||
-      left.id.localeCompare(right.id),
+      left.offset - right.offset || left.id.localeCompare(right.id),
   );
 
   const keyframeIndex = sortedKeyframes.findIndex(
@@ -604,19 +708,11 @@ function getKeyframeOffsetBounds(
   const followingKeyframe = sortedKeyframes[keyframeIndex + 1];
 
   const minimumOffset = previousKeyframe
-    ? Math.min(
-        1,
-        previousKeyframe.offset +
-          MINIMUM_KEYFRAME_OFFSET_GAP,
-      )
+    ? Math.min(1, previousKeyframe.offset + MINIMUM_KEYFRAME_OFFSET_GAP)
     : 0;
 
   const maximumOffset = followingKeyframe
-    ? Math.max(
-        0,
-        followingKeyframe.offset -
-          MINIMUM_KEYFRAME_OFFSET_GAP,
-      )
+    ? Math.max(0, followingKeyframe.offset - MINIMUM_KEYFRAME_OFFSET_GAP)
     : 1;
 
   if (minimumOffset > maximumOffset) {

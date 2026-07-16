@@ -1,5 +1,6 @@
 import type {
   AnimationClip,
+  AnimationKeyframe,
   AnimationScene,
   AnimationValue,
   Slide,
@@ -35,6 +36,17 @@ export type UpdateAnimationKeyframeOffsetCommand = {
    * Normalized position inside the animation track, from 0 to 1.
    */
   offset: number;
+};
+
+export type AddAnimationKeyframeCommand = {
+  clipId: string;
+  trackId: string;
+};
+
+export type DeleteAnimationKeyframeCommand = {
+  clipId: string;
+  trackId: string;
+  keyframeId: string;
 };
 
 /**
@@ -299,10 +311,7 @@ export function updateAnimationKeyframeOffsetInSlide(
           }
         : keyframe,
     )
-    .sort(
-      (left, right) =>
-        left.offset - right.offset,
-    );
+    .sort((left, right) => left.offset - right.offset);
 
   const nextTracks = [...clip.tracks];
 
@@ -331,6 +340,363 @@ export function updateAnimationKeyframeOffsetInSlide(
       },
     },
   };
+}
+
+/**
+ * Add one keyframe to the largest available gap in a V2 animation track.
+ *
+ * The new position is placed at the middle of the largest gap between two
+ * existing keyframes. Its value is interpolated from the keyframes on both
+ * sides, so numeric, vector, and color tracks receive a sensible default.
+ */
+export function addAnimationKeyframeToSlide(
+  slide: Slide,
+  command: AddAnimationKeyframeCommand,
+): Slide {
+  const scene = slide.animationScene;
+  const clip = scene?.clips[command.clipId];
+
+  if (!scene || scene.schemaVersion !== 2 || !clip) {
+    return slide;
+  }
+
+  const trackIndex = clip.tracks.findIndex(
+    (track) => track.id === command.trackId,
+  );
+
+  if (trackIndex < 0) {
+    return slide;
+  }
+
+  const track = clip.tracks[trackIndex];
+  const sortedKeyframes = [...track.keyframes].sort(
+    (left, right) =>
+      left.offset - right.offset ||
+      left.id.localeCompare(right.id),
+  );
+
+  /**
+   * A new keyframe needs two surrounding keyframes so its value can be
+   * interpolated. Existing preset tracks already satisfy this requirement.
+   */
+  if (sortedKeyframes.length < 2) {
+    return slide;
+  }
+
+  let leftKeyframe = sortedKeyframes[0];
+  let rightKeyframe = sortedKeyframes[1];
+  let largestGap =
+    rightKeyframe.offset - leftKeyframe.offset;
+
+  for (
+    let index = 1;
+    index < sortedKeyframes.length - 1;
+    index += 1
+  ) {
+    const currentLeft = sortedKeyframes[index];
+    const currentRight = sortedKeyframes[index + 1];
+    const currentGap =
+      currentRight.offset - currentLeft.offset;
+
+    if (currentGap > largestGap) {
+      leftKeyframe = currentLeft;
+      rightKeyframe = currentRight;
+      largestGap = currentGap;
+    }
+  }
+
+  /**
+   * Both sides of the new keyframe must retain the minimum basic-mode gap.
+   */
+  if (largestGap <= MINIMUM_KEYFRAME_OFFSET_GAP * 2) {
+    return slide;
+  }
+
+  const newOffset = Number(
+    (
+      leftKeyframe.offset +
+      largestGap / 2
+    ).toFixed(6),
+  );
+
+  const interpolationProgress =
+    (newOffset - leftKeyframe.offset) /
+    largestGap;
+
+  const existingKeyframeIds = new Set(
+    track.keyframes.map((keyframe) => keyframe.id),
+  );
+
+  const newKeyframe: AnimationKeyframe = {
+    id: createUniqueKeyframeId(
+      track.id,
+      existingKeyframeIds,
+    ),
+    offset: newOffset,
+    value: interpolateAnimationValue(
+      leftKeyframe.value,
+      rightKeyframe.value,
+      interpolationProgress,
+    ),
+
+    /**
+     * The new keyframe inherits the previous segment's easing as a useful
+     * starting point. Independent easing editing will be added later.
+     */
+    easing: leftKeyframe.easing,
+  };
+
+  const nextKeyframes = [
+    ...track.keyframes,
+    newKeyframe,
+  ].sort(
+    (left, right) =>
+      left.offset - right.offset ||
+      left.id.localeCompare(right.id),
+  );
+
+  return replaceAnimationTrackInSlide(
+    slide,
+    scene,
+    clip,
+    trackIndex,
+    {
+      ...track,
+      keyframes: nextKeyframes,
+    },
+  );
+}
+
+/**
+ * Delete one keyframe from a V2 animation track.
+ *
+ * Basic editing keeps at least two keyframes on every track so the track always
+ * retains a clear start and end state.
+ */
+export function deleteAnimationKeyframeFromSlide(
+  slide: Slide,
+  command: DeleteAnimationKeyframeCommand,
+): Slide {
+  const scene = slide.animationScene;
+  const clip = scene?.clips[command.clipId];
+
+  if (!scene || scene.schemaVersion !== 2 || !clip) {
+    return slide;
+  }
+
+  const trackIndex = clip.tracks.findIndex(
+    (track) => track.id === command.trackId,
+  );
+
+  if (trackIndex < 0) {
+    return slide;
+  }
+
+  const track = clip.tracks[trackIndex];
+
+  if (track.keyframes.length <= 2) {
+    return slide;
+  }
+
+  const keyframeExists = track.keyframes.some(
+    (keyframe) =>
+      keyframe.id === command.keyframeId,
+  );
+
+  if (!keyframeExists) {
+    return slide;
+  }
+
+  const nextKeyframes = track.keyframes
+    .filter(
+      (keyframe) =>
+        keyframe.id !== command.keyframeId,
+    )
+    .sort(
+      (left, right) =>
+        left.offset - right.offset ||
+        left.id.localeCompare(right.id),
+    );
+
+  return replaceAnimationTrackInSlide(
+    slide,
+    scene,
+    clip,
+    trackIndex,
+    {
+      ...track,
+      keyframes: nextKeyframes,
+    },
+  );
+}
+
+/**
+ * Replace one track and produce a new animationScene revision.
+ */
+function replaceAnimationTrackInSlide(
+  slide: Slide,
+  scene: AnimationScene,
+  clip: AnimationClip,
+  trackIndex: number,
+  nextTrack: AnimationClip["tracks"][number],
+): Slide {
+  const nextTracks = [...clip.tracks];
+
+  nextTracks[trackIndex] = nextTrack;
+
+  const nextClip: AnimationClip = {
+    ...clip,
+    tracks: nextTracks,
+    metadata: {
+      ...clip.metadata,
+      customized: true,
+    },
+  };
+
+  return {
+    ...slide,
+    animationScene: {
+      ...scene,
+      revision: Math.max(1, scene.revision + 1),
+      clips: {
+        ...scene.clips,
+        [clip.id]: nextClip,
+      },
+    },
+  };
+}
+
+/**
+ * Create a keyframe ID that cannot collide with the existing track IDs.
+ */
+function createUniqueKeyframeId(
+  trackId: string,
+  existingKeyframeIds: Set<string>,
+) {
+  const baseId = `${trackId}-keyframe-${Date.now()}`;
+  let nextId = baseId;
+  let suffix = 1;
+
+  while (existingKeyframeIds.has(nextId)) {
+    nextId = `${baseId}-${suffix}`;
+    suffix += 1;
+  }
+
+  return nextId;
+}
+
+/**
+ * Interpolate a default value for a newly inserted keyframe.
+ *
+ * Numeric values, vectors, and colors are linearly interpolated. Discrete
+ * values such as strings and booleans use the nearest surrounding value.
+ */
+function interpolateAnimationValue(
+  leftValue: AnimationValue,
+  rightValue: AnimationValue,
+  progress: number,
+): AnimationValue {
+  const safeProgress = Math.min(
+    1,
+    Math.max(0, progress),
+  );
+
+  if (
+    typeof leftValue === "number" &&
+    typeof rightValue === "number"
+  ) {
+    return interpolateNumber(
+      leftValue,
+      rightValue,
+      safeProgress,
+    );
+  }
+
+  if (
+    typeof leftValue !== "object" ||
+    typeof rightValue !== "object"
+  ) {
+    return safeProgress < 0.5
+      ? leftValue
+      : rightValue;
+  }
+
+  if ("r" in leftValue && "r" in rightValue) {
+    return {
+      r: interpolateNumber(
+        leftValue.r,
+        rightValue.r,
+        safeProgress,
+      ),
+      g: interpolateNumber(
+        leftValue.g,
+        rightValue.g,
+        safeProgress,
+      ),
+      b: interpolateNumber(
+        leftValue.b,
+        rightValue.b,
+        safeProgress,
+      ),
+      a: interpolateNumber(
+        leftValue.a,
+        rightValue.a,
+        safeProgress,
+      ),
+    };
+  }
+
+  if ("z" in leftValue && "z" in rightValue) {
+    return {
+      x: interpolateNumber(
+        leftValue.x,
+        rightValue.x,
+        safeProgress,
+      ),
+      y: interpolateNumber(
+        leftValue.y,
+        rightValue.y,
+        safeProgress,
+      ),
+      z: interpolateNumber(
+        leftValue.z,
+        rightValue.z,
+        safeProgress,
+      ),
+    };
+  }
+
+  if ("x" in leftValue && "x" in rightValue) {
+    return {
+      x: interpolateNumber(
+        leftValue.x,
+        rightValue.x,
+        safeProgress,
+      ),
+      y: interpolateNumber(
+        leftValue.y,
+        rightValue.y,
+        safeProgress,
+      ),
+    };
+  }
+
+  return safeProgress < 0.5
+    ? leftValue
+    : rightValue;
+}
+
+function interpolateNumber(
+  startValue: number,
+  endValue: number,
+  progress: number,
+) {
+  return Number(
+    (
+      startValue +
+      (endValue - startValue) * progress
+    ).toFixed(6),
+  );
 }
 
 /**

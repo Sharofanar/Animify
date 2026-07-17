@@ -27,10 +27,18 @@ type AnimationEditOptions = {
   recordHistory?: boolean;
 };
 
+type ActiveAnimationContext = {
+  elementId: string;
+  clipId: string;
+  requestId: number;
+};
+
 type AnimationFloatingPanelProps = {
   visible: boolean;
   scene?: AnimationScene;
   elements: SlideElement[];
+  activeAnimationContext?: ActiveAnimationContext;
+  onSelectClip?: (elementId: string, clipId: string) => void;
   onClose?: () => void;
   onReplayAnimation?: () => void;
   onAddClip?: (command: AddAnimationClipCommand) => void;
@@ -138,6 +146,8 @@ export function AnimationFloatingPanel({
   visible,
   scene,
   elements,
+  activeAnimationContext,
+  onSelectClip,
   onClose,
   onReplayAnimation,
   onAddClip,
@@ -332,6 +342,17 @@ export function AnimationFloatingPanel({
             <AnimationTrackInspector
               scene={scene}
               elements={[focusedElement]}
+              requestedClipId={
+                activeAnimationContext?.elementId === focusedElement.id
+                  ? activeAnimationContext.clipId
+                  : undefined
+              }
+              requestedClipRequestId={
+                activeAnimationContext?.elementId === focusedElement.id
+                  ? activeAnimationContext.requestId
+                  : undefined
+              }
+              onSelectClip={onSelectClip}
               onAddClip={onAddClip}
               onDuplicateClip={onDuplicateClip}
               onDeleteClip={onDeleteClip}
@@ -365,6 +386,17 @@ export function AnimationFloatingPanel({
           <AnimationTrackInspector
             scene={scene}
             elements={elements}
+            requestedClipId={
+              activeAnimationContext?.elementId === elements[0]?.id
+                ? activeAnimationContext.clipId
+                : undefined
+            }
+            requestedClipRequestId={
+              activeAnimationContext?.elementId === elements[0]?.id
+                ? activeAnimationContext.requestId
+                : undefined
+            }
+            onSelectClip={onSelectClip}
             onAddClip={onAddClip}
             onDuplicateClip={onDuplicateClip}
             onDeleteClip={onDeleteClip}

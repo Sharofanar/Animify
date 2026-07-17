@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   AnimationClip,
   AnimationEasing,
@@ -63,6 +63,9 @@ type InspectorUpdateOptions = {
 type AnimationTrackInspectorProps = {
   scene?: AnimationScene;
   elements: SlideElement[];
+  requestedClipId?: string;
+  requestedClipRequestId?: number;
+  onSelectClip?: (elementId: string, clipId: string) => void;
   onAddClip?: (command: AddAnimationClipCommand) => void;
   onDuplicateClip?: (command: DuplicateAnimationClipCommand) => void;
   onDeleteClip?: (command: DeleteAnimationClipCommand) => void;
@@ -104,6 +107,9 @@ type VisibleClip = {
 export function AnimationTrackInspector({
   scene,
   elements,
+  requestedClipId,
+  requestedClipRequestId,
+  onSelectClip,
   onAddClip,
   onDuplicateClip,
   onDeleteClip,
@@ -131,17 +137,46 @@ export function AnimationTrackInspector({
   const [newClipPresetId, setNewClipPresetId] = useState(
     animationPresets[0]?.value ?? "fade-in",
   );
-  const [activeClipId, setActiveClipId] = useState<string | null>(null);
+
+  /**
+   * Remember the most recently activated card inside the inspector.
+   *
+   * requestId records which outside timeline request has already been handled,
+   * allowing a later timeline click to take control again.
+   */
+  const [activeClipState, setActiveClipState] = useState<{
+    clipId: string;
+    requestId: number;
+  } | null>(null);
 
   const selectedPreset = animationPresets.find(
     (preset) => preset.value === newClipPresetId,
   );
 
-  const resolvedActiveClipId = visibleClips.some(
-    (item) => item.clip.id === activeClipId,
-  )
-    ? activeClipId
-    : (visibleClips[0]?.clip.id ?? null);
+  const visibleRequestedClip = requestedClipId
+    ? visibleClips.find((item) => item.clip.id === requestedClipId)?.clip
+    : undefined;
+
+  const visibleLocallyActiveClip = activeClipState
+    ? visibleClips.find((item) => item.clip.id === activeClipState.clipId)?.clip
+    : undefined;
+
+  /**
+   * An unhandled timeline request temporarily takes priority over local card
+   * selection. Clicking another card records the current request as handled.
+   */
+  const requestedClipIsNew =
+    visibleRequestedClip !== undefined &&
+    requestedClipRequestId !== undefined &&
+    activeClipState?.requestId !== requestedClipRequestId;
+
+  const resolvedActiveClipId = requestedClipIsNew
+    ? visibleRequestedClip.id
+    : visibleLocallyActiveClip
+      ? visibleLocallyActiveClip.id
+      : visibleRequestedClip
+        ? visibleRequestedClip.id
+        : (visibleClips[0]?.clip.id ?? null);
 
   function handleAddClip() {
     const element = elements[0];
@@ -218,25 +253,51 @@ export function AnimationTrackInspector({
 
       {visibleClips.length > 0 ? (
         <div className="mt-4 space-y-3">
-          {visibleClips.map((item, index) => (
-            <AnimationClipCard
-              key={item.clip.id}
-              item={item}
-              defaultOpen={index === 0}
-              active={item.clip.id === resolvedActiveClipId}
-              onActivate={() => setActiveClipId(item.clip.id)}
-              onDuplicateClip={onDuplicateClip}
-              onDeleteClip={onDeleteClip}
-              onUpdateClipTiming={onUpdateClipTiming}
-              onUpdateKeyframeValue={onUpdateKeyframeValue}
-              onUpdateKeyframeEasing={onUpdateKeyframeEasing}
-              onUpdateKeyframeOffset={onUpdateKeyframeOffset}
-              onAddKeyframe={onAddKeyframe}
-              onDeleteKeyframe={onDeleteKeyframe}
-              onBeginChange={onBeginChange}
-              onFinishChange={onFinishChange}
-            />
-          ))}
+          {visibleClips.map((item, index) => {
+            const requested = item.clip.id === visibleRequestedClip?.id;
+
+            const hasExternalFocusRequest =
+              visibleRequestedClip !== undefined &&
+              requestedClipRequestId !== undefined;
+
+            const selectionElementId =
+              item.clip.targets.find((target) =>
+                selectedElementIds.has(target.elementId),
+              )?.elementId ?? item.clip.targets[0]?.elementId;
+
+            return (
+              <AnimationClipCard
+                key={`${item.clip.id}-${
+                  hasExternalFocusRequest ? requestedClipRequestId : 0
+                }`}
+                item={item}
+                defaultOpen={hasExternalFocusRequest ? requested : index === 0}
+                active={item.clip.id === resolvedActiveClipId}
+                focusRequestId={requested ? requestedClipRequestId : undefined}
+                onActivate={() => {
+                  setActiveClipState({
+                    clipId: item.clip.id,
+                    requestId:
+                      requestedClipRequestId ?? activeClipState?.requestId ?? 0,
+                  });
+
+                  if (selectionElementId) {
+                    onSelectClip?.(selectionElementId, item.clip.id);
+                  }
+                }}
+                onDuplicateClip={onDuplicateClip}
+                onDeleteClip={onDeleteClip}
+                onUpdateClipTiming={onUpdateClipTiming}
+                onUpdateKeyframeValue={onUpdateKeyframeValue}
+                onUpdateKeyframeEasing={onUpdateKeyframeEasing}
+                onUpdateKeyframeOffset={onUpdateKeyframeOffset}
+                onAddKeyframe={onAddKeyframe}
+                onDeleteKeyframe={onDeleteKeyframe}
+                onBeginChange={onBeginChange}
+                onFinishChange={onFinishChange}
+              />
+            );
+          })}
         </div>
       ) : (
         <div className="mt-4 rounded-xl border border-dashed border-slate-200 bg-white p-4 text-center">
@@ -256,6 +317,7 @@ function AnimationClipCard({
   item,
   defaultOpen,
   active,
+  focusRequestId,
   onActivate,
   onDuplicateClip,
   onDeleteClip,
@@ -271,6 +333,7 @@ function AnimationClipCard({
   item: VisibleClip;
   defaultOpen: boolean;
   active: boolean;
+  focusRequestId?: number;
   onActivate: () => void;
   onDuplicateClip?: (command: DuplicateAnimationClipCommand) => void;
   onDeleteClip?: (command: DeleteAnimationClipCommand) => void;
@@ -296,10 +359,29 @@ function AnimationClipCard({
   onFinishChange?: () => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+
+  const cardRef = useRef<HTMLElement | null>(null);
+
   const { clip, sequenceName, targetNames } = item;
+
+  /**
+   * Scrolling is a DOM synchronization side effect, so it does not duplicate
+   * project state or trigger the React set-state-in-effect lint rule.
+   */
+  useEffect(() => {
+    if (focusRequestId === undefined) {
+      return;
+    }
+
+    cardRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "nearest",
+    });
+  }, [focusRequestId]);
 
   return (
     <article
+      ref={cardRef}
       className={`overflow-hidden rounded-2xl border bg-white shadow-sm transition ${
         active
           ? "border-violet-300 ring-2 ring-violet-200"

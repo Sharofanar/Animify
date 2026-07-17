@@ -48,6 +48,7 @@ import {
   type UpdateAnimationKeyframeValueCommand,
 } from "./utils/animationCommands";
 import type {
+  AnimationClip,
   PresentationAsset,
   PresentationProject,
   SlideElement,
@@ -82,6 +83,19 @@ type ElementUpdates = Partial<Omit<SlideElement, "style">> & {
 type ElementBatchUpdate = {
   elementId: string;
   updates: ElementUpdates;
+};
+
+type ActiveAnimationContext = {
+  elementId: string;
+  clipId: string;
+
+  /**
+   * Increment when an outside editor requests the same Clip again.
+   *
+   * The ID allows the track inspector to reopen and scroll to an already
+   * selected Clip without duplicating any animation data in UI state.
+   */
+  requestId: number;
 };
 
 const MAX_HISTORY_LENGTH = 60;
@@ -216,6 +230,28 @@ function createSlideElement(
 
 function clampPosition(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function getAnimationClipCategoryLabel(category: AnimationClip["category"]) {
+  switch (category) {
+    case "enter":
+      return "进入";
+
+    case "emphasis":
+      return "强调";
+
+    case "exit":
+      return "退出";
+
+    case "motion":
+      return "路径";
+
+    case "interaction":
+      return "交互";
+
+    case "custom":
+      return "自定义";
+  }
 }
 
 function loadSavedProject(): PresentationProject {
@@ -462,6 +498,15 @@ function App() {
    */
   const [animationPanelOpen, setAnimationPanelOpen] = useState(true);
 
+  /**
+   * The Clip currently selected across every animation editor.
+   *
+   * The project remains the source of truth. This state stores only navigation
+   * information shared by the property panel, timeline, and track inspector.
+   */
+  const [activeAnimationContext, setActiveAnimationContext] =
+    useState<ActiveAnimationContext | null>(null);
+
   const [elementContextMenu, setElementContextMenu] =
     useState<ElementContextMenuState>(null);
   const [canvasContextMenu, setCanvasContextMenu] =
@@ -470,6 +515,13 @@ function App() {
   const redoStackRef = useRef<PresentationProject[]>([]);
   const historyGroupSnapshotRef = useRef<PresentationProject | null>(null);
   const historyGroupChangedRef = useRef(false);
+
+  /**
+   * Keep outside animation-navigation requests increasing even after the active
+   * Clip is cleared by a normal canvas or slide selection.
+   */
+  const animationContextRequestCounterRef = useRef(0);
+
   const slideSurfaceRef = useRef<HTMLDivElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const canvasAreaRef = useRef<HTMLDivElement | null>(null);
@@ -481,6 +533,15 @@ function App() {
    * so pasted images reuse the same asset record instead of duplicating image data.
    */
   const copiedElementsRef = useRef<SlideElement[]>([]);
+
+  /**
+   * Reflect whether the internal element clipboard contains usable content.
+   *
+   * The actual copied elements remain in a Ref, while this State is used only
+   * for rendering the enabled state of paste buttons.
+   */
+  const [hasCopiedElements, setHasCopiedElements] = useState(false);
+
   const [canvasAreaSize, setCanvasAreaSize] = useState({
     width: 0,
     height: 0,
@@ -931,6 +992,7 @@ function App() {
           JSON.stringify(copiedElements),
         ) as SlideElement[];
 
+        setHasCopiedElements(true);
         return;
       }
 
@@ -1232,6 +1294,43 @@ function App() {
   const showPropertyPanel = propertyPanelOpen && selectedElements.length > 0;
 
   const activeSlideElementCount = activeSlide.elements.length;
+
+  const activeAnimationScene = activeSlide.animationScene;
+
+  /**
+   * The lower timeline reads Animation Schema V2 directly rather than the
+   * temporary element.animations compatibility array.
+   */
+  const activeSlideTimelineClips =
+    activeAnimationScene?.schemaVersion === 2
+      ? Object.values(activeAnimationScene.clips).sort(
+          (left, right) =>
+            left.startMs - right.startMs || left.name.localeCompare(right.name),
+        )
+      : [];
+
+  /**
+   * The furthest Clip end defines the visible timeline scale.
+   */
+  const animationTimelineDurationMs = Math.max(
+    1,
+    ...activeSlideTimelineClips.map((clip) => clip.startMs + clip.durationMs),
+  );
+
+  /**
+   * Keep stale UI selection harmless after delete, undo, redo, or slide changes.
+   *
+   * The original context is retained in State so undo can restore the same Clip,
+   * while editors receive only a context that is valid for the active slide.
+   */
+  const effectiveActiveAnimationContext =
+    activeAnimationContext &&
+    activeAnimationScene?.schemaVersion === 2 &&
+    activeAnimationScene.clips[activeAnimationContext.clipId]?.targets.some(
+      (target) => target.elementId === activeAnimationContext.elementId,
+    )
+      ? activeAnimationContext
+      : null;
 
   const slideCanvasHorizontalChrome = mode === "animation" ? 96 : 88;
   const slideCanvasVerticalChrome = mode === "animation" ? 142 : 132;
@@ -2195,6 +2294,8 @@ function App() {
         copiedElementsRef.current = JSON.parse(
           JSON.stringify(copiedElements),
         ) as SlideElement[];
+
+        setHasCopiedElements(true);
       }
 
       setElementContextMenu(null);
@@ -2209,38 +2310,50 @@ function App() {
         return;
       }
 
-      const now = Date.now();
-      const pastedElementIds = copiedElements.map(
-        (element, index) => `${element.id}-paste-${now}-${index}`,
-      );
+      let pastedElementIds: string[] = [];
 
-      const pastedElements = copiedElements.map((copiedElement, index) =>
-        cloneSlideElementForInsert(
-          copiedElement,
-          pastedElementIds[index],
-          now,
-          "粘贴",
-        ),
-      );
+      /**
+       * Generate operation IDs inside the event-triggered project transaction.
+       *
+       * This prevents an impure Date.now() call from being evaluated in the
+       * component's render scope.
+       */
+      commitProjectChange((currentProject) => {
+        const now = Date.now();
 
-      commitProjectChange((currentProject) => ({
-        ...currentProject,
-        updatedAt: new Date().toISOString(),
-        slides: currentProject.slides.map((slide) => {
-          if (slide.id !== currentProject.activeSlideId) {
-            return slide;
-          }
+        pastedElementIds = copiedElements.map(
+          (element, index) => `${element.id}-paste-${now}-${index}`,
+        );
 
-          return {
-            ...slide,
-            elements: [...slide.elements, ...pastedElements],
-          };
-        }),
-      }));
+        const pastedElements = copiedElements.map((copiedElement, index) =>
+          cloneSlideElementForInsert(
+            copiedElement,
+            pastedElementIds[index],
+            now,
+            "粘贴",
+          ),
+        );
+
+        return {
+          ...currentProject,
+          updatedAt: new Date().toISOString(),
+          slides: currentProject.slides.map((slide) => {
+            if (slide.id !== currentProject.activeSlideId) {
+              return slide;
+            }
+
+            return {
+              ...slide,
+              elements: [...slide.elements, ...pastedElements],
+            };
+          }),
+        };
+      });
 
       setSelectedElementId(pastedElementIds.at(-1) ?? "");
       setSelectedElementIds(pastedElementIds);
-      setPropertyPanelOpen(pastedElementIds.length === 1);
+      setPropertyTargetElementIds(pastedElementIds);
+      setPropertyPanelOpen(pastedElementIds.length > 0);
       setElementContextMenu(null);
       return;
     }
@@ -2367,54 +2480,61 @@ function App() {
       return;
     }
 
-    const now = Date.now();
-    const sourceLeft = Math.min(
-      ...copiedElements.map((element) => element.style.x),
-    );
-    const sourceTop = Math.min(
-      ...copiedElements.map((element) => element.style.y),
-    );
+    let pastedElementIds: string[] = [];
 
-    const pastedElementIds = copiedElements.map(
-      (element, index) => `${element.id}-paste-${now}-${index}`,
-    );
+    commitProjectChange((currentProject) => {
+      const now = Date.now();
 
-    const pastedElements = copiedElements.map((copiedElement, index) => {
-      const pastedElement = cloneSlideElementForInsert(
-        copiedElement,
-        pastedElementIds[index],
-        now,
-        "粘贴",
+      const sourceLeft = Math.min(
+        ...copiedElements.map((element) => element.style.x),
       );
 
+      const sourceTop = Math.min(
+        ...copiedElements.map((element) => element.style.y),
+      );
+
+      pastedElementIds = copiedElements.map(
+        (element, index) => `${element.id}-paste-${now}-${index}`,
+      );
+
+      const pastedElements = copiedElements.map((copiedElement, index) => {
+        const pastedElement = cloneSlideElementForInsert(
+          copiedElement,
+          pastedElementIds[index],
+          now,
+          "粘贴",
+        );
+
+        return {
+          ...pastedElement,
+          style: {
+            ...pastedElement.style,
+            x: menuState.slideX + (copiedElement.style.x - sourceLeft),
+            y: menuState.slideY + (copiedElement.style.y - sourceTop),
+          },
+        };
+      });
+
       return {
-        ...pastedElement,
-        style: {
-          ...pastedElement.style,
-          x: menuState.slideX + (copiedElement.style.x - sourceLeft),
-          y: menuState.slideY + (copiedElement.style.y - sourceTop),
-        },
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: currentProject.slides.map((slide) => {
+          if (slide.id !== currentProject.activeSlideId) {
+            return slide;
+          }
+
+          return {
+            ...slide,
+            elements: [...slide.elements, ...pastedElements],
+          };
+        }),
       };
     });
 
-    commitProjectChange((currentProject) => ({
-      ...currentProject,
-      updatedAt: new Date().toISOString(),
-      slides: currentProject.slides.map((slide) => {
-        if (slide.id !== currentProject.activeSlideId) {
-          return slide;
-        }
-
-        return {
-          ...slide,
-          elements: [...slide.elements, ...pastedElements],
-        };
-      }),
-    }));
-
     setSelectedElementId(pastedElementIds.at(-1) ?? "");
     setSelectedElementIds(pastedElementIds);
-    setPropertyPanelOpen(pastedElementIds.length === 1);
+    setPropertyTargetElementIds(pastedElementIds);
+    setPropertyPanelOpen(pastedElementIds.length > 0);
     setCanvasContextMenu(null);
   }
 
@@ -2426,6 +2546,7 @@ function App() {
     setSelectedElementIds([elementId]);
     setPropertyTargetElementIds([elementId]);
     setPropertyPanelOpen(true);
+    setActiveAnimationContext(null);
 
     if (mode === "animation") {
       setAnimationPanelOpen(true);
@@ -2450,6 +2571,8 @@ function App() {
     setPropertyTargetElementIds(nextSelectedElementIds);
     setElementContextMenu(null);
     setPropertyPanelOpen(nextSelectedElementIds.length > 0);
+    setActiveAnimationContext(null);
+
     if (mode === "animation" && nextSelectedElementIds.length > 0) {
       setAnimationPanelOpen(true);
     }
@@ -2465,6 +2588,8 @@ function App() {
     setElementContextMenu(null);
     setCanvasContextMenu(null);
     setPropertyPanelOpen(elementIds.length > 0);
+    setActiveAnimationContext(null);
+
     if (mode === "animation" && elementIds.length > 0) {
       setAnimationPanelOpen(true);
     }
@@ -2708,6 +2833,7 @@ function App() {
     }));
 
     setSelectedElementId(nextSlide.elements[0]?.id ?? "");
+    setActiveAnimationContext(null);
     setAnimationPreviewKey((key) => key + 1);
   }
 
@@ -2879,6 +3005,79 @@ function App() {
     }
 
     handleAddElement(draggedType, getDropPosition(event));
+  }
+
+  /**
+   * Select one Clip from an outside animation editor.
+   *
+   * Property-panel and timeline selections increment requestId so an already
+   * selected Clip can still be reopened and scrolled into view.
+   */
+  function handleSelectAnimationClip(elementId: string, clipId: string) {
+    animationContextRequestCounterRef.current += 1;
+
+    setMode("animation");
+    setSelectedElementId(elementId);
+    setSelectedElementIds([elementId]);
+    setPropertyTargetElementIds([elementId]);
+    setPropertyPanelOpen(true);
+
+    setActiveAnimationContext({
+      elementId,
+      clipId,
+      requestId: animationContextRequestCounterRef.current,
+    });
+  }
+
+  /**
+   * Select one lower-timeline Clip and open the detailed track inspector.
+   */
+  function handleFocusTimelineClip(elementId: string, clipId: string) {
+    handleSelectAnimationClip(elementId, clipId);
+    setAnimationPanelOpen(true);
+  }
+
+  /**
+   * Synchronize a Clip selected inside the already-open track inspector.
+   *
+   * Existing canvas multi-selection is preserved when the Clip target already
+   * belongs to that selection. Only the property target changes to the Clip's
+   * element.
+   */
+  function handleSelectAnimationClipFromWorkspace(
+    elementId: string,
+    clipId: string,
+  ) {
+    const selectingDifferentClip =
+      activeAnimationContext?.elementId !== elementId ||
+      activeAnimationContext?.clipId !== clipId;
+
+    /**
+     * Selecting another Clip is a new navigation request, so every Clip card can
+     * synchronize its expanded state. Re-clicking the current Clip keeps the same
+     * request ID and therefore still allows manual collapse and expansion.
+     */
+    if (selectingDifferentClip) {
+      animationContextRequestCounterRef.current += 1;
+    }
+
+    setMode("animation");
+    setSelectedElementId(elementId);
+
+    if (!selectedElementIds.includes(elementId)) {
+      setSelectedElementIds([elementId]);
+    }
+
+    setPropertyTargetElementIds([elementId]);
+    setPropertyPanelOpen(true);
+
+    setActiveAnimationContext({
+      elementId,
+      clipId,
+      requestId: selectingDifferentClip
+        ? animationContextRequestCounterRef.current
+        : (activeAnimationContext?.requestId ?? 0),
+    });
   }
 
   /**
@@ -3157,37 +3356,109 @@ function App() {
 
                   <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-2">
                     {activeSlide.elements.map((element, index) => {
-                      const animation = element.animations[0];
+                      const elementClips = activeSlideTimelineClips.filter(
+                        (clip) =>
+                          clip.targets.some(
+                            (target) => target.elementId === element.id,
+                          ),
+                      );
 
                       return (
                         <div
                           key={element.id}
-                          className="grid grid-cols-[120px_minmax(0,1fr)] items-center gap-3 rounded-2xl bg-slate-50 px-3 py-1"
+                          className="grid grid-cols-[140px_minmax(0,1fr)] items-start gap-3 rounded-2xl bg-slate-50 px-3 py-1.5"
                         >
-                          <div className="truncate text-sm font-semibold text-slate-700">
-                            {index + 1}. {element.content || element.id}
+                          <div
+                            className="truncate pt-1 text-sm font-semibold text-slate-700"
+                            title={element.name}
+                          >
+                            {index + 1}.{" "}
+                            {element.content || element.name || element.id}
                           </div>
 
-                          <div className="relative h-6 rounded-full bg-white">
-                            {animation ? (
-                              <div
-                                className="absolute top-1 h-5 rounded-full bg-violet-400 px-3 text-xs font-semibold leading-5 text-white shadow-sm"
-                                style={{
-                                  left: `${Math.min(animation.delay / 30, 70)}%`,
-                                  width: `${Math.min(
-                                    Math.max(animation.duration / 40, 12),
-                                    80,
-                                  )}%`,
-                                }}
-                              >
-                                {animation.keyframes}
-                              </div>
-                            ) : (
-                              <span className="px-3 text-xs leading-7 text-slate-400">
-                                暂无动画
-                              </span>
-                            )}
-                          </div>
+                          {elementClips.length > 0 ? (
+                            <div className="space-y-1">
+                              {elementClips.map((clip) => {
+                                const leftPercentage = Math.min(
+                                  100,
+                                  Math.max(
+                                    0,
+                                    (clip.startMs /
+                                      animationTimelineDurationMs) *
+                                      100,
+                                  ),
+                                );
+
+                                const availablePercentage = Math.max(
+                                  1,
+                                  100 - leftPercentage,
+                                );
+
+                                const durationPercentage =
+                                  (clip.durationMs /
+                                    animationTimelineDurationMs) *
+                                  100;
+
+                                const widthPercentage = Math.min(
+                                  availablePercentage,
+                                  Math.max(4, durationPercentage),
+                                );
+
+                                const focused =
+                                  effectiveActiveAnimationContext?.elementId ===
+                                    element.id &&
+                                  effectiveActiveAnimationContext.clipId ===
+                                    clip.id;
+
+                                return (
+                                  <div
+                                    key={clip.id}
+                                    className="relative h-7 overflow-hidden rounded-full bg-white"
+                                  >
+                                    <button
+                                      type="button"
+                                      className={`absolute top-1 flex h-5 min-w-0 items-center gap-1 overflow-hidden rounded-full px-2 text-left text-[10px] font-black text-white shadow-sm transition hover:z-10 hover:brightness-105 ${
+                                        focused
+                                          ? "bg-violet-600 ring-2 ring-violet-300"
+                                          : "bg-violet-400"
+                                      }`}
+                                      style={{
+                                        left: `${leftPercentage}%`,
+                                        width: `${widthPercentage}%`,
+                                      }}
+                                      title={`${clip.name} · ${getAnimationClipCategoryLabel(
+                                        clip.category,
+                                      )} · 开始 ${clip.startMs}ms · 时长 ${
+                                        clip.durationMs
+                                      }ms`}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+
+                                        handleFocusTimelineClip(
+                                          element.id,
+                                          clip.id,
+                                        );
+                                      }}
+                                    >
+                                      <span className="min-w-0 flex-1 truncate">
+                                        {clip.name}
+                                      </span>
+
+                                      <span className="shrink-0 rounded-full bg-white/20 px-1.5 text-[9px]">
+                                        {getAnimationClipCategoryLabel(
+                                          clip.category,
+                                        )}
+                                      </span>
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="h-7 rounded-full bg-white px-3 text-xs leading-7 text-slate-400">
+                              暂无动画
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -3200,6 +3471,13 @@ function App() {
                 <PropertyPanel
                   selectedElements={selectedElements}
                   targetElementIds={effectivePropertyTargetElementIds}
+                  slideElements={activeSlide.elements}
+                  animationScene={activeSlide.animationScene}
+                  activeAnimationContext={
+                    effectiveActiveAnimationContext ?? undefined
+                  }
+                  onSelectAnimationClip={handleSelectAnimationClip}
+                  onUpdateAnimationClipTiming={handleUpdateAnimationClipTiming}
                   onOpenAnimationWorkspace={handleOpenAnimationWorkspace}
                   onTargetElementIdsChange={
                     handlePropertyTargetElementIdsChange
@@ -3220,6 +3498,8 @@ function App() {
         visible={mode === "animation" && animationPanelOpen}
         scene={activeSlide.animationScene}
         elements={selectedElements}
+        activeAnimationContext={effectiveActiveAnimationContext ?? undefined}
+        onSelectClip={handleSelectAnimationClipFromWorkspace}
         onClose={() => setAnimationPanelOpen(false)}
         onReplayAnimation={() => setAnimationPreviewKey((key) => key + 1)}
         onAddClip={handleAddAnimationClip}
@@ -3259,7 +3539,7 @@ function App() {
           <button
             type="button"
             className="w-full rounded-xl px-3 py-2 text-left font-semibold text-slate-700 transition hover:bg-violet-50 hover:text-violet-600 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white"
-            disabled={copiedElementsRef.current.length === 0}
+            disabled={!hasCopiedElements}
             onClick={() => handleElementContextMenuAction("paste")}
           >
             粘贴
@@ -3316,7 +3596,7 @@ function App() {
           <button
             type="button"
             className="w-full rounded-xl px-3 py-2 text-left font-semibold text-slate-700 transition hover:bg-violet-50 hover:text-violet-600 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white"
-            disabled={copiedElementsRef.current.length === 0}
+            disabled={!hasCopiedElements}
             onClick={() => handleCanvasContextMenuAction("paste")}
           >
             粘贴

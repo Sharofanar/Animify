@@ -1,9 +1,10 @@
 import { useState } from "react";
 import type {
+  AnimationClip,
+  AnimationScene,
   SlideElement,
-  SlideElementAnimation,
 } from "../../types/presentation";
-import { animationPresets } from "../../utils/animationPresets";
+import type { UpdateAnimationClipTimingCommand } from "../../utils/animationCommands";
 
 type LayerAction =
   | "bring-forward"
@@ -21,6 +22,19 @@ type PropertyUpdateOptions = {
   recordHistory?: boolean;
 };
 
+type ActiveAnimationContext = {
+  elementId: string;
+  clipId: string;
+  requestId: number;
+};
+
+type PageAnimationItem = {
+  clip: AnimationClip;
+  elementId: string;
+  elementName: string;
+  sequenceName: string;
+};
+
 type ElementBatchUpdate = {
   elementId: string;
   updates: ElementUpdates;
@@ -29,6 +43,14 @@ type ElementBatchUpdate = {
 type PropertyPanelProps = {
   selectedElements: SlideElement[];
   targetElementIds: string[];
+  slideElements: SlideElement[];
+  animationScene?: AnimationScene;
+  activeAnimationContext?: ActiveAnimationContext;
+  onSelectAnimationClip?: (elementId: string, clipId: string) => void;
+  onUpdateAnimationClipTiming?: (
+    command: UpdateAnimationClipTimingCommand,
+    options?: PropertyUpdateOptions,
+  ) => void;
   onOpenAnimationWorkspace?: () => void;
   onTargetElementIdsChange?: (elementIds: string[]) => void;
   onUpdateElements?: (
@@ -62,6 +84,114 @@ const elementTypeLabels: Record<SlideElement["type"], string> = {
   svg: "SVG",
 };
 
+function getAnimationCategoryLabel(category: AnimationClip["category"]) {
+  switch (category) {
+    case "enter":
+      return "进入";
+
+    case "emphasis":
+      return "强调";
+
+    case "exit":
+      return "退出";
+
+    case "motion":
+      return "路径";
+
+    case "interaction":
+      return "交互";
+
+    case "custom":
+      return "自定义";
+  }
+}
+
+/**
+ * Read every active-slide Clip in sequence order.
+ *
+ * Orphan Clips are appended by start time so partially migrated projects never
+ * hide animation data from the user.
+ */
+function getPageAnimationItems(
+  scene: AnimationScene | undefined,
+  elements: SlideElement[],
+): PageAnimationItem[] {
+  if (!scene || scene.schemaVersion !== 2) {
+    return [];
+  }
+
+  /**
+   * Preserve the narrowed V2 scene type inside nested helper functions.
+   */
+  const activeScene = scene;
+
+  const elementNameById = new Map(
+    elements.map((element) => [element.id, element.name]),
+  );
+
+  const includedClipIds = new Set<string>();
+  const items: PageAnimationItem[] = [];
+
+  function appendClip(clipId: string, sequenceName: string) {
+    if (includedClipIds.has(clipId)) {
+      return;
+    }
+
+    const clip = activeScene.clips[clipId];
+
+    if (!clip) {
+      return;
+    }
+
+    const target =
+      clip.targets.find((item) => elementNameById.has(item.elementId)) ??
+      clip.targets[0];
+
+    if (!target) {
+      return;
+    }
+
+    includedClipIds.add(clip.id);
+
+    items.push({
+      clip,
+      elementId: target.elementId,
+      elementName: elementNameById.get(target.elementId) ?? target.elementId,
+      sequenceName,
+    });
+  }
+
+  for (const sequenceId of activeScene.sequenceOrder) {
+    const sequence = activeScene.sequences[sequenceId];
+
+    if (!sequence) {
+      continue;
+    }
+
+    for (const clipId of sequence.clipIds) {
+      appendClip(clipId, sequence.name);
+    }
+  }
+
+  Object.values(activeScene.clips)
+    .sort(
+      (left, right) =>
+        left.startMs - right.startMs || left.name.localeCompare(right.name),
+    )
+    .forEach((clip) => {
+      appendClip(clip.id, "未分组序列");
+    });
+
+  /**
+   * Until relational scheduling is introduced, the animation pane follows the
+   * actual absolute playback time shown by the lower timeline.
+   *
+   * JavaScript's stable sort preserves sequence order when Clips share the same
+   * start time.
+   */
+  return items.sort((left, right) => left.clip.startMs - right.clip.startMs);
+}
+
 /**
  * Return one shared value when every target uses the same value.
  *
@@ -82,6 +212,11 @@ function getSharedValue<T>(values: T[]): T | undefined {
 export function PropertyPanel({
   selectedElements,
   targetElementIds,
+  slideElements,
+  animationScene,
+  activeAnimationContext,
+  onSelectAnimationClip,
+  onUpdateAnimationClipTiming,
   onOpenAnimationWorkspace,
   onTargetElementIdsChange,
   onUpdateElements,
@@ -97,27 +232,21 @@ export function PropertyPanel({
     targetElementIdSet.has(element.id),
   );
 
-  /**
-   * Animation controls are derived directly from project element data.
-   *
-   * Undo restores the project first, React recalculates these values, and the
-   * panel immediately returns to the old value or the mixed state.
-   */
-  const sharedAnimationPreset = getSharedValue(
-    targetElements.map((element) => element.animations[0]?.keyframes ?? "none"),
+  const pageAnimationItems = getPageAnimationItems(
+    animationScene,
+    slideElements,
   );
 
-  const sharedAnimationDuration = getSharedValue(
-    targetElements.map((element) => element.animations[0]?.duration ?? null),
-  );
+  const activeAnimationClip =
+    activeAnimationContext && animationScene?.schemaVersion === 2
+      ? animationScene.clips[activeAnimationContext.clipId]
+      : undefined;
 
-  const sharedAnimationDelay = getSharedValue(
-    targetElements.map((element) => element.animations[0]?.delay ?? null),
-  );
-
-  const allTargetsHaveAnimation =
-    targetElements.length > 0 &&
-    targetElements.every((element) => element.animations.length > 0);
+  const activeAnimationElement = activeAnimationContext
+    ? slideElements.find(
+        (element) => element.id === activeAnimationContext.elementId,
+      )
+    : undefined;
 
   /**
    * Images do not contain editable text styles. Text, shape, and SVG elements
@@ -245,100 +374,6 @@ export function PropertyPanel({
           },
         },
       })),
-      options,
-    );
-  }
-
-  /**
-   * Apply one animation preset to every checked property target.
-   *
-   * Existing duration, delay, and easing values are preserved for each element.
-   * The entire batch is one project transaction and therefore one undo step.
-   */
-  function updateAnimationPreset(value: string) {
-    if (targetElements.length === 0) {
-      return;
-    }
-
-    if (value === "none") {
-      onUpdateElements?.(
-        targetElements.map((element) => ({
-          elementId: element.id,
-          updates: {
-            animations: [],
-          },
-        })),
-      );
-      return;
-    }
-
-    const preset = animationPresets.find(
-      (item) => item.value === value || item.keyframes === value,
-    );
-
-    if (!preset) {
-      return;
-    }
-
-    const now = Date.now();
-
-    onUpdateElements?.(
-      targetElements.map((element, index) => {
-        const oldAnimation = element.animations[0];
-
-        const animation: SlideElementAnimation = {
-          id: oldAnimation?.id ?? `animation-${element.id}-${now}-${index}`,
-          name: preset.name,
-          type: "enter",
-          duration: oldAnimation?.duration ?? 600,
-          delay: oldAnimation?.delay ?? 0,
-          easing: oldAnimation?.easing ?? "ease-out",
-          keyframes: preset.keyframes,
-        };
-
-        return {
-          elementId: element.id,
-          updates: {
-            animations: [animation],
-          },
-        };
-      }),
-    );
-  }
-
-  /**
-   * Update duration or delay for every checked element that has an animation.
-   */
-  function updateAnimationNumber(
-    key: "duration" | "delay",
-    value: number,
-    options?: PropertyUpdateOptions,
-  ) {
-    const animatedTargets = targetElements.filter(
-      (element) => element.animations.length > 0,
-    );
-
-    if (animatedTargets.length === 0) {
-      return;
-    }
-
-    onUpdateElements?.(
-      animatedTargets.map((element) => {
-        const [firstAnimation, ...otherAnimations] = element.animations;
-
-        return {
-          elementId: element.id,
-          updates: {
-            animations: [
-              {
-                ...firstAnimation,
-                [key]: value,
-              },
-              ...otherAnimations,
-            ],
-          },
-        };
-      }),
       options,
     );
   }
@@ -523,33 +558,18 @@ export function PropertyPanel({
         ) : null}
 
         {activeTab === "animation" ? (
-          targetElements.length > 0 ? (
-            <AnimationTab
-              elements={targetElements}
-              onOpenAnimationWorkspace={onOpenAnimationWorkspace}
-              sharedPreset={sharedAnimationPreset}
-              sharedDuration={
-                typeof sharedAnimationDuration === "number"
-                  ? sharedAnimationDuration
-                  : undefined
-              }
-              sharedDelay={
-                typeof sharedAnimationDelay === "number"
-                  ? sharedAnimationDelay
-                  : undefined
-              }
-              allTargetsHaveAnimation={allTargetsHaveAnimation}
-              onUpdatePreset={updateAnimationPreset}
-              onUpdateNumber={updateAnimationNumber}
-              onBeginChange={onBeginPropertyChange}
-              onFinishChange={onFinishPropertyChange}
-            />
-          ) : (
-            <MultiTargetNotice
-              title="没有动画操作对象"
-              description="请先在基础页勾选至少一个元素。"
-            />
-          )
+          <AnimationTab
+            animationItems={pageAnimationItems}
+            activeAnimationContext={activeAnimationContext}
+            activeClip={activeAnimationClip}
+            activeElement={activeAnimationElement}
+            canAddAnimation={selectedElements.length === 1}
+            onSelectClip={onSelectAnimationClip}
+            onUpdateClipTiming={onUpdateAnimationClipTiming}
+            onOpenAnimationWorkspace={onOpenAnimationWorkspace}
+            onBeginChange={onBeginPropertyChange}
+            onFinishChange={onFinishPropertyChange}
+          />
         ) : null}
 
         {activeTab === "layer" ? (
@@ -770,120 +790,235 @@ function FontTab({
 }
 
 function AnimationTab({
-  elements,
+  animationItems,
+  activeAnimationContext,
+  activeClip,
+  activeElement,
+  canAddAnimation,
+  onSelectClip,
+  onUpdateClipTiming,
   onOpenAnimationWorkspace,
-  sharedPreset,
-  sharedDuration,
-  sharedDelay,
-  allTargetsHaveAnimation,
-  onUpdatePreset,
-  onUpdateNumber,
   onBeginChange,
   onFinishChange,
 }: {
-  elements: SlideElement[];
-  onOpenAnimationWorkspace?: () => void;
-  sharedPreset?: string;
-  sharedDuration?: number;
-  sharedDelay?: number;
-  allTargetsHaveAnimation: boolean;
-  onUpdatePreset: (value: string) => void;
-  onUpdateNumber: (
-    key: "duration" | "delay",
-    value: number,
+  animationItems: PageAnimationItem[];
+  activeAnimationContext?: ActiveAnimationContext;
+  activeClip?: AnimationClip;
+  activeElement?: SlideElement;
+  canAddAnimation: boolean;
+  onSelectClip?: (elementId: string, clipId: string) => void;
+  onUpdateClipTiming?: (
+    command: UpdateAnimationClipTimingCommand,
     options?: PropertyUpdateOptions,
   ) => void;
+  onOpenAnimationWorkspace?: () => void;
   onBeginChange?: () => void;
   onFinishChange?: () => void;
 }) {
   return (
     <div className="space-y-4">
       <section className="rounded-2xl border border-violet-100 bg-violet-50/60 p-4">
-        <h3 className="text-sm font-black text-violet-700">批量动画</h3>
-        <p className="mt-2 text-xs leading-5 text-violet-500">
-          当前动画修改会作用于 {elements.length} 个勾选对象。
-        </p>
-      </section>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-black text-violet-700">动画与交互</h3>
 
-      <section className="rounded-2xl bg-violet-50 p-4">
-        <label className="block text-sm">
-          <span className="mb-1 block text-slate-500">进入动画</span>
+            <p className="mt-1 text-xs leading-5 text-violet-500">
+              当前版本先统一页面动画
+              Clip。点击、悬停和组件状态将在后续阶段接入。
+            </p>
+          </div>
 
-          <select
-            className="w-full rounded-xl bg-white px-3 py-2 text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-violet-300"
-            value={sharedPreset ?? "mixed"}
-            onChange={(event) => onUpdatePreset(event.target.value)}
-          >
-            {sharedPreset === undefined ? (
-              <option value="mixed" disabled>
-                混合
-              </option>
-            ) : null}
-
-            <option value="none">无动画</option>
-
-            {animationPresets.map((preset) => (
-              <option key={preset.value} value={preset.keyframes}>
-                {preset.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
-          <NumberField
-            label="时长(ms)"
-            value={sharedDuration ?? ""}
-            placeholder="混合"
-            min={100}
-            step={100}
-            disabled={!allTargetsHaveAnimation}
-            onBeginChange={onBeginChange}
-            onFinishChange={onFinishChange}
-            onChange={(value) =>
-              onUpdateNumber("duration", value, { recordHistory: false })
-            }
-          />
-
-          <NumberField
-            label="延迟(ms)"
-            value={sharedDelay ?? ""}
-            placeholder="混合"
-            min={0}
-            step={100}
-            disabled={!allTargetsHaveAnimation}
-            onBeginChange={onBeginChange}
-            onFinishChange={onFinishChange}
-            onChange={(value) =>
-              onUpdateNumber("delay", value, { recordHistory: false })
-            }
-          />
+          <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[10px] font-black text-violet-500 shadow-sm">
+            {animationItems.length} 个
+          </span>
         </div>
-
-        {!allTargetsHaveAnimation ? (
-          <p className="mt-3 rounded-xl bg-white/80 p-3 text-xs leading-5 text-violet-500">
-            部分勾选对象尚未设置动画。先统一选择一种动画，
-            再批量修改时长和延迟。
-          </p>
-        ) : null}
-      </section>
-
-      <section className="rounded-2xl border border-violet-100 bg-white p-4">
-        <h3 className="text-sm font-black text-slate-800">高级动画编辑</h3>
-
-        <p className="mt-2 text-xs leading-5 text-slate-500">
-          关键帧数值、位置、增加和删除将在独立动画工作区中编辑，
-          避免挤压右侧快捷属性栏。
-        </p>
 
         <button
           type="button"
           className="mt-3 w-full rounded-xl bg-violet-500 px-4 py-2.5 text-sm font-black text-white shadow-sm transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
-          disabled={!onOpenAnimationWorkspace}
+          disabled={!canAddAnimation || !onOpenAnimationWorkspace}
+          title={
+            canAddAnimation ? "打开动画工作区并添加动画" : "请先只选择一个元素"
+          }
           onClick={onOpenAnimationWorkspace}
         >
-          进入动画工作区
+          ＋ 添加动画
         </button>
+      </section>
+
+      {activeClip && activeAnimationContext ? (
+        <section className="rounded-2xl border border-violet-200 bg-white p-4 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="text-[10px] font-black uppercase tracking-[0.22em] text-violet-500">
+                当前动画
+              </p>
+
+              <h3 className="mt-1 truncate text-sm font-black text-slate-800">
+                {activeClip.name}
+              </h3>
+
+              <p className="mt-1 truncate text-xs text-slate-400">
+                {activeElement?.name ?? activeAnimationContext.elementId}
+                {" · "}
+                {getAnimationCategoryLabel(activeClip.category)}
+              </p>
+            </div>
+
+            <span className="shrink-0 rounded-full bg-violet-100 px-2.5 py-1 text-[10px] font-black text-violet-600">
+              已选中
+            </span>
+          </div>
+
+          <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+            <NumberField
+              label="开始时间(ms)"
+              value={activeClip.startMs}
+              min={0}
+              step={10}
+              disabled={!onUpdateClipTiming}
+              onBeginChange={onBeginChange}
+              onFinishChange={onFinishChange}
+              onChange={(startMs) =>
+                onUpdateClipTiming?.(
+                  {
+                    clipId: activeClip.id,
+                    updates: {
+                      startMs,
+                    },
+                  },
+                  {
+                    recordHistory: false,
+                  },
+                )
+              }
+            />
+
+            <NumberField
+              label="持续时间(ms)"
+              value={activeClip.durationMs}
+              min={1}
+              step={10}
+              disabled={!onUpdateClipTiming}
+              onBeginChange={onBeginChange}
+              onFinishChange={onFinishChange}
+              onChange={(durationMs) =>
+                onUpdateClipTiming?.(
+                  {
+                    clipId: activeClip.id,
+                    updates: {
+                      durationMs,
+                    },
+                  },
+                  {
+                    recordHistory: false,
+                  },
+                )
+              }
+            />
+          </div>
+
+          <button
+            type="button"
+            className="mt-3 w-full rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-black text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+            disabled={!onOpenAnimationWorkspace}
+            onClick={onOpenAnimationWorkspace}
+          >
+            详细编辑轨道与关键帧
+          </button>
+
+          <p className="mt-3 rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-500">
+            此处只修改当前 Clip 的时间参数，不会重置同一元素的其他动画。
+          </p>
+        </section>
+      ) : (
+        <section className="rounded-2xl border border-dashed border-violet-200 bg-white p-4">
+          <h3 className="text-sm font-black text-slate-700">尚未选择动画</h3>
+
+          <p className="mt-2 text-xs leading-5 text-slate-400">
+            从下方页面动画列表、底部时间轴或高级轨道编辑器中选择一个 Clip。
+          </p>
+        </section>
+      )}
+
+      <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-black text-slate-800">当前页面动画</h3>
+
+            <p className="mt-1 text-xs text-slate-400">
+              按实际开始时间排列，与底部时间轴保持一致
+            </p>
+          </div>
+
+          <span className="rounded-full bg-white px-2.5 py-1 text-[10px] font-black text-slate-500 shadow-sm">
+            V2
+          </span>
+        </div>
+
+        {animationItems.length > 0 ? (
+          <div className="mt-3 space-y-2">
+            {animationItems.map((item, index) => {
+              const active = item.clip.id === activeAnimationContext?.clipId;
+
+              return (
+                <button
+                  key={item.clip.id}
+                  type="button"
+                  className={`w-full rounded-xl border p-3 text-left transition ${
+                    active
+                      ? "border-violet-300 bg-white ring-2 ring-violet-200"
+                      : "border-transparent bg-white hover:border-violet-200 hover:bg-violet-50/60"
+                  }`}
+                  disabled={!onSelectClip}
+                  onClick={() => onSelectClip?.(item.elementId, item.clip.id)}
+                >
+                  <span className="flex items-start gap-3">
+                    <span
+                      className={`flex h-7 min-w-7 items-center justify-center rounded-full px-1 text-xs font-black text-white ${
+                        active ? "bg-violet-600" : "bg-slate-400"
+                      }`}
+                    >
+                      {index + 1}
+                    </span>
+
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="min-w-0 truncate text-xs font-black text-slate-800">
+                          {item.elementName}
+                          {" · "}
+                          {item.clip.name}
+                        </span>
+
+                        <span className="shrink-0 rounded-full bg-violet-50 px-2 py-0.5 text-[9px] font-black text-violet-500">
+                          {getAnimationCategoryLabel(item.clip.category)}
+                        </span>
+                      </span>
+
+                      <span className="mt-1 block truncate text-[10px] text-slate-400">
+                        {item.sequenceName}
+                        {" · "}
+                        {item.clip.startMs}ms
+                        {" → "}
+                        {item.clip.startMs + item.clip.durationMs}
+                        ms
+                        {!item.clip.enabled ? " · 已停用" : ""}
+                      </span>
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-white p-5 text-center">
+            <p className="text-sm font-bold text-slate-500">当前页面暂无动画</p>
+
+            <p className="mt-1 text-xs leading-5 text-slate-400">
+              选择一个元素，然后点击上方“添加动画”。
+            </p>
+          </div>
+        )}
       </section>
     </div>
   );

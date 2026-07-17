@@ -869,10 +869,14 @@ function SlideElementView({
   }, [isEditing]);
 
   /**
-   * Play compiled Animation Schema V2 clips through the Web Animations API.
+   * Play compiled Animation Schema V2 Clips through the Web Animations API.
    *
-   * Animations run on the inner content node so editor positioning and element
-   * rotation on the outer node remain independent.
+   * Do not create every delayed animation immediately. A future Clip using
+   * fill: "both" would otherwise apply its first frame during the delay period
+   * and visually cover an earlier Clip on the same element.
+   *
+   * Each Clip is created only when its absolute start time arrives. This allows
+   * several Clips targeting the same element to play in timeline order.
    */
   useEffect(() => {
     const animationNode = animationNodeRef.current;
@@ -881,37 +885,78 @@ function SlideElementView({
       return;
     }
 
-    const runningAnimations = compiledAnimations.map((compiledAnimation) => {
-      const keyframes = compiledAnimation.keyframes.map(
-        (frame): Keyframe => ({
-          offset: frame.offset,
-          ...(frame.opacity !== undefined ? { opacity: frame.opacity } : {}),
-          ...(frame.transform !== undefined
-            ? { transform: frame.transform }
-            : {}),
-          ...(frame.easing !== undefined ? { easing: frame.easing } : {}),
-        }),
-      );
+    const runningAnimations: Animation[] = [];
+    const startTimers: number[] = [];
+    let disposed = false;
 
-      const runningAnimation = animationNode.animate(keyframes, {
-        delay: compiledAnimation.timing.delay,
-        duration: compiledAnimation.timing.duration,
-        fill: compiledAnimation.timing.fill,
-        iterations: compiledAnimation.timing.iterations,
-        direction: compiledAnimation.timing.direction,
+    compiledAnimations.forEach((compiledAnimation) => {
+      const startDelay = Math.max(0, compiledAnimation.timing.delay);
+
+      const timerId = window.setTimeout(() => {
+        if (disposed) {
+          return;
+        }
+
+        const keyframes = compiledAnimation.keyframes.map(
+          (frame): Keyframe => ({
+            offset: frame.offset,
+
+            ...(frame.opacity !== undefined
+              ? {
+                  opacity: frame.opacity,
+                }
+              : {}),
+
+            ...(frame.transform !== undefined
+              ? {
+                  transform: frame.transform,
+                }
+              : {}),
+
+            ...(frame.easing !== undefined
+              ? {
+                  easing: frame.easing,
+                }
+              : {}),
+          }),
+        );
+
+        if (keyframes.length === 0) {
+          return;
+        }
 
         /**
-         * Individual keyframes already contain their own easing values.
+         * The timer already handles the Clip's absolute start time, so the
+         * Web Animation itself must start without another delay.
          */
-        easing: "linear",
-      });
+        const runningAnimation = animationNode.animate(keyframes, {
+          delay: 0,
+          duration: compiledAnimation.timing.duration,
+          fill: compiledAnimation.timing.fill,
+          iterations: compiledAnimation.timing.iterations,
+          direction: compiledAnimation.timing.direction,
 
-      runningAnimation.playbackRate = compiledAnimation.playbackRate;
+          /**
+           * Individual keyframes contain their own segment easing.
+           */
+          easing: "linear",
+        });
 
-      return runningAnimation;
+        runningAnimation.playbackRate = compiledAnimation.playbackRate;
+
+        runningAnimations.push(runningAnimation);
+      }, startDelay);
+
+      startTimers.push(timerId);
     });
 
     return () => {
+      disposed = true;
+
+      startTimers.forEach((timerId) => {
+        window.clearTimeout(timerId);
+      });
+
       runningAnimations.forEach((runningAnimation) => {
         runningAnimation.cancel();
       });
@@ -919,15 +964,18 @@ function SlideElementView({
   }, [compiledAnimations, isEditing]);
 
   /**
-   * Apply the first compiled frame before the browser animation starts.
-   *
-   * This prevents entrance animations from briefly flashing their final state
-   * during the frame before the Web Animations effect is created.
+   * Only a Clip using backwards fill should affect the element before its start
+   * time. Select the earliest matching Clip for the initial no-flash frame.
    */
-  const initialCompiledFrame =
-    !isEditing && compiledAnimations.length > 0
-      ? compiledAnimations[0].keyframes[0]
-      : undefined;
+  const initialCompiledAnimation = !isEditing
+    ? compiledAnimations.find(
+        (compiledAnimation) =>
+          compiledAnimation.timing.fill === "backwards" ||
+          compiledAnimation.timing.fill === "both",
+      )
+    : undefined;
+
+  const initialCompiledFrame = initialCompiledAnimation?.keyframes[0];
 
   const outerStyle: CSSProperties = {
     left: style.x * scale,

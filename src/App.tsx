@@ -25,16 +25,22 @@ import {
   normalizeProjectAnimationScenes,
 } from "./utils/animationSchema";
 import {
+  addAnimationClipToSlide,
   addAnimationKeyframeToSlide,
   applyElementBatchUpdatesToSlide,
+  deleteAnimationClipFromSlide,
   deleteAnimationKeyframeFromSlide,
+  duplicateAnimationClipInSlide,
   updateAnimationClipEasingInSlide,
   updateAnimationClipTimingInSlide,
   updateAnimationKeyframeEasingInSlide,
   updateAnimationKeyframeOffsetInSlide,
   updateAnimationKeyframeValueInSlide,
+  type AddAnimationClipCommand,
   type AddAnimationKeyframeCommand,
+  type DeleteAnimationClipCommand,
   type DeleteAnimationKeyframeCommand,
+  type DuplicateAnimationClipCommand,
   type UpdateAnimationClipEasingCommand,
   type UpdateAnimationClipTimingCommand,
   type UpdateAnimationKeyframeEasingCommand,
@@ -1843,6 +1849,110 @@ function App() {
   }
 
   /**
+   * Add one preset animation Clip to the active slide.
+   */
+  function handleAddAnimationClip(command: AddAnimationClipCommand) {
+    commitProjectChange((currentProject) => {
+      let changed = false;
+
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        const nextSlide = addAnimationClipToSlide(slide, command);
+
+        if (nextSlide === slide) {
+          return slide;
+        }
+
+        changed = true;
+        return nextSlide;
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    });
+  }
+
+  /**
+   * Duplicate one Clip with its customized tracks and keyframes.
+   */
+  function handleDuplicateAnimationClip(
+    command: DuplicateAnimationClipCommand,
+  ) {
+    commitProjectChange((currentProject) => {
+      let changed = false;
+
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        const nextSlide = duplicateAnimationClipInSlide(slide, command);
+
+        if (nextSlide === slide) {
+          return slide;
+        }
+
+        changed = true;
+        return nextSlide;
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    });
+  }
+
+  /**
+   * Delete one Clip and its compatibility animation mirror.
+   */
+  function handleDeleteAnimationClip(command: DeleteAnimationClipCommand) {
+    commitProjectChange((currentProject) => {
+      let changed = false;
+
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        const nextSlide = deleteAnimationClipFromSlide(slide, command);
+
+        if (nextSlide === slide) {
+          return slide;
+        }
+
+        changed = true;
+        return nextSlide;
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    });
+  }
+
+  /**
    * Move one element or the whole current multi-selection.
    *
    * SlideCanvas reports the dragged element's next absolute position. App converts
@@ -3112,6 +3222,9 @@ function App() {
         elements={selectedElements}
         onClose={() => setAnimationPanelOpen(false)}
         onReplayAnimation={() => setAnimationPreviewKey((key) => key + 1)}
+        onAddClip={handleAddAnimationClip}
+        onDuplicateClip={handleDuplicateAnimationClip}
+        onDeleteClip={handleDeleteAnimationClip}
         onUpdateClipTiming={handleUpdateAnimationClipTiming}
         onUpdateElements={handleUpdateElements}
         onUpdateClipTimings={handleUpdateAnimationClipTimings}

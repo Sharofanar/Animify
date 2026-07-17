@@ -6,8 +6,11 @@ import {
 } from "react";
 import type { AnimationScene, SlideElement } from "../../types/presentation";
 import type {
+  AddAnimationClipCommand,
   AddAnimationKeyframeCommand,
+  DeleteAnimationClipCommand,
   DeleteAnimationKeyframeCommand,
+  DuplicateAnimationClipCommand,
   UpdateAnimationClipEasingCommand,
   UpdateAnimationClipTimingCommand,
   UpdateAnimationKeyframeEasingCommand,
@@ -30,6 +33,9 @@ type AnimationFloatingPanelProps = {
   elements: SlideElement[];
   onClose?: () => void;
   onReplayAnimation?: () => void;
+  onAddClip?: (command: AddAnimationClipCommand) => void;
+  onDuplicateClip?: (command: DuplicateAnimationClipCommand) => void;
+  onDeleteClip?: (command: DeleteAnimationClipCommand) => void;
   onUpdateClipTiming?: (
     command: UpdateAnimationClipTimingCommand,
     options?: AnimationEditOptions,
@@ -134,6 +140,9 @@ export function AnimationFloatingPanel({
   elements,
   onClose,
   onReplayAnimation,
+  onAddClip,
+  onDuplicateClip,
+  onDeleteClip,
   onUpdateClipTiming,
   onUpdateElements,
   onUpdateClipTimings,
@@ -323,6 +332,9 @@ export function AnimationFloatingPanel({
             <AnimationTrackInspector
               scene={scene}
               elements={[focusedElement]}
+              onAddClip={onAddClip}
+              onDuplicateClip={onDuplicateClip}
+              onDeleteClip={onDeleteClip}
               onUpdateClipTiming={onUpdateClipTiming}
               onUpdateKeyframeValue={onUpdateKeyframeValue}
               onUpdateKeyframeEasing={onUpdateKeyframeEasing}
@@ -353,6 +365,9 @@ export function AnimationFloatingPanel({
           <AnimationTrackInspector
             scene={scene}
             elements={elements}
+            onAddClip={onAddClip}
+            onDuplicateClip={onDuplicateClip}
+            onDeleteClip={onDeleteClip}
             onUpdateClipTiming={onUpdateClipTiming}
             onUpdateKeyframeValue={onUpdateKeyframeValue}
             onUpdateKeyframeEasing={onUpdateKeyframeEasing}

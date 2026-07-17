@@ -204,6 +204,12 @@ function createHtmlDocument(project: PresentationProject) {
     // no matter which slide was active when the user clicked export.
     let activeSlideIndex = 0;
 
+    /**
+     * Keep delayed Clip timers so slide switching and window resizing can cancel
+     * work scheduled for the previous rendered slide.
+     */
+    let pendingAnimationTimers = [];
+
     const app = document.getElementById("app");
     const prevButton = document.getElementById("prevButton");
     const nextButton = document.getElementById("nextButton");
@@ -232,62 +238,147 @@ function createHtmlDocument(project: PresentationProject) {
      * Animation data is already compiled before export, so this player only needs
      * to create Web Animations API instances from the serialized keyframes.
      */
-    function playSlideAnimations(slideNode, compiledSlideAnimations) {
-      const animationNodes = slideNode.querySelectorAll("[data-element-id]");
+    function playSlideAnimations(
+      slideNode,
+      compiledSlideAnimations,
+    ) {
+      /**
+       * Cancel delayed Clips belonging to the previous render before scheduling
+       * the current slide.
+       */
+      pendingAnimationTimers.forEach(
+        (timerId) => {
+          window.clearTimeout(timerId);
+        },
+      );
+
+      pendingAnimationTimers = [];
+
+      const animationNodes =
+        slideNode.querySelectorAll(
+          "[data-element-id]",
+        );
 
       animationNodes.forEach((node) => {
-        // Cancel existing animations before replaying a slide or handling resize.
-        node.getAnimations().forEach((animation) => {
-          animation.cancel();
-        });
+        node
+          .getAnimations()
+          .forEach((animation) => {
+            animation.cancel();
+          });
 
-        const elementId = node.dataset.elementId;
+        const elementId =
+          node.dataset.elementId;
+
         const elementAnimations =
-          compiledSlideAnimations?.byElementId?.[elementId] || [];
+          compiledSlideAnimations
+            ?.byElementId?.[elementId] || [];
 
-        elementAnimations.forEach((compiledAnimation) => {
-          const keyframes = (compiledAnimation.keyframes || []).map((frame) => {
-            const keyframe = {
-              offset: Number(frame.offset ?? 0),
-            };
+        elementAnimations.forEach(
+          (compiledAnimation) => {
+            const timing =
+              compiledAnimation.timing || {};
 
-            if (typeof frame.opacity === "number") {
-              keyframe.opacity = frame.opacity;
-            }
+            const startDelay = Math.max(
+              0,
+              Number(timing.delay ?? 0),
+            );
 
-            if (typeof frame.transform === "string") {
-              keyframe.transform = frame.transform;
-            }
+            /**
+             * Create a Clip only when its start time arrives. Creating all Clips
+             * immediately would let a later fill: "both" animation cover earlier
+             * animations while it is still waiting inside its delay period.
+             */
+            const timerId = window.setTimeout(
+              () => {
+                if (!node.isConnected) {
+                  return;
+                }
 
-            if (typeof frame.easing === "string") {
-              keyframe.easing = frame.easing;
-            }
+                const keyframes = (
+                  compiledAnimation.keyframes ||
+                  []
+                ).map((frame) => {
+                  const keyframe = {
+                    offset: Number(
+                      frame.offset ?? 0,
+                    ),
+                  };
 
-            return keyframe;
-          });
+                  if (
+                    typeof frame.opacity ===
+                    "number"
+                  ) {
+                    keyframe.opacity =
+                      frame.opacity;
+                  }
 
-          if (keyframes.length === 0) {
-            return;
-          }
+                  if (
+                    typeof frame.transform ===
+                    "string"
+                  ) {
+                    keyframe.transform =
+                      frame.transform;
+                  }
 
-          const timing = compiledAnimation.timing || {};
+                  if (
+                    typeof frame.easing ===
+                    "string"
+                  ) {
+                    keyframe.easing =
+                      frame.easing;
+                  }
 
-          const runningAnimation = node.animate(keyframes, {
-            delay: Math.max(0, Number(timing.delay ?? 0)),
-            duration: Math.max(1, Number(timing.duration ?? 1)),
-            fill: timing.fill || "both",
-            iterations: Math.max(1, Number(timing.iterations ?? 1)),
-            direction: timing.direction || "normal",
+                  return keyframe;
+                });
 
-            // Every compiled keyframe can contain its own segment easing.
-            easing: "linear",
-          });
+                if (
+                  keyframes.length === 0
+                ) {
+                  return;
+                }
 
-          runningAnimation.playbackRate =
-            Number(compiledAnimation.playbackRate) > 0
-              ? Number(compiledAnimation.playbackRate)
-              : 1;
-        });
+                const runningAnimation =
+                  node.animate(keyframes, {
+                    delay: 0,
+                    duration: Math.max(
+                      1,
+                      Number(
+                        timing.duration ?? 1,
+                      ),
+                    ),
+                    fill:
+                      timing.fill || "both",
+                    iterations: Math.max(
+                      1,
+                      Number(
+                        timing.iterations ?? 1,
+                      ),
+                    ),
+                    direction:
+                      timing.direction ||
+                      "normal",
+
+                    // Compiled keyframes contain their own segment easing.
+                    easing: "linear",
+                  });
+
+                runningAnimation.playbackRate =
+                  Number(
+                    compiledAnimation.playbackRate,
+                  ) > 0
+                    ? Number(
+                        compiledAnimation.playbackRate,
+                      )
+                    : 1;
+              },
+              startDelay,
+            );
+
+            pendingAnimationTimers.push(
+              timerId,
+            );
+          },
+        );
       });
     }
 

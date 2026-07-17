@@ -8,13 +8,17 @@ import type {
   SlideElement,
 } from "../../types/presentation";
 import type {
+  AddAnimationClipCommand,
   AddAnimationKeyframeCommand,
+  DeleteAnimationClipCommand,
   DeleteAnimationKeyframeCommand,
+  DuplicateAnimationClipCommand,
   UpdateAnimationClipTimingCommand,
   UpdateAnimationKeyframeEasingCommand,
   UpdateAnimationKeyframeOffsetCommand,
   UpdateAnimationKeyframeValueCommand,
 } from "../../utils/animationCommands";
+import { animationPresets } from "../../utils/animationPresets";
 
 /**
  * Keep the inspector's input limits consistent with the V2 command layer.
@@ -59,6 +63,9 @@ type InspectorUpdateOptions = {
 type AnimationTrackInspectorProps = {
   scene?: AnimationScene;
   elements: SlideElement[];
+  onAddClip?: (command: AddAnimationClipCommand) => void;
+  onDuplicateClip?: (command: DuplicateAnimationClipCommand) => void;
+  onDeleteClip?: (command: DeleteAnimationClipCommand) => void;
   onUpdateClipTiming?: (
     command: UpdateAnimationClipTimingCommand,
     options?: InspectorUpdateOptions,
@@ -97,6 +104,9 @@ type VisibleClip = {
 export function AnimationTrackInspector({
   scene,
   elements,
+  onAddClip,
+  onDuplicateClip,
+  onDeleteClip,
   onUpdateClipTiming,
   onUpdateKeyframeValue,
   onUpdateKeyframeEasing,
@@ -118,6 +128,36 @@ export function AnimationTrackInspector({
     elementNameById,
   );
 
+  const [newClipPresetId, setNewClipPresetId] = useState(
+    animationPresets[0]?.value ?? "fade-in",
+  );
+  const [activeClipId, setActiveClipId] = useState<string | null>(null);
+
+  const selectedPreset = animationPresets.find(
+    (preset) => preset.value === newClipPresetId,
+  );
+
+  const resolvedActiveClipId = visibleClips.some(
+    (item) => item.clip.id === activeClipId,
+  )
+    ? activeClipId
+    : (visibleClips[0]?.clip.id ?? null);
+
+  function handleAddClip() {
+    const element = elements[0];
+
+    if (!element || elements.length !== 1 || !selectedPreset) {
+      return;
+    }
+
+    onAddClip?.({
+      elementId: element.id,
+      presetId: selectedPreset.keyframes,
+      name: selectedPreset.name,
+      category: "enter",
+    });
+  }
+
   return (
     <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
       <div className="flex items-start justify-between gap-3">
@@ -129,9 +169,52 @@ export function AnimationTrackInspector({
         </div>
 
         <span className="shrink-0 rounded-full bg-slate-200 px-2.5 py-1 text-[11px] font-black text-slate-500">
-          缓动可编辑
+          多 Clip
         </span>
       </div>
+
+      {elements.length === 1 ? (
+        <section className="mt-4 rounded-2xl border border-violet-100 bg-violet-50/60 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h4 className="text-xs font-black text-slate-700">
+                添加动画 Clip
+              </h4>
+
+              <p className="mt-1 text-[10px] leading-4 text-slate-400">
+                新动画会自动接在当前元素最后一个 Clip 之后。
+              </p>
+            </div>
+
+            <span className="rounded-full bg-white px-2 py-1 text-[9px] font-black text-violet-500 shadow-sm">
+              {visibleClips.length} 个
+            </span>
+          </div>
+
+          <div className="mt-3 grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+            <select
+              className="min-w-0 rounded-xl bg-white px-3 py-2 text-xs font-bold text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-violet-300"
+              value={newClipPresetId}
+              onChange={(event) => setNewClipPresetId(event.target.value)}
+            >
+              {animationPresets.map((preset) => (
+                <option key={preset.value} value={preset.value}>
+                  {preset.label}
+                </option>
+              ))}
+            </select>
+
+            <button
+              type="button"
+              className="rounded-xl bg-violet-500 px-4 py-2 text-xs font-black text-white transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:bg-slate-300"
+              disabled={!onAddClip || !selectedPreset}
+              onClick={handleAddClip}
+            >
+              + 添加
+            </button>
+          </div>
+        </section>
+      ) : null}
 
       {visibleClips.length > 0 ? (
         <div className="mt-4 space-y-3">
@@ -140,6 +223,10 @@ export function AnimationTrackInspector({
               key={item.clip.id}
               item={item}
               defaultOpen={index === 0}
+              active={item.clip.id === resolvedActiveClipId}
+              onActivate={() => setActiveClipId(item.clip.id)}
+              onDuplicateClip={onDuplicateClip}
+              onDeleteClip={onDeleteClip}
               onUpdateClipTiming={onUpdateClipTiming}
               onUpdateKeyframeValue={onUpdateKeyframeValue}
               onUpdateKeyframeEasing={onUpdateKeyframeEasing}
@@ -168,6 +255,10 @@ export function AnimationTrackInspector({
 function AnimationClipCard({
   item,
   defaultOpen,
+  active,
+  onActivate,
+  onDuplicateClip,
+  onDeleteClip,
   onUpdateClipTiming,
   onUpdateKeyframeValue,
   onUpdateKeyframeEasing,
@@ -179,6 +270,10 @@ function AnimationClipCard({
 }: {
   item: VisibleClip;
   defaultOpen: boolean;
+  active: boolean;
+  onActivate: () => void;
+  onDuplicateClip?: (command: DuplicateAnimationClipCommand) => void;
+  onDeleteClip?: (command: DeleteAnimationClipCommand) => void;
   onUpdateClipTiming?: (
     command: UpdateAnimationClipTimingCommand,
     options?: InspectorUpdateOptions,
@@ -204,13 +299,22 @@ function AnimationClipCard({
   const { clip, sequenceName, targetNames } = item;
 
   return (
-    <article className="overflow-hidden rounded-2xl border border-violet-100 bg-white shadow-sm">
-      <button
-        type="button"
-        className="flex w-full items-start justify-between gap-3 p-3 text-left transition hover:bg-violet-50/60"
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span className="min-w-0">
+    <article
+      className={`overflow-hidden rounded-2xl border bg-white shadow-sm transition ${
+        active
+          ? "border-violet-300 ring-2 ring-violet-200"
+          : "border-violet-100"
+      }`}
+    >
+      <div className="flex items-start gap-2 p-3 transition hover:bg-violet-50/60">
+        <button
+          type="button"
+          className="min-w-0 flex-1 text-left"
+          onClick={() => {
+            onActivate();
+            setOpen((current) => !current);
+          }}
+        >
           <span className="block truncate text-sm font-black text-slate-800">
             {clip.name}
           </span>
@@ -218,12 +322,42 @@ function AnimationClipCard({
           <span className="mt-1 block truncate text-[11px] text-slate-400">
             {targetNames.join("、")}
           </span>
-        </span>
+        </button>
 
-        <span className="shrink-0 rounded-full bg-violet-100 px-2.5 py-1 text-[11px] font-black text-violet-600">
-          {open ? "收起" : "展开"}
-        </span>
-      </button>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            className="rounded-lg bg-slate-100 px-2 py-1 text-[10px] font-black text-slate-500 transition hover:bg-violet-100 hover:text-violet-600 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={!onDuplicateClip}
+            onClick={() => {
+              onActivate();
+              onDuplicateClip?.({ clipId: clip.id });
+            }}
+          >
+            复制
+          </button>
+
+          <button
+            type="button"
+            className="rounded-lg bg-rose-50 px-2 py-1 text-[10px] font-black text-rose-500 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={!onDeleteClip}
+            onClick={() => onDeleteClip?.({ clipId: clip.id })}
+          >
+            删除
+          </button>
+
+          <button
+            type="button"
+            className="rounded-full bg-violet-100 px-2.5 py-1 text-[11px] font-black text-violet-600"
+            onClick={() => {
+              onActivate();
+              setOpen((current) => !current);
+            }}
+          >
+            {open ? "收起" : "展开"}
+          </button>
+        </div>
+      </div>
 
       {open ? (
         <div className="border-t border-violet-100 p-3">

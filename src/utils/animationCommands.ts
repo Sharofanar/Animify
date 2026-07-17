@@ -63,6 +63,23 @@ export type DeleteAnimationKeyframeCommand = {
   keyframeId: string;
 };
 
+export type AddAnimationClipCommand = {
+  elementId: string;
+  presetId: string;
+  name: string;
+  category?: SlideElementAnimation["type"];
+  durationMs?: number;
+  easing?: string;
+};
+
+export type DuplicateAnimationClipCommand = {
+  clipId: string;
+};
+
+export type DeleteAnimationClipCommand = {
+  clipId: string;
+};
+
 export type UpdateAnimationClipTimingCommand = {
   clipId: string;
   updates: {
@@ -166,6 +183,203 @@ export function applyElementBatchUpdatesToSlide(
       nextElements,
       animationChangedElementIds,
     ),
+  };
+}
+
+/**
+ * Add one preset-based Clip to an element.
+ *
+ * The compatibility animation entry remains on the element while the command
+ * layer incrementally creates the matching V2 Clip. New Clips are placed after
+ * the final Clip already targeting the same element.
+ */
+export function addAnimationClipToSlide(
+  slide: Slide,
+  command: AddAnimationClipCommand,
+): Slide {
+  const element = slide.elements.find(
+    (currentElement) => currentElement.id === command.elementId,
+  );
+
+  if (!element) {
+    return slide;
+  }
+
+  const scene =
+    slide.animationScene?.schemaVersion === 2
+      ? slide.animationScene
+      : createAnimationSceneFromLegacyElements(slide.id, slide.elements);
+
+  const startMs = getLastTargetClipEndMs(scene, [element.id]);
+  const animationId = createUniqueLegacyAnimationId(slide, element.id);
+
+  const animation: SlideElementAnimation = {
+    id: animationId,
+    name: command.name.trim() || "新动画",
+    type: command.category ?? "enter",
+    duration: Math.max(1, command.durationMs ?? 600),
+    delay: startMs,
+    easing: command.easing?.trim() || "ease-out",
+    keyframes: command.presetId,
+  };
+
+  return applyElementBatchUpdatesToSlide(slide, [
+    {
+      elementId: element.id,
+      updates: {
+        animations: [...element.animations, animation],
+      },
+    },
+  ]);
+}
+
+/**
+ * Duplicate one V2 Clip without rebuilding its customized tracks.
+ *
+ * Track values, keyframe positions, and easing definitions are copied with new
+ * IDs. The compatibility animation mirror is duplicated when the source Clip
+ * originated from a legacy-compatible preset.
+ */
+export function duplicateAnimationClipInSlide(
+  slide: Slide,
+  command: DuplicateAnimationClipCommand,
+): Slide {
+  const scene = slide.animationScene;
+  const sourceClip = scene?.clips[command.clipId];
+
+  if (!scene || scene.schemaVersion !== 2 || !sourceClip) {
+    return slide;
+  }
+
+  const targetElementIds = sourceClip.targets.map((target) => target.elementId);
+  const startMs = getLastTargetClipEndMs(scene, targetElementIds);
+  const nextClipId = createUniqueClipId(scene, `${sourceClip.id}-copy`);
+  const sourceLegacyAnimationId = getLegacyAnimationId(sourceClip);
+
+  const nextLegacyAnimationId = sourceLegacyAnimationId
+    ? createUniqueLegacyAnimationId(
+        slide,
+        targetElementIds[0] ?? "element",
+      )
+    : undefined;
+
+  const nextClip = cloneAnimationClipForDuplicate(
+    sourceClip,
+    nextClipId,
+    nextLegacyAnimationId,
+    startMs,
+  );
+
+  const nextScene = cloneAnimationScene(scene);
+  nextScene.clips[nextClipId] = nextClip;
+
+  const insertedIntoSequence = insertClipAfterSourceInSequences(
+    nextScene,
+    sourceClip.id,
+    nextClipId,
+  );
+
+  if (!insertedIntoSequence) {
+    ensureClipInLegacySequence(nextScene, slide.id, nextClipId);
+  }
+
+  nextScene.revision = Math.max(1, scene.revision + 1);
+
+  let elementsChanged = false;
+
+  const nextElements =
+    sourceLegacyAnimationId && nextLegacyAnimationId
+      ? slide.elements.map((element) => {
+          if (!targetElementIds.includes(element.id)) {
+            return element;
+          }
+
+          const sourceAnimation = element.animations.find(
+            (animation) => animation.id === sourceLegacyAnimationId,
+          );
+
+          if (!sourceAnimation) {
+            return element;
+          }
+
+          elementsChanged = true;
+
+          return {
+            ...element,
+            animations: [
+              ...element.animations,
+              {
+                ...sourceAnimation,
+                id: nextLegacyAnimationId,
+                name: `${sourceAnimation.name} 副本`,
+                delay: startMs,
+                duration: sourceClip.durationMs,
+              },
+            ],
+          };
+        })
+      : slide.elements;
+
+  return {
+    ...slide,
+    elements: elementsChanged ? nextElements : slide.elements,
+    animationScene: nextScene,
+  };
+}
+
+/**
+ * Delete one Clip and remove its temporary compatibility animation entry.
+ */
+export function deleteAnimationClipFromSlide(
+  slide: Slide,
+  command: DeleteAnimationClipCommand,
+): Slide {
+  const scene = slide.animationScene;
+  const clip = scene?.clips[command.clipId];
+
+  if (!scene || scene.schemaVersion !== 2 || !clip) {
+    return slide;
+  }
+
+  const legacyAnimationId = getLegacyAnimationId(clip);
+  const targetElementIds = new Set(
+    clip.targets.map((target) => target.elementId),
+  );
+  const nextScene = cloneAnimationScene(scene);
+
+  removeClipFromScene(nextScene, clip.id);
+  removeEmptySequences(nextScene);
+  nextScene.revision = Math.max(1, scene.revision + 1);
+
+  let elementsChanged = false;
+
+  const nextElements = legacyAnimationId
+    ? slide.elements.map((element) => {
+        if (!targetElementIds.has(element.id)) {
+          return element;
+        }
+
+        const nextAnimations = element.animations.filter(
+          (animation) => animation.id !== legacyAnimationId,
+        );
+
+        if (nextAnimations.length === element.animations.length) {
+          return element;
+        }
+
+        elementsChanged = true;
+
+        return {
+          ...element,
+          animations: nextAnimations,
+        };
+      })
+    : slide.elements;
+
+  return {
+    ...slide,
+    elements: elementsChanged ? nextElements : slide.elements,
+    animationScene: nextScene,
   };
 }
 
@@ -1567,6 +1781,157 @@ function removeEmptyLegacySequence(scene: AnimationScene, slideId: string) {
   scene.sequences = nextSequences;
   scene.sequenceOrder = scene.sequenceOrder.filter(
     (currentSequenceId) => currentSequenceId !== sequenceId,
+  );
+}
+
+function getLastTargetClipEndMs(scene: AnimationScene, elementIds: string[]) {
+  const targetElementIds = new Set(elementIds);
+
+  return Object.values(scene.clips).reduce((latestEndMs, clip) => {
+    const targetsSelectedElement = clip.targets.some((target) =>
+      targetElementIds.has(target.elementId),
+    );
+
+    if (!targetsSelectedElement) {
+      return latestEndMs;
+    }
+
+    return Math.max(latestEndMs, clip.startMs + clip.durationMs);
+  }, 0);
+}
+
+function createUniqueLegacyAnimationId(slide: Slide, elementId: string) {
+  const existingAnimationIds = new Set(
+    slide.elements.flatMap((element) =>
+      element.animations.map((animation) => animation.id),
+    ),
+  );
+
+  const baseId = `animation-${elementId}-${Date.now()}`;
+  let nextId = baseId;
+  let suffix = 1;
+
+  while (existingAnimationIds.has(nextId)) {
+    nextId = `${baseId}-${suffix}`;
+    suffix += 1;
+  }
+
+  return nextId;
+}
+
+function createUniqueClipId(scene: AnimationScene, preferredBaseId: string) {
+  const safeBaseId = preferredBaseId.replace(/[^a-zA-Z0-9-_]/g, "-");
+  const timestampedBaseId = `${safeBaseId}-${Date.now()}`;
+  let nextId = timestampedBaseId;
+  let suffix = 1;
+
+  while (scene.clips[nextId]) {
+    nextId = `${timestampedBaseId}-${suffix}`;
+    suffix += 1;
+  }
+
+  return nextId;
+}
+
+function cloneAnimationClipForDuplicate(
+  sourceClip: AnimationClip,
+  nextClipId: string,
+  nextLegacyAnimationId: string | undefined,
+  startMs: number,
+): AnimationClip {
+  const metadata: Record<string, string | number | boolean> = {
+    ...sourceClip.metadata,
+    customized: true,
+  };
+
+  if (nextLegacyAnimationId) {
+    metadata.legacyAnimationId = nextLegacyAnimationId;
+  } else {
+    delete metadata.legacyAnimationId;
+  }
+
+  return {
+    ...sourceClip,
+    id: nextClipId,
+    name: `${sourceClip.name} 副本`,
+    targets: sourceClip.targets.map((target) => ({
+      ...target,
+      subTarget: target.subTarget ? { ...target.subTarget } : undefined,
+    })),
+    startMs,
+    tracks: sourceClip.tracks.map((track, trackIndex) => {
+      const nextTrackId = `${nextClipId}-track-${trackIndex}`;
+
+      return {
+        ...track,
+        id: nextTrackId,
+        keyframes: track.keyframes.map((keyframe, keyframeIndex) => ({
+          ...keyframe,
+          id: `${nextTrackId}-keyframe-${keyframeIndex}`,
+        })),
+      };
+    }),
+    stagger: sourceClip.stagger
+      ? {
+          ...sourceClip.stagger,
+        }
+      : undefined,
+    sourcePreset: sourceClip.sourcePreset
+      ? {
+          ...sourceClip.sourcePreset,
+        }
+      : undefined,
+    metadata,
+  };
+}
+
+function insertClipAfterSourceInSequences(
+  scene: AnimationScene,
+  sourceClipId: string,
+  nextClipId: string,
+) {
+  let inserted = false;
+
+  for (const [sequenceId, sequence] of Object.entries(scene.sequences)) {
+    const sourceIndex = sequence.clipIds.indexOf(sourceClipId);
+
+    if (sourceIndex < 0) {
+      continue;
+    }
+
+    const nextClipIds = [...sequence.clipIds];
+    nextClipIds.splice(sourceIndex + 1, 0, nextClipId);
+
+    scene.sequences[sequenceId] = {
+      ...sequence,
+      clipIds: nextClipIds,
+    };
+
+    inserted = true;
+  }
+
+  return inserted;
+}
+
+function removeEmptySequences(scene: AnimationScene) {
+  const emptySequenceIds = new Set(
+    Object.values(scene.sequences)
+      .filter((sequence) => sequence.clipIds.length === 0)
+      .map((sequence) => sequence.id),
+  );
+
+  if (emptySequenceIds.size === 0) {
+    return;
+  }
+
+  scene.sequences = Object.fromEntries(
+    Object.entries(scene.sequences).filter(
+      ([sequenceId]) => !emptySequenceIds.has(sequenceId),
+    ),
+  );
+
+  scene.sequenceOrder = scene.sequenceOrder.filter(
+    (sequenceId) => !emptySequenceIds.has(sequenceId),
   );
 }
 

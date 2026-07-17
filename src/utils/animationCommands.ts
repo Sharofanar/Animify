@@ -74,6 +74,15 @@ export type UpdateAnimationClipTimingCommand = {
   };
 };
 
+export type UpdateAnimationClipEasingCommand = {
+  clipId: string;
+
+  /**
+   * Apply one easing to every outgoing keyframe segment inside the Clip.
+   */
+  easing?: AnimationEasing;
+};
+
 /**
  * Basic timeline editing keeps adjacent keyframes at least 0.1% apart.
  *
@@ -874,6 +883,178 @@ export function updateAnimationClipTimingInSlide(
 }
 
 /**
+ * Apply one easing to every segment of one Animation Schema V2 Clip.
+ *
+ * This is used by multi-selection batch editing. Specific per-segment easing
+ * remains available through the single-element track inspector.
+ */
+export function updateAnimationClipEasingInSlide(
+  slide: Slide,
+  command: UpdateAnimationClipEasingCommand,
+): Slide {
+  const scene = slide.animationScene;
+  const clip = scene?.clips[command.clipId];
+
+  if (!scene || scene.schemaVersion !== 2 || !clip) {
+    return slide;
+  }
+
+  const normalizedEasing =
+    normalizeAnimationEasing(command.easing);
+
+  let tracksChanged = false;
+
+  const nextTracks = clip.tracks.map((track) => {
+    const sortedKeyframes = [...track.keyframes].sort(
+      (left, right) =>
+        left.offset - right.offset ||
+        left.id.localeCompare(right.id),
+    );
+
+    const finalKeyframeId =
+      sortedKeyframes.at(-1)?.id;
+
+    if (!finalKeyframeId) {
+      return track;
+    }
+
+    let trackChanged = false;
+
+    const nextKeyframes = track.keyframes.map(
+      (keyframe) => {
+        const nextEasing =
+          keyframe.id === finalKeyframeId
+            ? undefined
+            : normalizedEasing;
+
+        if (
+          animationEasingsEqual(
+            keyframe.easing,
+            nextEasing,
+          )
+        ) {
+          return keyframe;
+        }
+
+        trackChanged = true;
+        tracksChanged = true;
+
+        return {
+          ...keyframe,
+          easing: nextEasing,
+        };
+      },
+    );
+
+    if (!trackChanged) {
+      return track;
+    }
+
+    return {
+      ...track,
+      keyframes: nextKeyframes,
+    };
+  });
+
+  /**
+   * Keep the temporary legacy animation mirror aligned where the selected
+   * easing has a CSS-compatible string representation.
+   */
+  const legacyAnimationId =
+    getLegacyAnimationId(clip);
+
+  const legacyEasing =
+    animationEasingToLegacyString(
+      normalizedEasing,
+    );
+
+  const targetElementIds = new Set(
+    clip.targets.map(
+      (target) => target.elementId,
+    ),
+  );
+
+  let elementsChanged = false;
+
+  const nextElements =
+    legacyAnimationId && legacyEasing
+      ? slide.elements.map((element) => {
+          if (
+            !targetElementIds.has(element.id)
+          ) {
+            return element;
+          }
+
+          let elementChanged = false;
+
+          const nextAnimations =
+            element.animations.map(
+              (animation) => {
+                if (
+                  animation.id !==
+                    legacyAnimationId ||
+                  animation.easing ===
+                    legacyEasing
+                ) {
+                  return animation;
+                }
+
+                elementChanged = true;
+                elementsChanged = true;
+
+                return {
+                  ...animation,
+                  easing: legacyEasing,
+                };
+              },
+            );
+
+          if (!elementChanged) {
+            return element;
+          }
+
+          return {
+            ...element,
+            animations: nextAnimations,
+          };
+        })
+      : slide.elements;
+
+  if (!tracksChanged && !elementsChanged) {
+    return slide;
+  }
+
+  const nextClip: AnimationClip = tracksChanged
+    ? {
+        ...clip,
+        tracks: nextTracks,
+        metadata: {
+          ...clip.metadata,
+          customized: true,
+        },
+      }
+    : clip;
+
+  return {
+    ...slide,
+    elements: nextElements,
+    animationScene: tracksChanged
+      ? {
+          ...scene,
+          revision: Math.max(
+            1,
+            scene.revision + 1,
+          ),
+          clips: {
+            ...scene.clips,
+            [clip.id]: nextClip,
+          },
+        }
+      : scene,
+  };
+}
+
+/**
  * Replace one track and produce a new animationScene revision.
  */
 function replaceAnimationTrackInSlide(
@@ -1001,6 +1182,33 @@ function normalizeFiniteNumber(
     maximum,
     Math.max(minimum, finiteValue),
   );
+}
+
+/**
+ * Convert one V2 easing into the legacy CSS easing string.
+ */
+function animationEasingToLegacyString(
+  easing?: AnimationEasing,
+) {
+  if (!easing) {
+    return "linear";
+  }
+
+  switch (easing.type) {
+    case "css":
+      return easing.value;
+
+    case "cubic-bezier":
+      return `cubic-bezier(${easing.x1}, ${easing.y1}, ${easing.x2}, ${easing.y2})`;
+
+    case "steps":
+      return `steps(${easing.count}, ${easing.position})`;
+
+    case "spring":
+    case "bounce":
+    case "custom-curve":
+      return undefined;
+  }
 }
 
 /**

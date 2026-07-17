@@ -447,15 +447,10 @@ function ClipNumberInput({
   onBeginChange?: () => void;
   onFinishChange?: () => void;
 }) {
-  const [draftValue, setDraftValue] = useState(
-    String(value),
-  );
-  const [isEditing, setIsEditing] =
-    useState(false);
+  const [draftValue, setDraftValue] = useState(String(value));
+  const [isEditing, setIsEditing] = useState(false);
 
-  const displayedValue = isEditing
-    ? draftValue
-    : String(value);
+  const displayedValue = isEditing ? draftValue : String(value);
 
   function commitDraftValue() {
     const trimmedValue = draftValue.trim();
@@ -473,14 +468,10 @@ function ClipNumberInput({
     }
 
     const minimumValue =
-      min === undefined
-        ? parsedValue
-        : Math.max(min, parsedValue);
+      min === undefined ? parsedValue : Math.max(min, parsedValue);
 
     const clampedValue =
-      max === undefined
-        ? minimumValue
-        : Math.min(max, minimumValue);
+      max === undefined ? minimumValue : Math.min(max, minimumValue);
 
     setDraftValue(String(clampedValue));
 
@@ -512,9 +503,7 @@ function ClipNumberInput({
             onBeginChange?.();
           }}
           onChange={(event) => {
-            setDraftValue(
-              event.target.value,
-            );
+            setDraftValue(event.target.value);
           }}
           onBlur={() => {
             commitDraftValue();
@@ -744,8 +733,7 @@ function KeyframeEasingEditor({
   onBeginChange?: () => void;
   onFinishChange?: () => void;
 }) {
-  const selection =
-    getEasingEditorSelection(easing);
+  const selection = getEasingEditorSelection(easing);
 
   const cubicBezier =
     easing?.type === "cubic-bezier"
@@ -786,13 +774,10 @@ function KeyframeEasingEditor({
     <section className="mt-2 rounded-lg border border-violet-100 bg-violet-50/50 p-2">
       <div className="flex items-center justify-between gap-2">
         <span className="text-[10px] font-black text-violet-600">
-          缓动至{" "}
-          {formatOffset(nextOffset)}
+          缓动至 {formatOffset(nextOffset)}
         </span>
 
-        <span className="text-[9px] text-violet-400">
-          同时间点轨道同步
-        </span>
+        <span className="text-[9px] text-violet-400">同时间点轨道同步</span>
       </div>
 
       <select
@@ -800,52 +785,30 @@ function KeyframeEasingEditor({
         value={selection}
         disabled={!onUpdateKeyframeEasing}
         onChange={(event) => {
-          const nextSelection =
-            event.target
-              .value as EasingEditorSelection;
+          const nextSelection = event.target.value as EasingEditorSelection;
 
-          if (
-            nextSelection ===
-            "unsupported"
-          ) {
+          if (nextSelection === "unsupported") {
             return;
           }
 
-          commitEasing(
-            createEasingFromSelection(
-              nextSelection,
-              easing,
-            ),
-          );
+          commitEasing(createEasingFromSelection(nextSelection, easing));
         }}
       >
         {selection === "unsupported" ? (
-          <option
-            value="unsupported"
-            disabled
-          >
+          <option value="unsupported" disabled>
             {formatEasing(easing)}
           </option>
         ) : null}
 
-        {CSS_EASING_OPTIONS.map(
-          (option) => (
-            <option
-              key={option.value}
-              value={option.value}
-            >
-              {option.label}
-            </option>
-          ),
-        )}
+        {CSS_EASING_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
 
-        <option value="cubic-bezier">
-          自定义贝塞尔
-        </option>
+        <option value="cubic-bezier">自定义贝塞尔</option>
 
-        <option value="steps">
-          阶梯缓动
-        </option>
+        <option value="steps">阶梯缓动</option>
       </select>
 
       {selection === "cubic-bezier" ? (
@@ -856,15 +819,9 @@ function KeyframeEasingEditor({
             min={0}
             max={1}
             step={0.01}
-            disabled={
-              !onUpdateKeyframeEasing
-            }
-            onBeginChange={
-              onBeginChange
-            }
-            onFinishChange={
-              onFinishChange
-            }
+            disabled={!onUpdateKeyframeEasing}
+            onBeginChange={onBeginChange}
+            onFinishChange={onFinishChange}
             onCommit={(x1) =>
               commitEasing(
                 {
@@ -884,15 +841,9 @@ function KeyframeEasingEditor({
             min={-4}
             max={4}
             step={0.01}
-            disabled={
-              !onUpdateKeyframeEasing
-            }
-            onBeginChange={
-              onBeginChange
-            }
-            onFinishChange={
-              onFinishChange
-            }
+            disabled={!onUpdateKeyframeEasing}
+            onBeginChange={onBeginChange}
+            onFinishChange={onFinishChange}
             onCommit={(y1) =>
               commitEasing(
                 {
@@ -912,15 +863,9 @@ function KeyframeEasingEditor({
             min={0}
             max={1}
             step={0.01}
-            disabled={
-              !onUpdateKeyframeEasing
-            }
-            onBeginChange={
-              onBeginChange
-            }
-            onFinishChange={
-              onFinishChange
-            }
+            disabled={!onUpdateKeyframeEasing}
+            onBeginChange={onBeginChange}
+            onFinishChange={onFinishChange}
             onCommit={(x2) =>
               commitEasing(
                 {
@@ -940,15 +885,9 @@ function KeyframeEasingEditor({
             min={-4}
             max={4}
             step={0.01}
-            disabled={
-              !onUpdateKeyframeEasing
-            }
-            onBeginChange={
-              onBeginChange
-            }
-            onFinishChange={
-              onFinishChange
-            }
+            disabled={!onUpdateKeyframeEasing}
+            onBeginChange={onBeginChange}
+            onFinishChange={onFinishChange}
             onCommit={(y2) =>
               commitEasing(
                 {
@@ -972,15 +911,9 @@ function KeyframeEasingEditor({
             min={1}
             max={100}
             step={1}
-            disabled={
-              !onUpdateKeyframeEasing
-            }
-            onBeginChange={
-              onBeginChange
-            }
-            onFinishChange={
-              onFinishChange
-            }
+            disabled={!onUpdateKeyframeEasing}
+            onBeginChange={onBeginChange}
+            onFinishChange={onFinishChange}
             onCommit={(count) =>
               commitEasing(
                 {
@@ -1002,26 +935,16 @@ function KeyframeEasingEditor({
             <select
               className="w-full rounded-lg bg-white px-2 py-1.5 text-[11px] font-bold text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-violet-300 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-300"
               value={steps.position}
-              disabled={
-                !onUpdateKeyframeEasing
-              }
+              disabled={!onUpdateKeyframeEasing}
               onChange={(event) =>
                 commitEasing({
                   ...steps,
-                  position:
-                    event.target
-                      .value as
-                      | "start"
-                      | "end",
+                  position: event.target.value as "start" | "end",
                 })
               }
             >
-              <option value="end">
-                区间末尾
-              </option>
-              <option value="start">
-                区间开头
-              </option>
+              <option value="end">区间末尾</option>
+              <option value="start">区间开头</option>
             </select>
           </label>
         </div>
@@ -1057,45 +980,32 @@ function EasingNumberInput({
   onBeginChange?: () => void;
   onFinishChange?: () => void;
 }) {
-  const [draftValue, setDraftValue] =
-    useState(String(value));
+  const [draftValue, setDraftValue] = useState(String(value));
 
-  const [isEditing, setIsEditing] =
-    useState(false);
+  const [isEditing, setIsEditing] = useState(false);
 
-  const displayedValue = isEditing
-    ? draftValue
-    : String(value);
+  const displayedValue = isEditing ? draftValue : String(value);
 
   function commitDraftValue() {
-    const trimmedValue =
-      draftValue.trim();
+    const trimmedValue = draftValue.trim();
 
     if (trimmedValue === "") {
       setDraftValue(String(value));
       return;
     }
 
-    const parsedValue =
-      Number(trimmedValue);
+    const parsedValue = Number(trimmedValue);
 
     if (!Number.isFinite(parsedValue)) {
       setDraftValue(String(value));
       return;
     }
 
-    const clampedValue = Math.min(
-      max,
-      Math.max(min, parsedValue),
-    );
+    const clampedValue = Math.min(max, Math.max(min, parsedValue));
 
-    setDraftValue(
-      String(clampedValue),
-    );
+    setDraftValue(String(clampedValue));
 
-    if (
-      Object.is(clampedValue, value)
-    ) {
+    if (Object.is(clampedValue, value)) {
       return;
     }
 
@@ -1121,11 +1031,7 @@ function EasingNumberInput({
           setIsEditing(true);
           onBeginChange?.();
         }}
-        onChange={(event) =>
-          setDraftValue(
-            event.target.value,
-          )
-        }
+        onChange={(event) => setDraftValue(event.target.value)}
         onBlur={() => {
           commitDraftValue();
           setIsEditing(false);
@@ -1407,26 +1313,15 @@ function NumericKeyframeInput({
  * Check whether at least one adjacent-keyframe gap can contain another frame
  * while preserving the minimum basic-mode separation on both sides.
  */
-function hasAvailableKeyframeGap(
-  keyframes: AnimationTrack["keyframes"],
-) {
+function hasAvailableKeyframeGap(keyframes: AnimationTrack["keyframes"]) {
   if (keyframes.length < 2) {
     return false;
   }
 
-  for (
-    let index = 0;
-    index < keyframes.length - 1;
-    index += 1
-  ) {
-    const gap =
-      keyframes[index + 1].offset -
-      keyframes[index].offset;
+  for (let index = 0; index < keyframes.length - 1; index += 1) {
+    const gap = keyframes[index + 1].offset - keyframes[index].offset;
 
-    if (
-      gap >
-      MINIMUM_KEYFRAME_OFFSET_GAP * 2
-    ) {
+    if (gap > MINIMUM_KEYFRAME_OFFSET_GAP * 2) {
       return true;
     }
   }

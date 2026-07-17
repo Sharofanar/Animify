@@ -8,11 +8,16 @@ import type { AnimationScene, SlideElement } from "../../types/presentation";
 import type {
   AddAnimationKeyframeCommand,
   DeleteAnimationKeyframeCommand,
+  UpdateAnimationClipEasingCommand,
   UpdateAnimationClipTimingCommand,
   UpdateAnimationKeyframeEasingCommand,
   UpdateAnimationKeyframeOffsetCommand,
   UpdateAnimationKeyframeValueCommand,
 } from "../../utils/animationCommands";
+import {
+  AnimationBatchEditor,
+  type AnimationElementBatchUpdate,
+} from "./AnimationBatchEditor";
 import { AnimationTrackInspector } from "./AnimationTrackInspector";
 
 type AnimationEditOptions = {
@@ -24,10 +29,21 @@ type AnimationFloatingPanelProps = {
   scene?: AnimationScene;
   elements: SlideElement[];
   onClose?: () => void;
-  onSelectElement?: (elementId: string) => void;
   onReplayAnimation?: () => void;
   onUpdateClipTiming?: (
     command: UpdateAnimationClipTimingCommand,
+    options?: AnimationEditOptions,
+  ) => void;
+  onUpdateElements?: (
+    updates: AnimationElementBatchUpdate[],
+    options?: AnimationEditOptions,
+  ) => void;
+  onUpdateClipTimings?: (
+    commands: UpdateAnimationClipTimingCommand[],
+    options?: AnimationEditOptions,
+  ) => void;
+  onUpdateClipEasings?: (
+    commands: UpdateAnimationClipEasingCommand[],
     options?: AnimationEditOptions,
   ) => void;
   onUpdateKeyframeValue?: (
@@ -117,9 +133,11 @@ export function AnimationFloatingPanel({
   scene,
   elements,
   onClose,
-  onSelectElement,
   onReplayAnimation,
   onUpdateClipTiming,
+  onUpdateElements,
+  onUpdateClipTimings,
+  onUpdateClipEasings,
   onUpdateKeyframeValue,
   onUpdateKeyframeEasing,
   onUpdateKeyframeOffset,
@@ -134,6 +152,22 @@ export function AnimationFloatingPanel({
   const [position, setPosition] = useState<PanelPosition>(
     createInitialPanelPosition,
   );
+
+  /**
+   * Open one selected object inside the inspector without replacing the canvas
+   * multi-selection.
+   */
+  const [focusedElementState, setFocusedElementState] = useState<{
+    selectionKey: string;
+    elementId: string;
+  } | null>(null);
+
+  const selectionKey = elements.map((element) => element.id).join("|");
+
+  const focusedElement =
+    focusedElementState?.selectionKey === selectionKey
+      ? elements.find((element) => element.id === focusedElementState.elementId)
+      : undefined;
 
   /**
    * Re-clamp the panel when the browser window changes size.
@@ -205,8 +239,9 @@ export function AnimationFloatingPanel({
     return null;
   }
 
-  const selectedTitle =
-    elements.length === 0
+  const selectedTitle = focusedElement
+    ? `${focusedElement.name} · 多选详情`
+    : elements.length === 0
       ? "未选择元素"
       : elements.length === 1
         ? (elements[0]?.name ?? "未命名元素")
@@ -275,36 +310,45 @@ export function AnimationFloatingPanel({
               Keyframe。
             </p>
           </section>
+        ) : elements.length > 1 && focusedElement ? (
+          <div className="space-y-3">
+            <button
+              type="button"
+              className="rounded-xl bg-violet-100 px-3 py-2 text-xs font-black text-violet-600 transition hover:bg-violet-200"
+              onClick={() => setFocusedElementState(null)}
+            >
+              ← 返回批量动画编辑
+            </button>
+
+            <AnimationTrackInspector
+              scene={scene}
+              elements={[focusedElement]}
+              onUpdateClipTiming={onUpdateClipTiming}
+              onUpdateKeyframeValue={onUpdateKeyframeValue}
+              onUpdateKeyframeEasing={onUpdateKeyframeEasing}
+              onUpdateKeyframeOffset={onUpdateKeyframeOffset}
+              onAddKeyframe={onAddKeyframe}
+              onDeleteKeyframe={onDeleteKeyframe}
+              onBeginChange={onBeginChange}
+              onFinishChange={onFinishChange}
+            />
+          </div>
         ) : elements.length > 1 ? (
-          <section className="rounded-2xl border border-violet-100 bg-violet-50/50 p-4">
-            <h3 className="text-sm font-black text-violet-700">
-              选择一个动画对象
-            </h3>
-
-            <p className="mt-1 text-xs leading-5 text-violet-500">
-              多选状态保留在幕布上。点击下面的对象，可进入该对象的详细轨道。
-            </p>
-
-            <div className="mt-4 grid grid-cols-2 gap-2">
-              {elements.map((element, index) => (
-                <button
-                  key={element.id}
-                  type="button"
-                  className="min-w-0 rounded-xl border border-violet-100 bg-white px-3 py-3 text-left transition hover:border-violet-300 hover:bg-violet-50"
-                  disabled={!onSelectElement}
-                  onClick={() => onSelectElement?.(element.id)}
-                >
-                  <span className="block truncate text-xs font-black text-slate-700">
-                    {index + 1}. {element.name}
-                  </span>
-
-                  <span className="mt-1 block truncate text-[10px] text-slate-400">
-                    {element.content || element.id}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </section>
+          <AnimationBatchEditor
+            scene={scene}
+            elements={elements}
+            onOpenElementDetails={(elementId) =>
+              setFocusedElementState({
+                selectionKey,
+                elementId,
+              })
+            }
+            onUpdateElements={onUpdateElements}
+            onUpdateClipTimings={onUpdateClipTimings}
+            onUpdateClipEasings={onUpdateClipEasings}
+            onBeginChange={onBeginChange}
+            onFinishChange={onFinishChange}
+          />
         ) : (
           <AnimationTrackInspector
             scene={scene}

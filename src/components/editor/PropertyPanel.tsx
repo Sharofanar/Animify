@@ -3,6 +3,7 @@ import type {
   SlideElement,
   SlideElementAnimation,
 } from "../../types/presentation";
+import { animationPresets } from "../../utils/animationPresets";
 
 type LayerAction =
   | "bring-forward"
@@ -52,27 +53,6 @@ const propertyTabs: Array<{
   { id: "font", label: "字体" },
   { id: "animation", label: "动画" },
   { id: "layer", label: "图层" },
-];
-
-const animationPresets = [
-  {
-    value: "fade-in",
-    label: "淡入",
-    name: "淡入动画",
-    keyframes: "fade-in",
-  },
-  {
-    value: "slide-up",
-    label: "上滑进入",
-    name: "上滑进入动画",
-    keyframes: "slide-up",
-  },
-  {
-    value: "zoom-in",
-    label: "放大进入",
-    name: "放大进入动画",
-    keyframes: "zoom-in",
-  },
 ];
 
 const elementTypeLabels: Record<SlideElement["type"], string> = {

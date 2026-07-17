@@ -28,12 +28,14 @@ import {
   addAnimationKeyframeToSlide,
   applyElementBatchUpdatesToSlide,
   deleteAnimationKeyframeFromSlide,
+  updateAnimationClipEasingInSlide,
   updateAnimationClipTimingInSlide,
   updateAnimationKeyframeEasingInSlide,
   updateAnimationKeyframeOffsetInSlide,
   updateAnimationKeyframeValueInSlide,
   type AddAnimationKeyframeCommand,
   type DeleteAnimationKeyframeCommand,
+  type UpdateAnimationClipEasingCommand,
   type UpdateAnimationClipTimingCommand,
   type UpdateAnimationKeyframeEasingCommand,
   type UpdateAnimationKeyframeOffsetCommand,
@@ -1675,6 +1677,99 @@ function App() {
   }
 
   /**
+   * Update several V2 Clips through one project transaction.
+   *
+   * Regardless of how many selected elements are changed, the batch creates only
+   * one undo snapshot.
+   */
+  function handleUpdateAnimationClipTimings(
+    commands: UpdateAnimationClipTimingCommand[],
+    options?: { recordHistory?: boolean },
+  ) {
+    if (commands.length === 0) {
+      return;
+    }
+
+    commitProjectChange((currentProject) => {
+      let changed = false;
+
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        let nextSlide = slide;
+
+        for (const command of commands) {
+          nextSlide = updateAnimationClipTimingInSlide(nextSlide, command);
+        }
+
+        if (nextSlide === slide) {
+          return slide;
+        }
+
+        changed = true;
+        return nextSlide;
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    }, options);
+  }
+
+  /**
+   * Apply one whole-Clip easing setting to several selected animations.
+   */
+  function handleUpdateAnimationClipEasings(
+    commands: UpdateAnimationClipEasingCommand[],
+    options?: { recordHistory?: boolean },
+  ) {
+    if (commands.length === 0) {
+      return;
+    }
+
+    commitProjectChange((currentProject) => {
+      let changed = false;
+
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        let nextSlide = slide;
+
+        for (const command of commands) {
+          nextSlide = updateAnimationClipEasingInSlide(nextSlide, command);
+        }
+
+        if (nextSlide === slide) {
+          return slide;
+        }
+
+        changed = true;
+        return nextSlide;
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    }, options);
+  }
+
+  /**
    * Add one keyframe through one project transaction.
    *
    * Button actions are discrete changes, so every click creates exactly one undo
@@ -3016,9 +3111,11 @@ function App() {
         scene={activeSlide.animationScene}
         elements={selectedElements}
         onClose={() => setAnimationPanelOpen(false)}
-        onSelectElement={handleSelectElement}
         onReplayAnimation={() => setAnimationPreviewKey((key) => key + 1)}
         onUpdateClipTiming={handleUpdateAnimationClipTiming}
+        onUpdateElements={handleUpdateElements}
+        onUpdateClipTimings={handleUpdateAnimationClipTimings}
+        onUpdateClipEasings={handleUpdateAnimationClipEasings}
         onUpdateKeyframeValue={handleUpdateAnimationKeyframeValue}
         onUpdateKeyframeEasing={handleUpdateAnimationKeyframeEasing}
         onUpdateKeyframeOffset={handleUpdateAnimationKeyframeOffset}

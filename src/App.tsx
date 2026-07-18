@@ -16,6 +16,7 @@ import {
 import { ComponentLibrary } from "./components/editor/ComponentLibrary";
 import { AnimationFloatingPanel } from "./components/editor/AnimationFloatingPanel";
 import { PropertyPanel } from "./components/editor/PropertyPanel";
+import { ResourceCenter } from "./components/editor/ResourceCenter";
 import { SlideCanvas } from "./components/editor/SlideCanvas";
 import { demoProject } from "./data/demoProject";
 import { exportProjectAsHtml } from "./utils/exportHtml";
@@ -110,6 +111,8 @@ function migratePendingLegacyAssets() {
 }
 
 type EditorMode = "edit" | "animation" | "present";
+
+type LeftPanelMode = "components" | "assets";
 
 type ElementContextMenuState = {
   elementId: string;
@@ -548,6 +551,14 @@ function App() {
   const latestProjectRef = useRef(project);
   const [mode, setMode] = useState<EditorMode>("edit");
   const [componentPanelOpen, setComponentPanelOpen] = useState(false);
+
+  /**
+   * Keep the existing expanded/collapsed panel behavior while allowing the same
+   * left-side workspace to switch between components and reusable project assets.
+   */
+  const [leftPanelMode, setLeftPanelMode] =
+    useState<LeftPanelMode>("components");
+
   const [animationPreviewKey, setAnimationPreviewKey] = useState(0);
   const [presentToolbarOpen, setPresentToolbarOpen] = useState(false);
   const [propertyPanelOpen, setPropertyPanelOpen] = useState(true);
@@ -1614,6 +1625,245 @@ function App() {
     }
 
     imageInputRef.current?.click();
+  }
+
+  /**
+   * Insert one existing image asset into the active slide without duplicating its
+   * IndexedDB Blob or creating another PresentationAsset record.
+   */
+  async function handleInsertExistingAsset(assetId: string) {
+    const asset = project.assets[assetId];
+
+    if (!asset || asset.type !== "image") {
+      return;
+    }
+
+    if (missingAssetIds.includes(assetId)) {
+      window.alert(
+        "该图片资源文件已缺失，暂时无法插入。后续资源重新挂载功能可以恢复它。",
+      );
+      return;
+    }
+
+    const source = assetSources[assetId];
+
+    if (!source) {
+      window.alert("资源仍在加载，请稍后重试。");
+      return;
+    }
+
+    try {
+      const displaySize = await getImageDisplaySize(source);
+
+      const now = Date.now();
+
+      const elementId = `element-image-reuse-${now}`;
+
+      commitProjectChange((currentProject) => {
+        const activeProjectSlide = currentProject.slides.find(
+          (slide) => slide.id === currentProject.activeSlideId,
+        );
+
+        if (!activeProjectSlide) {
+          return currentProject;
+        }
+
+        const imageOffsetX = 36;
+
+        const lastImageElement = activeProjectSlide.elements
+          .filter((element) => element.type === "image")
+          .at(-1);
+
+        const centerX = Math.round(
+          (currentProject.width - displaySize.width) / 2,
+        );
+
+        const centerY = Math.round(
+          (currentProject.height - displaySize.height) / 2,
+        );
+
+        const nextElement: SlideElement = {
+          id: elementId,
+          type: "image",
+          name: asset.name,
+          content: asset.name,
+
+          /**
+           * Reuse the original asset ID. No new Blob or asset metadata is created.
+           */
+          assetId,
+
+          style: {
+            x: lastImageElement
+              ? lastImageElement.style.x + imageOffsetX
+              : centerX,
+            y: lastImageElement ? lastImageElement.style.y : centerY,
+            width: displaySize.width,
+            height: displaySize.height,
+            rotate: 0,
+            opacity: 1,
+            borderRadius: 0,
+          },
+          animations: [],
+        };
+
+        return {
+          ...currentProject,
+          updatedAt: new Date().toISOString(),
+          slides: currentProject.slides.map((slide) =>
+            slide.id === currentProject.activeSlideId
+              ? {
+                  ...slide,
+                  elements: [...slide.elements, nextElement],
+                }
+              : slide,
+          ),
+        };
+      });
+
+      setSelectedElementId(elementId);
+      setSelectedElementIds([elementId]);
+      setPropertyTargetElementIds([elementId]);
+      setPropertyPanelOpen(true);
+    } catch (error) {
+      console.error("Failed to insert an existing asset.", error);
+
+      window.alert("图片资源插入失败，请稍后重试。");
+    }
+  }
+
+  /**
+   * Permanently delete one project asset that is no longer referenced.
+   *
+   * Binary deletion is intentionally not recorded as a normal undo action because
+   * an IndexedDB Blob cannot be reconstructed from a project history snapshot.
+   * Existing undo/redo snapshots are also stripped of this asset metadata so a
+   * later Ctrl + Z cannot resurrect an orphaned Resource Center entry.
+   */
+  async function handleDeleteUnusedAsset(assetId: string) {
+    const currentProject = latestProjectRef.current;
+
+    const asset = currentProject.assets[assetId];
+
+    if (!asset) {
+      return;
+    }
+
+    /**
+     * Always calculate usage again from the current project instead of trusting
+     * the Resource Center's rendered count.
+     */
+    const usageCount = currentProject.slides.reduce(
+      (count, slide) =>
+        count +
+        slide.elements.filter((element) => element.assetId === assetId).length,
+      0,
+    );
+
+    if (usageCount > 0) {
+      window.alert(`该资源仍被引用 ${usageCount} 次，请先删除或替换这些元素。`);
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `确定永久删除资源“${asset.name}”吗？\n\n该操作会同时清理本地资源文件，无法通过撤销恢复。`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      /**
+       * IndexedDB delete is safe even when the Blob is already missing.
+       */
+      await deleteAssetBlob(assetId);
+
+      const runtimeSource = assetSourcesRef.current[assetId];
+
+      if (runtimeSource?.startsWith("blob:")) {
+        URL.revokeObjectURL(runtimeSource);
+      }
+
+      const nextAssetSources = {
+        ...assetSourcesRef.current,
+      };
+
+      delete nextAssetSources[assetId];
+
+      assetSourcesRef.current = nextAssetSources;
+
+      setAssetSources(nextAssetSources);
+
+      setMissingAssetIds((currentMissingAssetIds) =>
+        currentMissingAssetIds.filter(
+          (missingAssetId) => missingAssetId !== assetId,
+        ),
+      );
+
+      /**
+       * A copied image could keep an asset ID alive outside the current project.
+       * Clear that clipboard so a later paste cannot recreate a broken element.
+       */
+      if (
+        copiedElementsRef.current?.elements.some(
+          (element) => element.assetId === assetId,
+        )
+      ) {
+        copiedElementsRef.current = null;
+
+        setHasCopiedElements(false);
+      }
+
+      /**
+       * Remove only asset metadata. The reference-count check above guarantees
+       * that no current slide element points at this asset.
+       */
+      function removeAssetMetadata(sourceProject: PresentationProject) {
+        if (!sourceProject.assets[assetId]) {
+          return sourceProject;
+        }
+
+        const nextAssets = {
+          ...sourceProject.assets,
+        };
+
+        delete nextAssets[assetId];
+
+        return {
+          ...sourceProject,
+          assets: nextAssets,
+        };
+      }
+
+      /**
+       * Permanent binary deletion must also remove the asset entry from history.
+       * Otherwise undoing an unrelated edit could restore metadata whose Blob no
+       * longer exists.
+       */
+      undoStackRef.current = undoStackRef.current.map(removeAssetMetadata);
+
+      redoStackRef.current = redoStackRef.current.map(removeAssetMetadata);
+
+      if (historyGroupSnapshotRef.current) {
+        historyGroupSnapshotRef.current = removeAssetMetadata(
+          historyGroupSnapshotRef.current,
+        );
+      }
+
+      const nextProject = {
+        ...removeAssetMetadata(latestProjectRef.current),
+        updatedAt: new Date().toISOString(),
+      };
+
+      latestProjectRef.current = nextProject;
+
+      setProject(nextProject);
+    } catch (error) {
+      console.error("Failed to delete unused asset.", error);
+
+      window.alert("资源删除失败，请检查浏览器存储状态后重试。");
+    }
   }
 
   /**
@@ -3595,33 +3845,96 @@ function App() {
             }`}
           >
             {componentPanelOpen ? (
-              <div className="relative">
-                <button
-                  type="button"
-                  className="absolute right-4 top-4 z-10 rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-500 transition hover:bg-slate-200 hover:text-slate-900"
-                  onClick={() => setComponentPanelOpen(false)}
-                >
-                  收起
-                </button>
+              <div className="flex min-h-0 flex-col gap-2">
+                <div className="flex shrink-0 items-center gap-2">
+                  <div className="grid flex-1 grid-cols-2 rounded-2xl border border-slate-200 bg-white p-1 shadow-sm">
+                    <button
+                      type="button"
+                      className={`rounded-xl px-3 py-2 text-xs font-bold transition ${
+                        leftPanelMode === "components"
+                          ? "bg-violet-500 text-white shadow-sm"
+                          : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                      }`}
+                      onClick={() => setLeftPanelMode("components")}
+                    >
+                      组件
+                    </button>
 
-                <ComponentLibrary
-                  onAddElement={handleAddElement}
-                  onAddImage={handleOpenImagePicker}
-                />
+                    <button
+                      type="button"
+                      className={`rounded-xl px-3 py-2 text-xs font-bold transition ${
+                        leftPanelMode === "assets"
+                          ? "bg-violet-500 text-white shadow-sm"
+                          : "text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+                      }`}
+                      onClick={() => setLeftPanelMode("assets")}
+                    >
+                      资源
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-full bg-slate-100 px-3 py-2 text-xs font-bold text-slate-500 transition hover:bg-slate-200 hover:text-slate-900"
+                    onClick={() => setComponentPanelOpen(false)}
+                  >
+                    收起
+                  </button>
+                </div>
+
+                <div
+                  className={`min-h-0 flex-1 ${
+                    leftPanelMode === "assets"
+                      ? "overflow-hidden"
+                      : "overflow-y-auto overscroll-contain"
+                  }`}
+                >
+                  {leftPanelMode === "components" ? (
+                    <ComponentLibrary
+                      onAddElement={handleAddElement}
+                      onAddImage={handleOpenImagePicker}
+                    />
+                  ) : (
+                    <ResourceCenter
+                      assets={project.assets}
+                      assetSources={assetSources}
+                      missingAssetIds={missingAssetIds}
+                      slides={project.slides}
+                      onUploadImage={handleOpenImagePicker}
+                      onInsertAsset={handleInsertExistingAsset}
+                      onDeleteAsset={handleDeleteUnusedAsset}
+                    />
+                  )}
+                </div>
               </div>
             ) : (
-              <aside className="flex min-h-130 flex-col items-center gap-4 rounded-3xl border border-slate-200 bg-white px-3 py-4 shadow-sm">
+              <aside className="flex min-h-130 flex-col items-center gap-3 rounded-3xl border border-slate-200 bg-white px-3 py-4 shadow-sm">
                 <button
                   type="button"
                   className="flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-500 text-lg font-black text-white shadow-sm transition hover:bg-violet-600"
-                  onClick={() => setComponentPanelOpen(true)}
+                  onClick={() => {
+                    setLeftPanelMode("components");
+                    setComponentPanelOpen(true);
+                  }}
                   title="展开组件库"
                 >
                   +
                 </button>
 
+                <button
+                  type="button"
+                  className="flex h-12 w-12 items-center justify-center rounded-2xl bg-violet-100 text-lg font-black text-violet-600 shadow-sm transition hover:bg-violet-200"
+                  onClick={() => {
+                    setLeftPanelMode("assets");
+                    setComponentPanelOpen(true);
+                  }}
+                  title="打开资源中心"
+                >
+                  ▦
+                </button>
+
                 <div className="[writing-mode:vertical-rl] text-xs font-bold tracking-[0.3em] text-slate-400">
-                  组件库
+                  {leftPanelMode === "assets" ? "资源中心" : "组件库"}
                 </div>
               </aside>
             )}

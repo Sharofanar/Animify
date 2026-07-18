@@ -1,15 +1,29 @@
-import type { PresentationProject } from "../types/presentation";
+import type {
+  PresentationAsset,
+  PresentationProject,
+} from "../types/presentation";
+import { blobToDataUrl, getAssetBlob } from "./assetStore";
 import { compileSlideAnimations } from "./animationCompiler";
 
+type PortablePresentationAsset = PresentationAsset & {
+  source?: string;
+};
+
+type PortablePresentationProject = Omit<PresentationProject, "assets"> & {
+  assets: Record<string, PortablePresentationAsset>;
+};
+
 /**
- * Export the current Animify project as a standalone HTML file.
+ * Export one standalone HTML file.
  *
- * Current image assets are stored as Data URLs in project.assets, so embedding
- * the whole project JSON is enough for the exported file to display images on
- * another computer. Large video assets should later move to a ZIP export flow.
+ * IndexedDB Blobs are converted back to Data URLs only for the temporary
+ * portable export project. The real editor project remains metadata-only.
  */
-export function exportProjectAsHtml(project: PresentationProject) {
-  const html = createHtmlDocument(project);
+export async function exportProjectAsHtml(project: PresentationProject) {
+  const portableProject = await createPortableProject(project);
+
+  const html = createHtmlDocument(portableProject);
+
   const blob = new Blob([html], {
     type: "text/html;charset=utf-8",
   });
@@ -19,9 +33,61 @@ export function exportProjectAsHtml(project: PresentationProject) {
 
   link.href = url;
   link.download = `${project.name || "animify-presentation"}.html`;
+
   link.click();
 
   URL.revokeObjectURL(url);
+}
+
+/**
+ * Build an export-only project containing portable Data URL sources.
+ */
+async function createPortableProject(
+  project: PresentationProject,
+): Promise<PortablePresentationProject> {
+  const referencedAssetIds = new Set<string>();
+
+  for (const slide of project.slides) {
+    for (const element of slide.elements) {
+      if (element.assetId) {
+        referencedAssetIds.add(element.assetId);
+      }
+    }
+  }
+
+  for (const assetId of referencedAssetIds) {
+    if (!project.assets[assetId]) {
+      throw new Error(`Missing asset metadata: ${assetId}`);
+    }
+  }
+
+  const portableAssets: Record<string, PortablePresentationAsset> = {};
+
+  for (const asset of Object.values(project.assets)) {
+    const blob = await getAssetBlob(asset.id);
+
+    if (!blob) {
+      if (referencedAssetIds.has(asset.id)) {
+        throw new Error(`Missing asset Blob: ${asset.id}`);
+      }
+
+      portableAssets[asset.id] = {
+        ...asset,
+      };
+
+      continue;
+    }
+
+    portableAssets[asset.id] = {
+      ...asset,
+      source: await blobToDataUrl(blob),
+    };
+  }
+
+  return {
+    ...project,
+    assets: portableAssets,
+  };
 }
 
 /**
@@ -30,7 +96,7 @@ export function exportProjectAsHtml(project: PresentationProject) {
  * The exported player keeps all slide data and asset references inside one
  * document, so users can open the file directly without installing Animify.
  */
-function createHtmlDocument(project: PresentationProject) {
+function createHtmlDocument(project: PortablePresentationProject) {
   const serializedProject = escapeScriptJson(project);
 
   /**

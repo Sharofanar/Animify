@@ -2,13 +2,18 @@ export type SlideElementType = "text" | "shape" | "image" | "svg";
 
 export type PresentationAssetType = "image" | "video" | "audio";
 
+/**
+ * Persistent asset metadata stored inside the project JSON.
+ *
+ * Binary file data is stored separately in IndexedDB using the same asset ID.
+ * This keeps localStorage and undo snapshots independent from large media data.
+ */
 export type PresentationAsset = {
   id: string;
   type: PresentationAssetType;
   name: string;
   mimeType: string;
   size: number;
-  source: string;
   createdAt: string;
 };
 

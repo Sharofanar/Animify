@@ -142,6 +142,9 @@ const resizeHandleConfigs: Array<{
 type SlideCanvasProps = {
   slide: Slide;
   assets?: Record<string, PresentationAsset>;
+  assetSources?: Record<string, string>;
+  assetStoreReady?: boolean;
+  missingAssetIds?: string[];
   scale?: number;
   selectedElementId?: string;
   selectedElementIds?: string[];
@@ -187,6 +190,9 @@ type SlideCanvasProps = {
 export function SlideCanvas({
   slide,
   assets = {},
+  assetSources = {},
+  assetStoreReady = true,
+  missingAssetIds = [],
   scale = 0.6,
   selectedElementId,
   selectedElementIds = [],
@@ -619,6 +625,14 @@ export function SlideCanvas({
         const animationKey = `${element.id}-${animationPreviewKey}`;
 
         const asset = element.assetId ? assets[element.assetId] : undefined;
+        const assetSource = element.assetId
+          ? assetSources[element.assetId]
+          : undefined;
+        
+        const assetMissing = Boolean(
+          element.assetId && missingAssetIds.includes(element.assetId),
+        );
+        
         const selectionIndex = selectedElementIds.indexOf(element.id);
         const selectionNumber =
           multiSelectionActive && selectionIndex >= 0
@@ -632,6 +646,9 @@ export function SlideCanvas({
             key={animationKey}
             element={element}
             asset={asset}
+            assetSource={assetSource}
+            assetStoreReady={assetStoreReady}
+            assetMissing={assetMissing}
             scale={scale}
             compiledAnimations={compiledAnimations}
             legacyAnimationFallback={legacyAnimationFallback}
@@ -780,6 +797,9 @@ function measureTextElementSize(element: SlideElement, content: string) {
 function SlideElementView({
   element,
   asset,
+  assetSource,
+  assetStoreReady,
+  assetMissing,
   scale,
   compiledAnimations,
   legacyAnimationFallback,
@@ -802,6 +822,9 @@ function SlideElementView({
 }: {
   element: SlideElement;
   asset?: PresentationAsset;
+  assetSource?: string;
+  assetStoreReady: boolean;
+  assetMissing: boolean;
   scale: number;
   compiledAnimations: CompiledElementAnimation[];
   legacyAnimationFallback: boolean;
@@ -1346,20 +1369,40 @@ function SlideElementView({
           className="flex h-full w-full items-center justify-center whitespace-pre-wrap wrap-break-word"
           style={innerStyle}
         >
-          {element.type === "image" && asset?.type === "image" ? (
-            <img
-              src={asset.source}
-              alt={asset.name}
-              draggable={false}
-              style={{
-                width: "100%",
-                height: "100%",
-                objectFit: "contain",
-                pointerEvents: "none",
-                userSelect: "none",
-                borderRadius: element.style.borderRadius ?? 0,
-              }}
-            />
+          {element.type === "image" ? (
+            asset?.type === "image" && assetSource && !assetMissing ? (
+              <img
+                src={assetSource}
+                alt={asset.name}
+                draggable={false}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "contain",
+                  pointerEvents: "none",
+                  userSelect: "none",
+                  borderRadius: element.style.borderRadius ?? 0,
+                }}
+              />
+            ) : (
+              <div
+                className={`flex h-full w-full flex-col items-center justify-center gap-1 rounded-xl border border-dashed px-3 text-center ${
+                  assetStoreReady
+                    ? "border-rose-300 bg-rose-50/90 text-rose-600"
+                    : "border-slate-300 bg-slate-100 text-slate-400"
+                }`}
+              >
+                <span className="text-xs font-black">
+                  {assetStoreReady ? "⚠ 资源缺失" : "资源加载中…"}
+                </span>
+
+                {assetStoreReady ? (
+                  <span className="max-w-full truncate text-[10px] font-semibold opacity-70">
+                    {asset?.name ?? element.content ?? "未知图片"}
+                  </span>
+                ) : null}
+              </div>
+            )
           ) : (
             element.content
           )}

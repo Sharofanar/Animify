@@ -20,6 +20,12 @@ import { SlideCanvas } from "./components/editor/SlideCanvas";
 import { demoProject } from "./data/demoProject";
 import { exportProjectAsHtml } from "./utils/exportHtml";
 import {
+  dataUrlToBlob,
+  deleteAssetBlob,
+  getAssetBlob,
+  putVerifiedAssetBlob,
+} from "./utils/assetStore";
+import {
   createAnimationSceneFromLegacyElements,
   createEmptyAnimationScene,
   normalizeProjectAnimationScenes,
@@ -28,6 +34,7 @@ import {
   addAnimationClipToSlide,
   addAnimationKeyframeToSlide,
   applyElementBatchUpdatesToSlide,
+  cloneElementAnimationsToInsertedElements,
   deleteAnimationClipFromSlide,
   deleteAnimationKeyframeFromSlide,
   duplicateAnimationClipInSlide,
@@ -49,6 +56,7 @@ import {
 } from "./utils/animationCommands";
 import type {
   AnimationClip,
+  AnimationScene,
   PresentationAsset,
   PresentationProject,
   SlideElement,
@@ -56,6 +64,50 @@ import type {
 } from "./types/presentation";
 
 const STORAGE_KEY = "animify-project";
+
+type LegacyPresentationAsset = PresentationAsset & {
+  source?: string;
+};
+
+type LegacyPresentationProject = Omit<PresentationProject, "assets"> & {
+  assets?: Record<string, LegacyPresentationAsset>;
+};
+
+/**
+ * Legacy Data URLs are collected during synchronous project loading and moved
+ * into IndexedDB immediately after App mounts.
+ */
+const pendingLegacyAssetSources = new Map<string, string>();
+
+let legacyAssetMigrationPromise: Promise<void> | null = null;
+
+/**
+ * Migrate every legacy project asset only once, including during React
+ * development Strict Mode's mount/unmount verification cycle.
+ */
+function migratePendingLegacyAssets() {
+  if (legacyAssetMigrationPromise) {
+    return legacyAssetMigrationPromise;
+  }
+
+  legacyAssetMigrationPromise = (async () => {
+    for (const [assetId, source] of pendingLegacyAssetSources) {
+      const existingBlob = await getAssetBlob(assetId);
+
+      if (existingBlob) {
+        continue;
+      }
+
+      const blob = await dataUrlToBlob(source);
+
+      await putVerifiedAssetBlob(assetId, blob);
+    }
+
+    pendingLegacyAssetSources.clear();
+  })();
+
+  return legacyAssetMigrationPromise;
+}
 
 type EditorMode = "edit" | "animation" | "present";
 
@@ -83,6 +135,12 @@ type ElementUpdates = Partial<Omit<SlideElement, "style">> & {
 type ElementBatchUpdate = {
   elementId: string;
   updates: ElementUpdates;
+};
+
+type CopiedElementClipboard = {
+  sourceSlideId: string;
+  elements: SlideElement[];
+  animationScene: AnimationScene;
 };
 
 type ActiveAnimationContext = {
@@ -255,6 +313,8 @@ function getAnimationClipCategoryLabel(category: AnimationClip["category"]) {
 }
 
 function loadSavedProject(): PresentationProject {
+  pendingLegacyAssetSources.clear();
+
   const savedProject = localStorage.getItem(STORAGE_KEY);
 
   if (!savedProject) {
@@ -262,11 +322,28 @@ function loadSavedProject(): PresentationProject {
   }
 
   try {
-    const parsedProject = JSON.parse(savedProject) as PresentationProject;
+    const parsedProject = JSON.parse(savedProject) as LegacyPresentationProject;
+
+    const normalizedAssets: Record<string, PresentationAsset> = {};
+
+    for (const [assetId, legacyAsset] of Object.entries(
+      parsedProject.assets ?? {},
+    )) {
+      const { source, ...assetMetadata } = legacyAsset;
+
+      if (typeof source === "string" && source.length > 0) {
+        pendingLegacyAssetSources.set(assetId, source);
+      }
+
+      normalizedAssets[assetId] = {
+        ...assetMetadata,
+        id: assetMetadata.id || assetId,
+      };
+    }
 
     const normalizedProject: PresentationProject = {
       ...parsedProject,
-      assets: parsedProject.assets ?? {},
+      assets: normalizedAssets,
       slides: normalizeSlideTitles(parsedProject.slides),
     };
 
@@ -420,31 +497,14 @@ function cloneSlideElementForInsert(
 }
 
 /**
- * Read a local file as a Data URL so the image can be previewed and restored
- * after refreshing the browser during the current local-first stage.
- *
- * Later, large videos should move to IndexedDB or export-package assets instead
- * of being stored directly in localStorage.
+ * Deep-clone an Animation Schema V2 scene before clipboard operations modify it.
  */
-function readFileAsDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-
-    reader.onload = () => {
-      if (typeof reader.result !== "string") {
-        reject(new Error("Failed to read file as Data URL."));
-        return;
-      }
-
-      resolve(reader.result);
-    };
-
-    reader.onerror = () => {
-      reject(reader.error ?? new Error("Failed to read file."));
-    };
-
-    reader.readAsDataURL(file);
-  });
+function cloneAnimationSceneSnapshot(
+  scene: AnimationScene,
+) {
+  return JSON.parse(
+    JSON.stringify(scene),
+  ) as AnimationScene;
 }
 
 /**
@@ -493,6 +553,24 @@ function App() {
   const [propertyPanelOpen, setPropertyPanelOpen] = useState(true);
 
   /**
+   * Runtime Blob URLs used by canvas, thumbnails, and presentation preview.
+   *
+   * These URLs are temporary browser-session values and never enter the project
+   * JSON or undo history.
+   */
+  const [assetSources, setAssetSources] = useState<Record<string, string>>({});
+
+  /**
+   * Asset metadata may survive while its IndexedDB Blob is missing.
+   *
+   * Keep that condition explicit so the canvas and future resource center can
+   * distinguish a broken resource from an ordinary text element.
+   */
+  const [missingAssetIds, setMissingAssetIds] = useState<string[]>([]);
+
+  const [assetStoreReady, setAssetStoreReady] = useState(false);
+
+  /**
    * The floating animation workspace is hidden outside animation mode, but its
    * open state and dragged position remain available when the user returns.
    */
@@ -527,12 +605,18 @@ function App() {
   const canvasAreaRef = useRef<HTMLDivElement | null>(null);
 
   /**
+   * Keep the latest runtime URL map available for cleanup without reading a Ref
+   * during render.
+   */
+  const assetSourcesRef = useRef<Record<string, string>>({});
+
+  /**
    * Store elements copied with Ctrl + C or the context menu.
    *
    * The clipboard stores one or more slide elements. Image elements keep assetId,
    * so pasted images reuse the same asset record instead of duplicating image data.
    */
-  const copiedElementsRef = useRef<SlideElement[]>([]);
+  const copiedElementsRef = useRef<CopiedElementClipboard | null>(null);
 
   /**
    * Reflect whether the internal element clipboard contains usable content.
@@ -580,10 +664,113 @@ function App() {
     return firstElementId ? [firstElementId] : [];
   });
 
+  /**
+   * Keep event handlers synchronized with the latest project independently from
+   * persistent saving.
+   */
   useEffect(() => {
     latestProjectRef.current = project;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
   }, [project]);
+
+  /**
+   * Initialize IndexedDB, migrate old Data URLs, and create runtime Blob URLs.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    async function initializeAssetStore() {
+      try {
+        await migratePendingLegacyAssets();
+
+        if (cancelled) {
+          return;
+        }
+
+        const nextAssetSources: Record<string, string> = {};
+
+        const nextMissingAssetIds: string[] = [];
+
+        for (const assetId of Object.keys(
+          latestProjectRef.current.assets ?? {},
+        )) {
+          const blob = await getAssetBlob(assetId);
+
+          if (!blob) {
+            nextMissingAssetIds.push(assetId);
+            continue;
+          }
+
+          nextAssetSources[assetId] = URL.createObjectURL(blob);
+        }
+
+        if (cancelled) {
+          for (const source of Object.values(nextAssetSources)) {
+            URL.revokeObjectURL(source);
+          }
+
+          return;
+        }
+
+        assetSourcesRef.current = nextAssetSources;
+
+        setAssetSources(nextAssetSources);
+        setMissingAssetIds(nextMissingAssetIds);
+        setAssetStoreReady(true);
+
+        if (nextMissingAssetIds.length > 0) {
+          console.warn(
+            "Animify detected missing asset Blobs:",
+            nextMissingAssetIds,
+          );
+        }
+      } catch (error) {
+        console.error("Failed to initialize the asset store.", error);
+
+        if (cancelled) {
+          return;
+        }
+
+        /**
+         * Keep old projects visible when migration fails. Persistence remains
+         * disabled so the original Data URLs are not overwritten or lost.
+         */
+        const fallbackSources = Object.fromEntries(pendingLegacyAssetSources);
+
+        assetSourcesRef.current = fallbackSources;
+
+        setAssetSources(fallbackSources);
+
+        window.alert(
+          "资源存储初始化失败。旧图片仍会临时显示，但本次项目修改不会自动保存，请刷新后重试。",
+        );
+      }
+    }
+
+    void initializeAssetStore();
+
+    return () => {
+      cancelled = true;
+
+      for (const source of Object.values(assetSourcesRef.current)) {
+        if (source.startsWith("blob:")) {
+          URL.revokeObjectURL(source);
+        }
+      }
+
+      assetSourcesRef.current = {};
+    };
+  }, []);
+
+  /**
+   * Save only metadata after IndexedDB initialization or migration succeeds.
+   */
+  useEffect(() => {
+    if (!assetStoreReady) {
+      return;
+    }
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
+  }, [assetStoreReady, project]);
 
   useEffect(() => {
     if (!elementContextMenu && !canvasContextMenu) {
@@ -920,9 +1107,11 @@ function App() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") {
         event.preventDefault();
 
-        const copiedElements = copiedElementsRef.current;
+        const clipboard = copiedElementsRef.current;
 
-        if (copiedElements.length === 0) {
+        const copiedElements = clipboard?.elements ?? [];
+
+        if (!clipboard || copiedElements.length === 0) {
           return;
         }
 
@@ -948,10 +1137,19 @@ function App() {
               return slide;
             }
 
-            return {
+            const nextSlide = {
               ...slide,
               elements: [...slide.elements, ...pastedElements],
             };
+
+            return cloneElementAnimationsToInsertedElements(
+              nextSlide,
+              clipboard.animationScene,
+              clipboard.sourceSlideId,
+              copiedElements,
+              pastedElements,
+              `paste-${now}`,
+            );
           }),
         }));
 
@@ -988,9 +1186,15 @@ function App() {
 
         // Deep clone the copied elements so later edits to the original elements
         // will not mutate the internal clipboard copy.
-        copiedElementsRef.current = JSON.parse(
-          JSON.stringify(copiedElements),
-        ) as SlideElement[];
+        copiedElementsRef.current = {
+          sourceSlideId: currentSlide.id,
+          elements: JSON.parse(
+            JSON.stringify(copiedElements),
+          ) as SlideElement[],
+          animationScene: cloneAnimationSceneSnapshot(
+            currentSlide.animationScene,
+          ),
+        };
 
         setHasCopiedElements(true);
         return;
@@ -1038,18 +1242,29 @@ function App() {
               ),
             };
 
-            return {
-              ...slide,
+            const nextElements = [
+              ...slide.elements.slice(0, sourceElementIndex + 1),
+              duplicateElement,
+              ...slide.elements.slice(sourceElementIndex + 1),
+            ];
 
-              // Insert the duplicated element right after the original one.
-              // This keeps the layer order predictable while making the copy
-              // easy to find and move.
-              elements: [
-                ...slide.elements.slice(0, sourceElementIndex + 1),
-                duplicateElement,
-                ...slide.elements.slice(sourceElementIndex + 1),
-              ],
+            const nextSlide = {
+              ...slide,
+              elements: nextElements,
             };
+
+            /**
+             * Ctrl + D duplicates both the visual element and every exact V2 Clip targeting
+             * it. The original timing is preserved and the new Clips target only the copy.
+             */
+            return cloneElementAnimationsToInsertedElements(
+              nextSlide,
+              slide.animationScene,
+              slide.id,
+              [sourceElement],
+              [duplicateElement],
+              `duplicate-${now}`,
+            );
           });
 
           if (!duplicated) {
@@ -1206,6 +1421,9 @@ function App() {
           <SlideCanvas
             slide={activeSlide}
             assets={project.assets}
+            assetSources={assetSources}
+            assetStoreReady={assetStoreReady}
+            missingAssetIds={missingAssetIds}
             scale={presentScale}
             animationPreviewKey={animationPreviewKey}
             chrome={false}
@@ -1390,23 +1608,32 @@ function App() {
    * Open the hidden image file input from a normal toolbar button.
    */
   function handleOpenImagePicker() {
+    if (!assetStoreReady) {
+      window.alert("资源存储正在初始化，请稍后再添加图片。");
+      return;
+    }
+
     imageInputRef.current?.click();
   }
 
   /**
    * Insert one or more selected images into the active slide.
    *
-   * Media files are stored once in project.assets. Slide elements only keep
-   * assetId, so future undo/redo and multi-slide reuse will not duplicate
-   * large image data inside every element.
+   * Binary files are stored in IndexedDB. Project assets contain metadata only,
+   * while slide elements reference the shared asset through assetId.
    */
   async function handleImageFileChange(event: ChangeEvent<HTMLInputElement>) {
     const selectedFiles = Array.from(event.target.files ?? []);
 
-    // Reset the input value so selecting the same image again can still trigger change.
+    // Allow the same file to be selected again later.
     event.target.value = "";
 
     if (selectedFiles.length === 0) {
+      return;
+    }
+
+    if (!assetStoreReady) {
+      window.alert("资源存储尚未准备完成，请稍后重试。");
       return;
     }
 
@@ -1419,30 +1646,76 @@ function App() {
       return;
     }
 
+    const createdObjectUrls: string[] = [];
+
+    const storedAssetIds: string[] = [];
+
     try {
       const now = new Date().toISOString();
       const timestamp = Date.now();
 
-      const imageItems = await Promise.all(
-        imageFiles.map(async (file, index) => {
-          const source = await readFileAsDataUrl(file);
-          const displaySize = await getImageDisplaySize(source);
-          const idSuffix = `${timestamp}-${index}`;
+      const imageItems: Array<{
+        file: File;
+        assetId: string;
+        elementId: string;
+        objectUrl: string;
+        displaySize: {
+          width: number;
+          height: number;
+        };
+      }> = [];
 
-          return {
-            file,
-            source,
-            displaySize,
-            assetId: `asset-image-${idSuffix}`,
-            elementId: `element-image-${idSuffix}`,
-          };
-        }),
-      );
+      /**
+       * Process sequentially so failed batches can safely revoke every URL already
+       * created by this operation.
+       */
+      for (let index = 0; index < imageFiles.length; index += 1) {
+        const file = imageFiles[index];
+        const idSuffix = `${timestamp}-${index}`;
+
+        const assetId = `asset-image-${idSuffix}`;
+
+        const elementId = `element-image-${idSuffix}`;
+
+        const previewUrl = URL.createObjectURL(file);
+
+        let displaySize: {
+          width: number;
+          height: number;
+        };
+
+        try {
+          displaySize = await getImageDisplaySize(previewUrl);
+        } finally {
+          URL.revokeObjectURL(previewUrl);
+        }
+
+        /**
+         * The project must not know about this asset until IndexedDB has confirmed that
+         * the complete Blob can be read back successfully.
+         */
+        const storedBlob = await putVerifiedAssetBlob(assetId, file);
+
+        storedAssetIds.push(assetId);
+
+        const objectUrl = URL.createObjectURL(storedBlob);
+
+        createdObjectUrls.push(objectUrl);
+
+        imageItems.push({
+          file,
+          assetId,
+          elementId,
+          objectUrl,
+          displaySize,
+        });
+      }
 
       const lastInsertedElementId = imageItems.at(-1)?.elementId ?? "";
 
       commitProjectChange((currentProject) => {
         const imageOffsetX = 36;
+
         const firstImageSize = imageItems[0]?.displaySize ?? {
           width: 420,
           height: 260,
@@ -1451,20 +1724,19 @@ function App() {
         const centerX = Math.round(
           (currentProject.width - firstImageSize.width) / 2,
         );
+
         const centerY = Math.round(
           (currentProject.height - firstImageSize.height) / 2,
         );
 
-        const activeSlide = currentProject.slides.find(
+        const activeProjectSlide = currentProject.slides.find(
           (slide) => slide.id === currentProject.activeSlideId,
         );
 
-        const lastImageElement = activeSlide?.elements
+        const lastImageElement = activeProjectSlide?.elements
           .filter((element) => element.type === "image")
           .at(-1);
 
-        // If there is already an image on the current slide, place the next image
-        // to the right of the previous one. Otherwise, start from the canvas center.
         const startX = lastImageElement
           ? lastImageElement.style.x + imageOffsetX
           : centerX;
@@ -1472,6 +1744,7 @@ function App() {
         const startY = lastImageElement ? lastImageElement.style.y : centerY;
 
         const newAssets: Record<string, PresentationAsset> = {};
+
         const newElements: SlideElement[] = imageItems.map((item, index) => {
           const fileName = item.file.name || "未命名图片";
 
@@ -1481,7 +1754,6 @@ function App() {
             name: fileName,
             mimeType: item.file.type || "image/*",
             size: item.file.size,
-            source: item.source,
             createdAt: now,
           };
 
@@ -1509,13 +1781,10 @@ function App() {
         return {
           ...currentProject,
           updatedAt: now,
-
-          // Store image data in the shared asset store.
           assets: {
             ...(currentProject.assets ?? {}),
             ...newAssets,
           },
-
           slides: currentProject.slides.map((slide) => {
             if (slide.id !== currentProject.activeSlideId) {
               return slide;
@@ -1529,9 +1798,51 @@ function App() {
         };
       });
 
+      const newRuntimeSources = Object.fromEntries(
+        imageItems.map((item) => [item.assetId, item.objectUrl]),
+      );
+
+      setAssetSources((currentSources) => {
+        const nextSources = {
+          ...currentSources,
+          ...newRuntimeSources,
+        };
+
+        assetSourcesRef.current = nextSources;
+
+        return nextSources;
+      });
+
+      const importedAssetIds = new Set(imageItems.map((item) => item.assetId));
+
+      setMissingAssetIds((currentMissingAssetIds) =>
+        currentMissingAssetIds.filter(
+          (assetId) => !importedAssetIds.has(assetId),
+        ),
+      );
+
       setSelectedElementId(lastInsertedElementId);
-    } catch {
-      window.alert("图片读取失败，请换一张图片重试。");
+    } catch (error) {
+      console.error("Failed to insert image assets.", error);
+
+      for (const objectUrl of createdObjectUrls) {
+        URL.revokeObjectURL(objectUrl);
+      }
+
+      /**
+       * A multi-file import is treated as one operation. When any file fails,
+       * remove every Blob already written by this unfinished batch.
+       *
+       * Project metadata has not been committed yet, so no broken asset references
+       * are left behind.
+       */
+      await Promise.allSettled(
+        storedAssetIds.map((assetId) => deleteAssetBlob(assetId)),
+      );
+
+      window.alert(
+        "图片保存失败，本次导入已安全回滚。请检查浏览器存储权限后重试。",
+      );
     }
   }
 
@@ -2291,9 +2602,15 @@ function App() {
       );
 
       if (copiedElements.length > 0) {
-        copiedElementsRef.current = JSON.parse(
-          JSON.stringify(copiedElements),
-        ) as SlideElement[];
+        copiedElementsRef.current = {
+          sourceSlideId: currentSlide.id,
+          elements: JSON.parse(
+            JSON.stringify(copiedElements),
+          ) as SlideElement[],
+          animationScene: cloneAnimationSceneSnapshot(
+            currentSlide.animationScene,
+          ),
+        };
 
         setHasCopiedElements(true);
       }
@@ -2303,9 +2620,11 @@ function App() {
     }
 
     if (action === "paste") {
-      const copiedElements = copiedElementsRef.current;
+      const clipboard = copiedElementsRef.current;
 
-      if (copiedElements.length === 0) {
+      const copiedElements = clipboard?.elements ?? [];
+
+      if (!clipboard || copiedElements.length === 0) {
         setElementContextMenu(null);
         return;
       }
@@ -2342,10 +2661,19 @@ function App() {
               return slide;
             }
 
-            return {
+            const nextSlide = {
               ...slide,
               elements: [...slide.elements, ...pastedElements],
             };
+
+            return cloneElementAnimationsToInsertedElements(
+              nextSlide,
+              clipboard.animationScene,
+              clipboard.sourceSlideId,
+              copiedElements,
+              pastedElements,
+              `paste-${now}`,
+            );
           }),
         };
       });
@@ -2395,14 +2723,25 @@ function App() {
 
           duplicated = true;
 
-          return {
+          const nextElements = [
+            ...slide.elements.slice(0, sourceElementIndex + 1),
+            duplicateElement,
+            ...slide.elements.slice(sourceElementIndex + 1),
+          ];
+
+          const nextSlide = {
             ...slide,
-            elements: [
-              ...slide.elements.slice(0, sourceElementIndex + 1),
-              duplicateElement,
-              ...slide.elements.slice(sourceElementIndex + 1),
-            ],
+            elements: nextElements,
           };
+
+          return cloneElementAnimationsToInsertedElements(
+            nextSlide,
+            slide.animationScene,
+            slide.id,
+            [sourceElement],
+            [duplicateElement],
+            `duplicate-${now}`,
+          );
         });
 
         if (!duplicated) {
@@ -2473,9 +2812,11 @@ function App() {
       return;
     }
 
-    const copiedElements = copiedElementsRef.current;
+    const clipboard = copiedElementsRef.current;
 
-    if (copiedElements.length === 0) {
+    const copiedElements = clipboard?.elements ?? [];
+
+    if (!clipboard || copiedElements.length === 0) {
       setCanvasContextMenu(null);
       return;
     }
@@ -2523,10 +2864,19 @@ function App() {
             return slide;
           }
 
-          return {
+          const nextSlide = {
             ...slide,
             elements: [...slide.elements, ...pastedElements],
           };
+
+          return cloneElementAnimationsToInsertedElements(
+            nextSlide,
+            clipboard.animationScene,
+            clipboard.sourceSlideId,
+            copiedElements,
+            pastedElements,
+            `paste-${now}`,
+          );
         }),
       };
     });
@@ -2785,8 +3135,14 @@ function App() {
     });
   }
 
-  function handleExportHtml() {
-    exportProjectAsHtml(project);
+  async function handleExportHtml() {
+    try {
+      await exportProjectAsHtml(project);
+    } catch (error) {
+      console.error("Failed to export project.", error);
+
+      window.alert("HTML 导出失败。可能存在缺失或无法读取的资源文件。");
+    }
   }
 
   function handleResetProject() {
@@ -3272,6 +3628,9 @@ function App() {
 
             <SlideNavigator
               project={project}
+              assetSources={assetSources}
+              assetStoreReady={assetStoreReady}
+              missingAssetIds={missingAssetIds}
               activeSlideId={activeSlide.id}
               onAddSlide={handleAddSlide}
               onSelectSlide={handleSelectSlide}
@@ -3286,6 +3645,9 @@ function App() {
                 <SlideCanvas
                   slide={activeSlide}
                   assets={project.assets}
+                  assetSources={assetSources}
+                  assetStoreReady={assetStoreReady}
+                  missingAssetIds={missingAssetIds}
                   scale={canvasScale}
                   selectedElementId={selectedElement?.id}
                   selectedElementIds={selectedElementIds}
@@ -3635,6 +3997,9 @@ function App() {
 
 function SlideNavigator({
   project,
+  assetSources,
+  assetStoreReady,
+  missingAssetIds,
   activeSlideId,
   onAddSlide,
   onSelectSlide,
@@ -3642,6 +4007,9 @@ function SlideNavigator({
   onDuplicateSlide,
 }: {
   project: PresentationProject;
+  assetSources: Record<string, string>;
+  assetStoreReady: boolean;
+  missingAssetIds: string[];
   activeSlideId: string;
   onAddSlide: () => void;
   onSelectSlide: (slideId: string) => void;
@@ -3687,6 +4055,9 @@ function SlideNavigator({
               previewHeight={previewHeight}
               previewScale={previewScale}
               assets={project.assets}
+              assetSources={assetSources}
+              assetStoreReady={assetStoreReady}
+              missingAssetIds={missingAssetIds}
               onSelectSlide={onSelectSlide}
               onDeleteSlide={onDeleteSlide}
               onDuplicateSlide={onDuplicateSlide}
@@ -3707,6 +4078,9 @@ function SortableSlideCard({
   previewHeight,
   previewScale,
   assets,
+  assetSources,
+  assetStoreReady,
+  missingAssetIds,
   onSelectSlide,
   onDeleteSlide,
   onDuplicateSlide,
@@ -3719,6 +4093,9 @@ function SortableSlideCard({
   previewHeight: number;
   previewScale: number;
   assets: PresentationProject["assets"];
+  assetSources: Record<string, string>;
+  assetStoreReady: boolean;
+  missingAssetIds: string[];
   onSelectSlide: (slideId: string) => void;
   onDeleteSlide: (slideId: string) => void;
   onDuplicateSlide: (slideId: string) => void;
@@ -3791,8 +4168,20 @@ function SortableSlideCard({
           // Image elements only keep assetId, so the real image source must be
           // resolved from project.assets before rendering.
           const asset = element.assetId ? assets[element.assetId] : undefined;
+
+          const assetSource = element.assetId
+            ? assetSources[element.assetId]
+            : undefined;
+          
+          const assetMissing = Boolean(
+            element.assetId && missingAssetIds.includes(element.assetId),
+          );
+
           const isImageElement =
-            element.type === "image" && asset?.type === "image";
+            element.type === "image" &&
+            asset?.type === "image" &&
+            Boolean(assetSource) &&
+            !assetMissing;
 
           return (
             <div
@@ -3814,8 +4203,8 @@ function SortableSlideCard({
             >
               {isImageElement ? (
                 <img
-                  src={asset.source}
-                  alt={asset.name}
+                  src={assetSource}
+                  alt={asset?.name ?? "image"}
                   draggable={false}
                   style={{
                     width: "100%",
@@ -3827,6 +4216,21 @@ function SortableSlideCard({
                     borderRadius: (style.borderRadius ?? 0) * previewScale,
                   }}
                 />
+              ) : element.type === "image" ? (
+                <div
+                  className={`flex h-full w-full items-center justify-center text-[10px] font-black ${
+                    assetStoreReady
+                      ? "bg-rose-50 text-rose-500"
+                      : "bg-slate-100 text-slate-400"
+                  }`}
+                  title={
+                    assetStoreReady
+                      ? `资源缺失：${asset?.name ?? element.content}`
+                      : "资源加载中"
+                  }
+                >
+                  {assetStoreReady ? "⚠" : "…"}
+                </div>
               ) : (
                 element.content
               )}

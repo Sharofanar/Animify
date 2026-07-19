@@ -12,14 +12,17 @@ type ResourceCenterProps = {
   assetSources: Record<string, string>;
   missingAssetIds: string[];
   slides: Slide[];
-  onUploadImage: () => void;
+
+  onUploadResource: () => void;
+
   onInsertAsset: (assetId: string) => void;
+
+  onRelinkAsset: (assetId: string) => void;
+
+  onFocusReference: (slideId: string, elementId: string) => void;
 
   /**
    * Permanently remove one unused project asset.
-   *
-   * App rechecks the reference count before deleting the IndexedDB Blob and
-   * project metadata, so a stale Resource Center view cannot delete used data.
    */
   onDeleteAsset: (assetId: string) => void;
 };
@@ -89,13 +92,19 @@ export function ResourceCenter({
   assetSources,
   missingAssetIds,
   slides,
-  onUploadImage,
+  onUploadResource,
   onInsertAsset,
+  onRelinkAsset,
+  onFocusReference,
   onDeleteAsset,
 }: ResourceCenterProps) {
   const [activeFilter, setActiveFilter] = useState<AssetFilter>("all");
 
   const [searchTerm, setSearchTerm] = useState("");
+
+  const [expandedReferenceAssetId, setExpandedReferenceAssetId] = useState<
+    string | null
+  >(null);
 
   const missingAssetIdSet = useMemo(
     () => new Set(missingAssetIds),
@@ -103,13 +112,21 @@ export function ResourceCenter({
   );
 
   /**
-   * Count every element reference across every slide.
+   * Build concrete reference locations instead of storing only a count.
    *
-   * One asset can therefore be reused by multiple elements without duplicating
-   * its IndexedDB Blob.
+   * The same data powers the usage counter and allows users to navigate directly
+   * to every slide element using the resource.
    */
-  const usageCounts = useMemo(() => {
-    const nextCounts: Record<string, number> = {};
+  const referencesByAssetId = useMemo(() => {
+    const nextReferences: Record<
+      string,
+      Array<{
+        slideId: string;
+        slideTitle: string;
+        elementId: string;
+        elementName: string;
+      }>
+    > = {};
 
     for (const slide of slides) {
       for (const element of slide.elements) {
@@ -117,11 +134,20 @@ export function ResourceCenter({
           continue;
         }
 
-        nextCounts[element.assetId] = (nextCounts[element.assetId] ?? 0) + 1;
+        const references = nextReferences[element.assetId] ?? [];
+
+        references.push({
+          slideId: slide.id,
+          slideTitle: slide.title,
+          elementId: element.id,
+          elementName: element.name,
+        });
+
+        nextReferences[element.assetId] = references;
       }
     }
 
-    return nextCounts;
+    return nextReferences;
   }, [slides]);
 
   const filteredAssets = useMemo(() => {
@@ -164,9 +190,9 @@ export function ResourceCenter({
         <button
           type="button"
           className="shrink-0 rounded-full bg-violet-500 px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-violet-600"
-          onClick={onUploadImage}
+          onClick={onUploadResource}
         >
-          + 上传图片
+          + 上传资源
         </button>
       </div>
 
@@ -214,7 +240,11 @@ export function ResourceCenter({
 
             const source = assetSources[asset.id];
 
-            const usageCount = usageCounts[asset.id] ?? 0;
+            const references = referencesByAssetId[asset.id] ?? [];
+
+            const usageCount = references.length;
+
+            const referencesExpanded = expandedReferenceAssetId === asset.id;
 
             return (
               <article
@@ -297,6 +327,16 @@ export function ResourceCenter({
                     </div>
                   )}
 
+                  {missing ? (
+                    <button
+                      type="button"
+                      className="mt-2 w-full rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700 transition hover:border-amber-300 hover:bg-amber-100"
+                      onClick={() => onRelinkAsset(asset.id)}
+                    >
+                      重新挂载资源
+                    </button>
+                  ) : null}
+
                   {usageCount === 0 ? (
                     <button
                       type="button"
@@ -306,9 +346,47 @@ export function ResourceCenter({
                       删除资源
                     </button>
                   ) : (
-                    <p className="mt-2 text-center text-[10px] font-semibold leading-4 text-slate-400">
-                      当前被引用 {usageCount} 次，删除引用后才能移除资源
-                    </p>
+                    <>
+                      <button
+                        type="button"
+                        className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-bold text-slate-600 transition hover:border-violet-200 hover:bg-violet-50 hover:text-violet-600"
+                        onClick={() =>
+                          setExpandedReferenceAssetId(
+                            referencesExpanded ? null : asset.id,
+                          )
+                        }
+                      >
+                        {referencesExpanded
+                          ? "收起引用位置"
+                          : `查看引用位置（${usageCount}）`}
+                      </button>
+
+                      {referencesExpanded ? (
+                        <div className="mt-2 space-y-1 rounded-xl bg-slate-50 p-2">
+                          {references.map((reference, index) => (
+                            <button
+                              key={`${reference.slideId}-${reference.elementId}`}
+                              type="button"
+                              className="w-full rounded-lg bg-white px-2 py-2 text-left text-[10px] font-semibold text-slate-500 transition hover:bg-violet-50 hover:text-violet-600"
+                              onClick={() =>
+                                onFocusReference(
+                                  reference.slideId,
+                                  reference.elementId,
+                                )
+                              }
+                            >
+                              <span className="block font-black text-slate-700">
+                                {index + 1}. {reference.slideTitle}
+                              </span>
+
+                              <span className="mt-0.5 block truncate">
+                                {reference.elementName}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                    </>
                   )}
                 </div>
               </article>

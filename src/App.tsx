@@ -59,6 +59,7 @@ import type {
   AnimationClip,
   AnimationScene,
   PresentationAsset,
+  PresentationAssetType,
   PresentationProject,
   SlideElement,
   SlideElementType,
@@ -502,12 +503,99 @@ function cloneSlideElementForInsert(
 /**
  * Deep-clone an Animation Schema V2 scene before clipboard operations modify it.
  */
-function cloneAnimationSceneSnapshot(
-  scene: AnimationScene,
-) {
-  return JSON.parse(
-    JSON.stringify(scene),
-  ) as AnimationScene;
+function cloneAnimationSceneSnapshot(scene: AnimationScene) {
+  return JSON.parse(JSON.stringify(scene)) as AnimationScene;
+}
+
+/**
+ * Resolve a local file into Animify's persistent resource category.
+ *
+ * MIME type is preferred, but some browsers and operating systems return an
+ * empty or generic MIME type for formats such as FLV. File-extension fallback
+ * keeps those resources importable without weakening the asset category model.
+ */
+function getPresentationAssetType(
+  file: File,
+): PresentationAssetType | null {
+  if (file.type.startsWith("image/")) {
+    return "image";
+  }
+
+  if (file.type.startsWith("video/")) {
+    return "video";
+  }
+
+  if (file.type.startsWith("audio/")) {
+    return "audio";
+  }
+
+  const fileName =
+    file.name.toLowerCase();
+
+  const extension =
+    fileName.includes(".")
+      ? fileName
+          .split(".")
+          .pop()
+      : "";
+
+  const imageExtensions =
+    new Set([
+      "png",
+      "jpg",
+      "jpeg",
+      "gif",
+      "webp",
+      "bmp",
+      "svg",
+      "avif",
+    ]);
+
+  const videoExtensions =
+    new Set([
+      "mp4",
+      "webm",
+      "mov",
+      "m4v",
+      "avi",
+      "mkv",
+      "flv",
+      "wmv",
+    ]);
+
+  const audioExtensions =
+    new Set([
+      "mp3",
+      "wav",
+      "ogg",
+      "m4a",
+      "aac",
+      "flac",
+      "opus",
+    ]);
+
+  if (
+    extension &&
+    imageExtensions.has(extension)
+  ) {
+    return "image";
+  }
+
+  if (
+    extension &&
+    videoExtensions.has(extension)
+  ) {
+    return "video";
+  }
+
+  if (
+    extension &&
+    audioExtensions.has(extension)
+  ) {
+    return "audio";
+  }
+
+  return null;
 }
 
 /**
@@ -613,6 +701,22 @@ function App() {
 
   const slideSurfaceRef = useRef<HTMLDivElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
+
+  /**
+   * Resource Center import is separate from the component-library image picker:
+   * it stores files in the project library without automatically creating canvas
+   * elements.
+   */
+  const resourceInputRef = useRef<HTMLInputElement | null>(null);
+
+  /**
+   * Relinking writes a new Blob under an existing asset ID so every element using
+   * that resource recovers automatically.
+   */
+  const relinkInputRef = useRef<HTMLInputElement | null>(null);
+
+  const pendingRelinkAssetIdRef = useRef<string | null>(null);
+
   const canvasAreaRef = useRef<HTMLDivElement | null>(null);
 
   /**
@@ -1625,6 +1729,256 @@ function App() {
     }
 
     imageInputRef.current?.click();
+  }
+
+  /**
+   * Open the Resource Center importer.
+   *
+   * Imported files become reusable project assets. Unlike the image component
+   * picker, this action does not automatically insert anything onto the slide.
+   */
+  function handleOpenResourcePicker() {
+    if (!assetStoreReady) {
+      window.alert("资源存储正在初始化，请稍后再上传资源。");
+      return;
+    }
+
+    resourceInputRef.current?.click();
+  }
+
+  /**
+   * Import images, videos, and audio files into the reusable project resource
+   * library without creating slide elements.
+   */
+  async function handleResourceFilesChange(
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
+    const selectedFiles = Array.from(event.target.files ?? []);
+
+    event.target.value = "";
+
+    if (selectedFiles.length === 0) {
+      return;
+    }
+
+    if (!assetStoreReady) {
+      window.alert("资源存储尚未准备完成，请稍后重试。");
+      return;
+    }
+
+    const supportedFiles = selectedFiles.flatMap((file) => {
+      const assetType = getPresentationAssetType(file);
+
+      return assetType
+        ? [
+            {
+              file,
+              assetType,
+            },
+          ]
+        : [];
+    });
+
+    if (supportedFiles.length === 0) {
+      window.alert("请选择图片、视频或音频文件。");
+      return;
+    }
+
+    const storedAssetIds: string[] = [];
+    const createdObjectUrls: string[] = [];
+
+    try {
+      const timestamp = Date.now();
+      const createdAt = new Date().toISOString();
+
+      const importedItems: Array<{
+        asset: PresentationAsset;
+        objectUrl: string;
+      }> = [];
+
+      for (let index = 0; index < supportedFiles.length; index += 1) {
+        const { file, assetType } = supportedFiles[index];
+
+        const assetId = `asset-${assetType}-${timestamp}-${index}`;
+
+        const storedBlob = await putVerifiedAssetBlob(assetId, file);
+
+        storedAssetIds.push(assetId);
+
+        const objectUrl = URL.createObjectURL(storedBlob);
+
+        createdObjectUrls.push(objectUrl);
+
+        importedItems.push({
+          asset: {
+            id: assetId,
+            type: assetType,
+            name: file.name || `未命名${assetType}`,
+            mimeType: file.type || `${assetType}/*`,
+            size: file.size,
+            createdAt,
+          },
+          objectUrl,
+        });
+      }
+
+      const newAssets = Object.fromEntries(
+        importedItems.map(({ asset }) => [asset.id, asset]),
+      );
+
+      /**
+       * Resource-library mutations are persistent and are not normal canvas undo
+       * operations. Add metadata to existing history snapshots as well so undoing
+       * an unrelated edit cannot accidentally make a successfully imported asset
+       * disappear while leaving its IndexedDB Blob orphaned.
+       */
+      function addAssetMetadata(sourceProject: PresentationProject) {
+        return {
+          ...sourceProject,
+          assets: {
+            ...sourceProject.assets,
+            ...newAssets,
+          },
+        };
+      }
+
+      undoStackRef.current = undoStackRef.current.map(addAssetMetadata);
+
+      redoStackRef.current = redoStackRef.current.map(addAssetMetadata);
+
+      if (historyGroupSnapshotRef.current) {
+        historyGroupSnapshotRef.current = addAssetMetadata(
+          historyGroupSnapshotRef.current,
+        );
+      }
+
+      const nextProject = {
+        ...addAssetMetadata(latestProjectRef.current),
+        updatedAt: createdAt,
+      };
+
+      latestProjectRef.current = nextProject;
+
+      setProject(nextProject);
+
+      const importedSources = Object.fromEntries(
+        importedItems.map(({ asset, objectUrl }) => [asset.id, objectUrl]),
+      );
+
+      setAssetSources((currentSources) => {
+        const nextSources = {
+          ...currentSources,
+          ...importedSources,
+        };
+
+        assetSourcesRef.current = nextSources;
+
+        return nextSources;
+      });
+
+      const importedAssetIdSet = new Set(
+        importedItems.map(({ asset }) => asset.id),
+      );
+
+      setMissingAssetIds((currentMissingAssetIds) =>
+        currentMissingAssetIds.filter(
+          (assetId) => !importedAssetIdSet.has(assetId),
+        ),
+      );
+    } catch (error) {
+      console.error("Failed to import project resources.", error);
+
+      for (const objectUrl of createdObjectUrls) {
+        URL.revokeObjectURL(objectUrl);
+      }
+
+      await Promise.allSettled(
+        storedAssetIds.map((assetId) => deleteAssetBlob(assetId)),
+      );
+
+      window.alert("资源导入失败，本次导入已安全回滚。");
+    }
+  }
+
+  /**
+   * Open a file picker for one missing project asset.
+   */
+  function handleOpenAssetRelink(assetId: string) {
+    const asset = latestProjectRef.current.assets[assetId];
+
+    if (!asset) {
+      return;
+    }
+
+    pendingRelinkAssetIdRef.current = assetId;
+
+    relinkInputRef.current?.click();
+  }
+
+  /**
+   * Restore one missing resource by writing a verified Blob under its existing
+   * asset ID. Every slide element referencing that ID recovers automatically.
+   */
+  async function handleRelinkAssetFileChange(
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0];
+
+    event.target.value = "";
+
+    const assetId = pendingRelinkAssetIdRef.current;
+
+    pendingRelinkAssetIdRef.current = null;
+
+    if (!file || !assetId) {
+      return;
+    }
+
+    const asset = latestProjectRef.current.assets[assetId];
+
+    if (!asset) {
+      return;
+    }
+
+    const selectedAssetType = getPresentationAssetType(file);
+
+    if (selectedAssetType !== asset.type) {
+      window.alert(`请选择与原资源相同类型的文件。当前资源类型：${asset.type}`);
+      return;
+    }
+
+    try {
+      const storedBlob = await putVerifiedAssetBlob(assetId, file);
+
+      const objectUrl = URL.createObjectURL(storedBlob);
+
+      const previousSource = assetSourcesRef.current[assetId];
+
+      if (previousSource?.startsWith("blob:")) {
+        URL.revokeObjectURL(previousSource);
+      }
+
+      setAssetSources((currentSources) => {
+        const nextSources = {
+          ...currentSources,
+          [assetId]: objectUrl,
+        };
+
+        assetSourcesRef.current = nextSources;
+
+        return nextSources;
+      });
+
+      setMissingAssetIds((currentMissingAssetIds) =>
+        currentMissingAssetIds.filter(
+          (missingAssetId) => missingAssetId !== assetId,
+        ),
+      );
+    } catch (error) {
+      console.error("Failed to relink asset.", error);
+
+      window.alert("资源重新挂载失败，请检查文件后重试。");
+    }
   }
 
   /**
@@ -3443,6 +3797,46 @@ function App() {
     setAnimationPreviewKey((key) => key + 1);
   }
 
+  /**
+   * Navigate from the Resource Center to one concrete asset reference.
+   *
+   * Navigation does not create an undo snapshot because it changes editor focus,
+   * not presentation content.
+   */
+  function handleFocusAssetReference(slideId: string, elementId: string) {
+    const targetProject = latestProjectRef.current;
+
+    const targetSlide = targetProject.slides.find(
+      (slide) => slide.id === slideId,
+    );
+
+    const targetElement = targetSlide?.elements.find(
+      (element) => element.id === elementId,
+    );
+
+    if (!targetSlide || !targetElement) {
+      return;
+    }
+
+    const nextProject = {
+      ...targetProject,
+      activeSlideId: slideId,
+      updatedAt: new Date().toISOString(),
+    };
+
+    latestProjectRef.current = nextProject;
+
+    setProject(nextProject);
+
+    setMode("edit");
+    setSelectedElementId(elementId);
+    setSelectedElementIds([elementId]);
+    setPropertyTargetElementIds([elementId]);
+    setPropertyPanelOpen(true);
+    setActiveAnimationContext(null);
+    setAnimationPreviewKey((key) => key + 1);
+  }
+
   function handleDeleteSlide(slideId: string) {
     commitProjectChange((currentProject) => {
       if (currentProject.slides.length <= 1) {
@@ -3812,6 +4206,27 @@ function App() {
                 onChange={handleImageFileChange}
                 style={{ display: "none" }}
               />
+
+              <input
+                ref={resourceInputRef}
+                type="file"
+                accept="image/*,video/*,audio/*,.flv,.mkv,.avi,.wmv"
+                multiple
+                onChange={handleResourceFilesChange}
+                style={{
+                  display: "none",
+                }}
+              />
+
+              <input
+                ref={relinkInputRef}
+                type="file"
+                accept="image/*,video/*,audio/*,.flv,.mkv,.avi,.wmv"
+                onChange={handleRelinkAssetFileChange}
+                style={{
+                  display: "none",
+                }}
+              />
             </div>
           </header>
 
@@ -3900,8 +4315,10 @@ function App() {
                       assetSources={assetSources}
                       missingAssetIds={missingAssetIds}
                       slides={project.slides}
-                      onUploadImage={handleOpenImagePicker}
+                      onUploadResource={handleOpenResourcePicker}
                       onInsertAsset={handleInsertExistingAsset}
+                      onRelinkAsset={handleOpenAssetRelink}
+                      onFocusReference={handleFocusAssetReference}
                       onDeleteAsset={handleDeleteUnusedAsset}
                     />
                   )}
@@ -4485,7 +4902,7 @@ function SortableSlideCard({
           const assetSource = element.assetId
             ? assetSources[element.assetId]
             : undefined;
-          
+
           const assetMissing = Boolean(
             element.assetId && missingAssetIds.includes(element.assetId),
           );

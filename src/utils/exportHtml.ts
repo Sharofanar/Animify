@@ -40,7 +40,20 @@ export async function exportProjectAsHtml(project: PresentationProject) {
 }
 
 /**
- * Build an export-only project containing portable Data URL sources.
+ * Keep standalone HTML export inside a conservative memory budget.
+ *
+ * Data URLs expand binary files and the export process temporarily keeps
+ * several large strings in memory. Large-media projects will later use the
+ * dedicated ZIP/project-package export flow instead.
+ */
+const MAX_STANDALONE_HTML_ASSET_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Build an export-only project containing only assets actually referenced by
+ * slide elements.
+ *
+ * Unused Resource Center files must never be converted to Data URLs during
+ * export because large unused video files can exhaust the browser process.
  */
 async function createPortableProject(
   project: PresentationProject,
@@ -55,26 +68,58 @@ async function createPortableProject(
     }
   }
 
-  for (const assetId of referencedAssetIds) {
-    if (!project.assets[assetId]) {
-      throw new Error(`Missing asset metadata: ${assetId}`);
+  const referencedAssets = [...referencedAssetIds].map((assetId) => {
+    const asset = project.assets[assetId];
+
+    if (!asset) {
+      throw new Error(`缺少资源元数据：${assetId}`);
     }
+
+    return asset;
+  });
+
+  /**
+   * Read and validate referenced Blobs before starting Base64 conversion.
+   *
+   * This prevents a partially constructed giant HTML string from consuming
+   * browser memory before Animify knows that the export is too large.
+   */
+  const referencedAssetBlobs = new Map<string, Blob>();
+
+  let totalAssetBytes = 0;
+
+  for (const asset of referencedAssets) {
+    const blob = await getAssetBlob(asset.id);
+
+    if (!blob) {
+      throw new Error(`资源文件缺失：${asset.name}`);
+    }
+
+    totalAssetBytes += blob.size;
+
+    if (totalAssetBytes > MAX_STANDALONE_HTML_ASSET_BYTES) {
+      const totalSizeMb = (totalAssetBytes / (1024 * 1024)).toFixed(1);
+
+      throw new Error(
+        `当前演示实际引用的资源共 ${totalSizeMb} MB，超过单文件 HTML 当前的安全导出上限 64 MB。\n\n大视频项目后续将使用 ZIP / 项目包导出，避免浏览器因 Base64 转换耗尽内存。`,
+      );
+    }
+
+    referencedAssetBlobs.set(asset.id, blob);
   }
 
   const portableAssets: Record<string, PortablePresentationAsset> = {};
 
-  for (const asset of Object.values(project.assets)) {
-    const blob = await getAssetBlob(asset.id);
+  /**
+   * Convert only live, referenced assets.
+   *
+   * Resource Center files with zero references stay in IndexedDB and are not
+   * copied into the standalone presentation.
+   */
+  for (const asset of referencedAssets) {
+    const blob = referencedAssetBlobs.get(asset.id);
 
     if (!blob) {
-      if (referencedAssetIds.has(asset.id)) {
-        throw new Error(`Missing asset Blob: ${asset.id}`);
-      }
-
-      portableAssets[asset.id] = {
-        ...asset,
-      };
-
       continue;
     }
 
@@ -185,6 +230,60 @@ function createHtmlDocument(project: PortablePresentationProject) {
       pointer-events: none;
     }
 
+    .element-media {
+      background: transparent !important;
+    }
+
+    .element-media video {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: contain;
+      background: #020617;
+    }
+
+    .element-video-shell {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #020617;
+    }
+
+    .element-video-shell video:fullscreen {
+      width: 100vw;
+      height: 100vh;
+      max-width: none;
+      max-height: none;
+      object-fit: contain;
+      background: #000000;
+    }
+
+    .video-fullscreen-button {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      z-index: 10;
+      border: 1px solid rgba(255, 255, 255, 0.24);
+      border-radius: 999px;
+      padding: 8px 12px;
+      background: rgba(15, 23, 42, 0.78);
+      color: #ffffff;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      backdrop-filter: blur(12px);
+    }
+
+    .video-fullscreen-button:hover {
+      background: rgba(15, 23, 42, 0.94);
+    }
+
+    .element-media audio {
+      width: calc(100% - 24px);
+      max-width: 100%;
+    }
+
     .element-content {
       width: 100%;
       height: 100%;
@@ -276,6 +375,48 @@ function createHtmlDocument(project: PortablePresentationProject) {
      */
     let pendingAnimationTimers = [];
 
+    /**
+     * Fullscreen changes also trigger browser resize events.
+     *
+     * Re-rendering the slide during that transition would remove the fullscreen
+     * media node from the DOM and immediately force the browser to exit fullscreen.
+     */
+    let fullscreenTransitionUntil = 0;
+
+    let viewportResizeTimer = 0;
+
+    document.addEventListener(
+      "fullscreenchange",
+      () => {
+        fullscreenTransitionUntil =
+          performance.now() + 800;
+
+        const fullscreenElement =
+          document.fullscreenElement;
+
+        /**
+         * Give keyboard ownership to a fullscreen video immediately.
+         *
+         * Native browser controls may leave focus on the fullscreen button that was
+         * just activated. Moving focus back to the video prevents the next Space
+         * press from activating that button again.
+         */
+        if (
+          fullscreenElement instanceof
+          HTMLVideoElement
+        ) {
+          window.setTimeout(
+            () => {
+              fullscreenElement.focus({
+                preventScroll: true,
+              });
+            },
+            0,
+          );
+        }
+      },
+    );
+
     const app = document.getElementById("app");
     const prevButton = document.getElementById("prevButton");
     const nextButton = document.getElementById("nextButton");
@@ -296,6 +437,44 @@ function createHtmlDocument(project: PortablePresentationProject) {
       }
 
       return project.assets[assetId];
+    }
+
+    /**
+     * Normalize media preferences from current and older project files.
+     */
+    function getMediaSettings(element) {
+      const media =
+        element?.media || {};
+
+      const rawVolume =
+        Number(media.volume);
+
+      return {
+        startBehavior:
+          media.startBehavior ===
+          "slide-enter"
+            ? "slide-enter"
+            : "manual",
+
+        loop:
+          Boolean(media.loop),
+
+        muted:
+          Boolean(media.muted),
+
+        volume:
+          Number.isFinite(
+            rawVolume,
+          )
+            ? Math.min(
+                1,
+                Math.max(
+                  0,
+                  rawVolume,
+                ),
+              )
+            : 1,
+      };
     }
 
     /**
@@ -452,6 +631,8 @@ function createHtmlDocument(project: PortablePresentationProject) {
       const style = element.style || {};
       const asset = getAsset(element.assetId);
 
+      const mediaSettings =getMediaSettings(element,);
+
       const elementAnimations =
         compiledSlideAnimations?.byElementId?.[element.id] || [];
 
@@ -472,7 +653,12 @@ function createHtmlDocument(project: PortablePresentationProject) {
       const contentNode = document.createElement("div");
 
       node.className =
-        element.type === "image" ? "element element-image" : "element";
+        element.type === "image"
+          ? "element element-image"
+          : element.type === "video" ||
+              element.type === "audio"
+            ? "element element-media"
+            : "element";
 
       node.style.left = String(style.x ?? 0) + "px";
       node.style.top = String(style.y ?? 0) + "px";
@@ -514,10 +700,242 @@ function createHtmlDocument(project: PortablePresentationProject) {
         return node;
       }
 
+      if (
+        element.type === "video" &&
+        asset?.type === "video" &&
+        asset.source
+      ) {
+        const videoShell =
+          document.createElement(
+            "div",
+          );
+
+        videoShell.className =
+          "element-video-shell";
+
+        const video =
+          document.createElement(
+            "video",
+          );
+
+        video.src =
+          asset.source;
+
+        video.controls = true;
+        video.preload =
+          "metadata";
+        video.playsInline = true;
+        video.tabIndex = 0;
+        video.loop =
+          mediaSettings.loop;
+
+        video.muted =
+          mediaSettings.muted;
+
+        video.volume =
+          mediaSettings.volume;
+
+        if (
+          mediaSettings.startBehavior ===
+          "slide-enter"
+        ) {
+          video.dataset.mediaAutoplay =
+            "true";
+        }
+
+        video.style.borderRadius =
+          String(
+            style.borderRadius ??
+              0,
+          ) + "px";
+
+        const fullscreenButton =
+          document.createElement(
+            "button",
+          );
+
+        fullscreenButton.type =
+          "button";
+
+        fullscreenButton.className =
+          "video-fullscreen-button";
+
+        fullscreenButton.textContent =
+          "⛶ 全屏";
+
+        fullscreenButton.title =
+          "全屏播放视频";
+
+        fullscreenButton.addEventListener(
+          "click",
+          async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+
+             /**
+               * Do not leave keyboard focus on the fullscreen button. Otherwise pressing
+               * Space immediately after entering fullscreen may activate the button again.
+               */
+            fullscreenButton.blur();
+
+            try {
+              if (
+                document.fullscreenElement ===
+                video
+              ) {
+                await document.exitFullscreen();
+                return;
+              }
+
+              /**
+               * Fullscreen the actual media element instead of its wrapper.
+               *
+               * The exported slide itself is scaled with CSS transform. Promoting the
+               * real video element directly into the browser fullscreen top layer avoids
+               * wrapper and transformed-ancestor fullscreen issues.
+               */
+              if (video.requestFullscreen) {
+                /**
+                 * Block slide rerender while the browser is entering fullscreen.
+                 */
+                fullscreenTransitionUntil =
+                  performance.now() + 800;
+
+                await video.requestFullscreen();
+
+                return;
+              }
+
+              /**
+               * Safari-style fallback. Desktop Chromium normally uses requestFullscreen,
+               * but keeping the media-specific API makes exported presentations more
+               * portable.
+               */
+              const webkitVideo =
+                video;
+
+              if (
+                typeof webkitVideo.webkitEnterFullscreen ===
+                "function"
+              ) {
+                webkitVideo.webkitEnterFullscreen();
+              }
+            } catch (error) {
+              console.error(
+                "Failed to enter video fullscreen mode.",
+                error,
+              );
+            }
+          },
+        );
+
+        videoShell.appendChild(
+          video,
+        );
+
+        videoShell.appendChild(
+          fullscreenButton,
+        );
+
+        contentNode.appendChild(
+          videoShell,
+        );
+
+        node.appendChild(
+          contentNode,
+        );
+
+        return node;
+      }
+
+      if (
+        element.type === "audio" &&
+        asset?.type === "audio" &&
+        asset.source
+      ) {
+        const audio =
+          document.createElement(
+            "audio",
+          );
+
+        audio.src =
+          asset.source;
+
+        audio.controls = true;
+        audio.preload =
+          "metadata";
+
+        audio.loop =
+          mediaSettings.loop;
+
+        audio.muted =
+          mediaSettings.muted;
+
+        audio.volume =
+          mediaSettings.volume;
+
+        if (
+          mediaSettings.startBehavior ===
+          "slide-enter"
+        ) {
+          audio.dataset.mediaAutoplay =
+            "true";
+        }
+
+        contentNode.appendChild(
+          audio,
+        );
+
+        node.appendChild(
+          contentNode,
+        );
+
+        return node;
+      }
+
       contentNode.innerHTML = escapeHtml(element.content || "");
       node.appendChild(contentNode);
 
       return node;
+    }
+
+    /**
+     * Start every media element configured for slide-entry playback  after the slide
+     * has entered the document.
+     */
+    function playSlideMedia(
+      slideNode,
+    ) {
+      const mediaNodes =
+        slideNode.querySelectorAll(
+          '[data-media-autoplay="true"]',
+        );
+
+      mediaNodes.forEach(
+        (mediaNode) => {
+          if (
+            !(
+              mediaNode instanceof
+              HTMLMediaElement
+            )
+          ) {
+            return;
+          }
+
+          mediaNode
+            .play()
+            .catch((error) => {
+              /**
+               * Browsers may reject unmuted autoplay. The native controls remain
+               * available so the viewer can still start playback manually.
+               */
+              console.warn(
+                "Browser blocked automatic media playback.",
+                error,
+              );
+            });
+        },
+      );
     }
 
     function renderSlide() {
@@ -562,7 +980,14 @@ function createHtmlDocument(project: PortablePresentationProject) {
       // requestAnimationFrame makes page switching more reliable, especially
       // when the browser needs one frame to apply the newly inserted elements.
       requestAnimationFrame(() => {
-        playSlideAnimations(slideNode, compiledSlideAnimations);
+        playSlideAnimations(
+          slideNode,
+          compiledSlideAnimations,
+        );
+
+        playSlideMedia(
+          slideNode,
+        );
       });
 
       slideCounter.textContent = \`\${activeSlideIndex + 1} / \${project.slides.length}\`;
@@ -587,31 +1012,164 @@ function createHtmlDocument(project: PortablePresentationProject) {
       goToSlide(activeSlideIndex + 1);
     });
 
-    window.addEventListener("keydown", (event) => {
-      if (
-        event.key === "ArrowRight" ||
-        event.key === " " ||
-        event.key === "Enter" ||
-        event.key === "PageDown"
-      ) {
-        event.preventDefault();
-        goToSlide(activeSlideIndex + 1);
-        return;
-      }
+    window.addEventListener(
+      "keydown",
+      (event) => {
+        const fullscreenElement =
+          document.fullscreenElement;
 
-      if (event.key === "ArrowLeft" || event.key === "PageUp") {
-        event.preventDefault();
-        goToSlide(activeSlideIndex - 1);
-        return;
-      }
+        /**
+         * A fullscreen video owns the Space key completely.
+         *
+         * Handle this before normal presentation navigation and before relying on
+         * event.target because browser-native media controls can keep internal focus
+         * on one of their shadow-DOM buttons.
+         */
+        if (
+          fullscreenElement instanceof
+            HTMLVideoElement &&
+          event.key === " "
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
 
-      if (event.key === "Escape" && document.fullscreenElement) {
-        event.preventDefault();
-        document.exitFullscreen();
-      }
-    });
+          if (
+            fullscreenElement.paused
+          ) {
+            fullscreenElement
+              .play()
+              .catch((error) => {
+                console.error(
+                  "Failed to resume fullscreen video.",
+                  error,
+                );
+              });
+          } else {
+            fullscreenElement.pause();
+          }
 
-    window.addEventListener("resize", renderSlide);
+          return;
+        }
+
+        if (
+          fullscreenElement instanceof
+          HTMLVideoElement
+        ) {
+          /**
+           * While a video occupies the fullscreen presentation surface, presentation
+           * navigation shortcuts are suspended. The user must leave video fullscreen
+           * before changing slides.
+           */
+          if (
+            event.key ===
+              "ArrowRight" ||
+            event.key ===
+              "ArrowLeft" ||
+            event.key ===
+              "Enter" ||
+            event.key ===
+              "PageDown" ||
+            event.key ===
+              "PageUp"
+          ) {
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+          }
+        }
+
+        const target =
+          event.target;
+
+        /**
+         * Media elements outside fullscreen keep their own native keyboard controls.
+         */
+        if (
+          target instanceof
+          HTMLMediaElement
+        ) {
+          return;
+        }
+
+        if (
+          event.key ===
+            "ArrowRight" ||
+          event.key === " " ||
+          event.key ===
+            "Enter" ||
+          event.key ===
+            "PageDown"
+        ) {
+          event.preventDefault();
+
+          goToSlide(
+            activeSlideIndex + 1,
+          );
+
+          return;
+        }
+
+        if (
+          event.key ===
+            "ArrowLeft" ||
+          event.key ===
+            "PageUp"
+        ) {
+          event.preventDefault();
+
+          goToSlide(
+            activeSlideIndex - 1,
+          );
+
+          return;
+        }
+
+        if (
+          event.key ===
+            "Escape" &&
+          document.fullscreenElement
+        ) {
+          event.preventDefault();
+
+          void document.exitFullscreen();
+        }
+      },
+      true,
+    );
+
+    /**
+     * Resize the exported presentation only after normal viewport changes settle.
+     *
+     * Fullscreen entry and exit also emit resize events. Those transitions must not
+     * rebuild the slide because replacing the DOM would destroy the active media
+     * element and immediately cancel fullscreen playback.
+     */
+    function handleViewportResize() {
+      window.clearTimeout(
+        viewportResizeTimer,
+      );
+
+      viewportResizeTimer =
+        window.setTimeout(
+          () => {
+            if (
+              document.fullscreenElement ||
+              performance.now() <
+                fullscreenTransitionUntil
+            ) {
+              return;
+            }
+
+            renderSlide();
+          },
+          160,
+        );
+    }
+
+    window.addEventListener(
+      "resize",
+      handleViewportResize,
+    );
 
     renderSlide();
   </script>

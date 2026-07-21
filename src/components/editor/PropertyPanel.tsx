@@ -81,6 +81,8 @@ const elementTypeLabels: Record<SlideElement["type"], string> = {
   text: "文本",
   shape: "形状",
   image: "图片",
+  video: "视频",
+  audio: "音频",
   svg: "SVG",
 };
 
@@ -249,11 +251,15 @@ export function PropertyPanel({
     : undefined;
 
   /**
-   * Images do not contain editable text styles. Text, shape, and SVG elements
-   * can all use font size, weight, and color.
+   * Only text-capable elements participate in font batch editing.
+   *
+   * Images, videos, and audio elements keep their media-specific visual content.
    */
   const fontTargetElements = targetElements.filter(
-    (element) => element.type !== "image",
+    (element) =>
+      element.type === "text" ||
+      element.type === "shape" ||
+      element.type === "svg",
   );
 
   const sharedFontSize = getSharedValue(
@@ -345,6 +351,48 @@ export function PropertyPanel({
           updates: {
             style: {
               [key]: value,
+            },
+          },
+        },
+      ],
+      options,
+    );
+  }
+
+  /**
+   * Update persistent playback preferences for one selected video or audio
+   * element.
+   *
+   * Always submit the complete media object because the shared element-update
+   * command performs a top-level replacement for non-style fields.
+   */
+  function updateMediaSettings(
+    updates: Partial<NonNullable<SlideElement["media"]>>,
+    options?: PropertyUpdateOptions,
+  ) {
+    if (
+      !activeElement ||
+      (activeElement.type !== "video" && activeElement.type !== "audio")
+    ) {
+      return;
+    }
+
+    const currentMedia = activeElement.media ?? {
+      startBehavior: "manual" as const,
+      loop: false,
+      muted: false,
+      volume: 1,
+    };
+
+    onUpdateElements?.(
+      [
+        {
+          elementId: activeElement.id,
+
+          updates: {
+            media: {
+              ...currentMedia,
+              ...updates,
             },
           },
         },
@@ -531,6 +579,9 @@ export function PropertyPanel({
             activeElement={activeElement}
             onUpdateContent={updateContent}
             onUpdateStyle={updateStyle}
+            onUpdateMediaSettings={updateMediaSettings}
+            onBeginChange={onBeginPropertyChange}
+            onFinishChange={onFinishPropertyChange}
           />
         ) : null}
 
@@ -552,7 +603,7 @@ export function PropertyPanel({
           ) : (
             <MultiTargetNotice
               title="没有可修改字体的对象"
-              description="当前勾选对象全部是图片。请选择文本、形状或 SVG 元素后再修改字体。"
+              description="当前勾选对象没有可修改字体的内容。请选择文本、形状或 SVG 元素后再修改字体。"
             />
           )
         ) : null}
@@ -590,6 +641,9 @@ function BasicTab({
   activeElement,
   onUpdateContent,
   onUpdateStyle,
+  onUpdateMediaSettings,
+  onBeginChange,
+  onFinishChange,
 }: {
   selectedElements: SlideElement[];
   targetElements: SlideElement[];
@@ -599,7 +653,37 @@ function BasicTab({
     key: keyof SlideElement["style"],
     value: string | number,
   ) => void;
+  onUpdateMediaSettings: (
+    updates: Partial<NonNullable<SlideElement["media"]>>,
+    options?: PropertyUpdateOptions,
+  ) => void;
+
+  onBeginChange?: () => void;
+
+  onFinishChange?: () => void;
 }) {
+  
+    const rawMediaVolume = activeElement?.media?.volume;
+
+    const normalizedMediaVolume =
+      typeof rawMediaVolume === "number" && Number.isFinite(rawMediaVolume)
+        ? Math.min(1, Math.max(0, rawMediaVolume))
+        : 1;
+
+    const mediaSettings: NonNullable<SlideElement["media"]> | null =
+      activeElement &&
+      (activeElement.type === "video" || activeElement.type === "audio")
+        ? {
+            startBehavior: activeElement.media?.startBehavior ?? "manual",
+
+            loop: activeElement.media?.loop ?? false,
+
+            muted: activeElement.media?.muted ?? false,
+
+            volume: normalizedMediaVolume,
+          }
+        : null;
+  
   return (
     <div className="space-y-4">
       <section className="rounded-2xl bg-slate-50 p-4">
@@ -617,6 +701,118 @@ function BasicTab({
         </div>
       </section>
 
+      {mediaSettings ? (
+        <section className="rounded-2xl bg-slate-50 p-4">
+          <h3 className="text-sm font-black text-slate-800">媒体播放</h3>
+
+          <p className="mt-1 text-xs leading-5 text-slate-400">
+            这些设置会同时用于放映模式和导出的 HTML。
+          </p>
+
+          <label className="mt-4 block text-sm">
+            <span className="mb-1 block text-slate-400">开始播放方式</span>
+
+            <select
+              className="w-full rounded-xl bg-white px-3 py-2 text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-violet-300"
+              value={mediaSettings.startBehavior}
+              onChange={(event) =>
+                onUpdateMediaSettings({
+                  startBehavior:
+                    event.target.value === "slide-enter"
+                      ? "slide-enter"
+                      : "manual",
+                })
+              }
+            >
+              <option value="manual">手动播放</option>
+
+              <option value="slide-enter">进入页面时播放</option>
+            </select>
+          </label>
+
+          <div className="mt-3 space-y-2">
+            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl bg-white px-3 py-3">
+              <span>
+                <span className="block text-sm font-bold text-slate-700">
+                  循环播放
+                </span>
+
+                <span className="mt-0.5 block text-[10px] leading-4 text-slate-400">
+                  播放结束后自动从头开始
+                </span>
+              </span>
+
+              <input
+                type="checkbox"
+                className="h-4 w-4 shrink-0 accent-violet-600"
+                checked={mediaSettings.loop}
+                onChange={(event) =>
+                  onUpdateMediaSettings({
+                    loop: event.target.checked,
+                  })
+                }
+              />
+            </label>
+
+            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-xl bg-white px-3 py-3">
+              <span>
+                <span className="block text-sm font-bold text-slate-700">
+                  静音
+                </span>
+
+                <span className="mt-0.5 block text-[10px] leading-4 text-slate-400">
+                  自动播放视频时建议开启
+                </span>
+              </span>
+
+              <input
+                type="checkbox"
+                className="h-4 w-4 shrink-0 accent-violet-600"
+                checked={mediaSettings.muted}
+                onChange={(event) =>
+                  onUpdateMediaSettings({
+                    muted: event.target.checked,
+                  })
+                }
+              />
+            </label>
+          </div>
+
+          <div className="mt-3">
+            <NumberField
+              label="音量（0–100）"
+              value={Math.round(mediaSettings.volume * 100)}
+              min={0}
+              max={100}
+              step={1}
+              onBeginChange={onBeginChange}
+              onFinishChange={onFinishChange}
+              onChange={(value) =>
+                onUpdateMediaSettings(
+                  {
+                    volume: Math.min(1, Math.max(0, value / 100)),
+                  },
+                  {
+                    recordHistory: false,
+                  },
+                )
+              }
+            />
+          </div>
+
+          {mediaSettings.startBehavior === "slide-enter" &&
+          !mediaSettings.muted ? (
+            <p className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-700">
+              浏览器可能阻止有声音的自动播放。需要稳定自动播放时，请同时开启静音。
+            </p>
+          ) : null}
+
+          <p className="mt-3 rounded-xl bg-violet-50 px-3 py-2 text-xs leading-5 text-violet-600">
+            编辑画布不会因为“进入页面时播放”而自动播放；该行为只在正式放映和导出播放器中执行。
+          </p>
+        </section>
+      ) : null}
+
       {activeElement ? (
         <>
           <section className="rounded-2xl bg-slate-50 p-4">
@@ -627,14 +823,19 @@ function BasicTab({
                 value={elementTypeLabels[activeElement.type]}
               />
 
-              <label className="block">
-                <span className="mb-1 block text-slate-400">内容</span>
-                <input
-                  className="w-full rounded-xl bg-white px-3 py-2 text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-violet-300"
-                  value={activeElement.content}
-                  onChange={(event) => onUpdateContent(event.target.value)}
-                />
-              </label>
+              {activeElement.assetId ? (
+                <ReadOnlyField label="资源名称" value={activeElement.content} />
+              ) : (
+                <label className="block">
+                  <span className="mb-1 block text-slate-400">内容</span>
+
+                  <input
+                    className="w-full rounded-xl bg-white px-3 py-2 text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-violet-300"
+                    value={activeElement.content}
+                    onChange={(event) => onUpdateContent(event.target.value)}
+                  />
+                </label>
+              )}
             </div>
           </section>
 
@@ -720,7 +921,7 @@ function FontTab({
         <p className="mt-2 text-xs leading-5 text-violet-500">
           当前会修改 {elements.length} 个勾选对象
           {skippedElementCount > 0
-            ? `，并跳过 ${skippedElementCount} 个图片元素`
+            ? `，并跳过 ${skippedElementCount} 个非文字样式元素`
             : ""}
           。
         </p>

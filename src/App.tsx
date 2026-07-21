@@ -188,6 +188,8 @@ function isSlideElementType(value: unknown): value is SlideElementType {
     value === "text" ||
     value === "shape" ||
     value === "image" ||
+    value === "video" ||
+    value === "audio" ||
     value === "svg"
   );
 }
@@ -240,6 +242,58 @@ function createSlideElement(
         fontSize: 36,
         fontWeight: 800,
         borderRadius: 28,
+      },
+      animations: [],
+    };
+  }
+
+  if (type === "video") {
+    return {
+      id,
+      type,
+      name: `视频元素 ${elementIndex + 1}`,
+      content: "VIDEO",
+      media: {
+        startBehavior: "manual",
+        loop: false,
+        muted: false,
+        volume: 1,
+      },
+      style: {
+        x: position?.x ?? 380,
+        y: position?.y ?? 180,
+        width: 520,
+        height: 292,
+        rotate: 0,
+        opacity: 1,
+        backgroundColor: "#020617",
+        borderRadius: 12,
+      },
+      animations: [],
+    };
+  }
+
+  if (type === "audio") {
+    return {
+      id,
+      type,
+      name: `音频元素 ${elementIndex + 1}`,
+      content: "AUDIO",
+      media: {
+        startBehavior: "manual",
+        loop: false,
+        muted: false,
+        volume: 1,
+      },
+      style: {
+        x: position?.x ?? 430,
+        y: position?.y ?? 310,
+        width: 420,
+        height: 88,
+        rotate: 0,
+        opacity: 1,
+        backgroundColor: "#f8fafc",
+        borderRadius: 16,
       },
       animations: [],
     };
@@ -442,6 +496,13 @@ function duplicateSlide(
   const duplicatedElements = slide.elements.map((element, elementIndex) => ({
     ...element,
     id: `${element.id}-copy-${now}-${elementIndex}`,
+
+    media: element.media
+      ? {
+          ...element.media,
+        }
+      : undefined,
+
     style: {
       ...element.style,
     },
@@ -488,6 +549,13 @@ function cloneSlideElementForInsert(
     ...sourceElement,
     id: newElementId,
     name: `${sourceElement.name} ${nameSuffix}`,
+
+    media: sourceElement.media
+      ? {
+          ...sourceElement.media,
+        }
+      : undefined,
+
     style: {
       ...sourceElement.style,
       x: sourceElement.style.x + 32,
@@ -514,9 +582,7 @@ function cloneAnimationSceneSnapshot(scene: AnimationScene) {
  * empty or generic MIME type for formats such as FLV. File-extension fallback
  * keeps those resources importable without weakening the asset category model.
  */
-function getPresentationAssetType(
-  file: File,
-): PresentationAssetType | null {
+function getPresentationAssetType(file: File): PresentationAssetType | null {
   if (file.type.startsWith("image/")) {
     return "image";
   }
@@ -529,69 +595,51 @@ function getPresentationAssetType(
     return "audio";
   }
 
-  const fileName =
-    file.name.toLowerCase();
+  const fileName = file.name.toLowerCase();
 
-  const extension =
-    fileName.includes(".")
-      ? fileName
-          .split(".")
-          .pop()
-      : "";
+  const extension = fileName.includes(".") ? fileName.split(".").pop() : "";
 
-  const imageExtensions =
-    new Set([
-      "png",
-      "jpg",
-      "jpeg",
-      "gif",
-      "webp",
-      "bmp",
-      "svg",
-      "avif",
-    ]);
+  const imageExtensions = new Set([
+    "png",
+    "jpg",
+    "jpeg",
+    "gif",
+    "webp",
+    "bmp",
+    "svg",
+    "avif",
+  ]);
 
-  const videoExtensions =
-    new Set([
-      "mp4",
-      "webm",
-      "mov",
-      "m4v",
-      "avi",
-      "mkv",
-      "flv",
-      "wmv",
-    ]);
+  const videoExtensions = new Set([
+    "mp4",
+    "webm",
+    "mov",
+    "m4v",
+    "avi",
+    "mkv",
+    "flv",
+    "wmv",
+  ]);
 
-  const audioExtensions =
-    new Set([
-      "mp3",
-      "wav",
-      "ogg",
-      "m4a",
-      "aac",
-      "flac",
-      "opus",
-    ]);
+  const audioExtensions = new Set([
+    "mp3",
+    "wav",
+    "ogg",
+    "m4a",
+    "aac",
+    "flac",
+    "opus",
+  ]);
 
-  if (
-    extension &&
-    imageExtensions.has(extension)
-  ) {
+  if (extension && imageExtensions.has(extension)) {
     return "image";
   }
 
-  if (
-    extension &&
-    videoExtensions.has(extension)
-  ) {
+  if (extension && videoExtensions.has(extension)) {
     return "video";
   }
 
-  if (
-    extension &&
-    audioExtensions.has(extension)
-  ) {
+  if (extension && audioExtensions.has(extension)) {
     return "audio";
   }
 
@@ -631,6 +679,59 @@ function getImageDisplaySize(source: string) {
     };
 
     image.src = source;
+  });
+}
+
+/**
+ * Read native video dimensions and scale the video into a comfortable canvas
+ * size without stretching small media unnecessarily.
+ */
+function getVideoDisplaySize(source: string) {
+  return new Promise<{
+    width: number;
+    height: number;
+  }>((resolve, reject) => {
+    const video =
+      document.createElement("video");
+
+    video.preload = "metadata";
+
+    video.onloadedmetadata = () => {
+      const naturalWidth =
+        video.videoWidth || 640;
+
+      const naturalHeight =
+        video.videoHeight || 360;
+
+      const maxWidth = 640;
+      const maxHeight = 360;
+
+      const scale = Math.min(
+        maxWidth / naturalWidth,
+        maxHeight / naturalHeight,
+        1,
+      );
+
+      resolve({
+        width: Math.round(
+          naturalWidth * scale,
+        ),
+        height: Math.round(
+          naturalHeight * scale,
+        ),
+      });
+    };
+
+    video.onerror = () => {
+      reject(
+        new Error(
+          "Failed to read video metadata.",
+        ),
+      );
+    };
+
+    video.src = source;
+    video.load();
   });
 }
 
@@ -1111,6 +1212,16 @@ function App() {
     }
 
     function handlePresentKeyDown(event: KeyboardEvent) {
+      const target = event.target;
+
+      /**
+       * Media controls keep their native keyboard behavior. Pressing Space while a
+       * video or audio control is focused must not advance the presentation.
+       */
+      if (target instanceof HTMLMediaElement) {
+        return;
+      }
+
       if (
         event.key === "ArrowRight" ||
         event.key === " " ||
@@ -1982,19 +2093,31 @@ function App() {
   }
 
   /**
-   * Insert one existing image asset into the active slide without duplicating its
-   * IndexedDB Blob or creating another PresentationAsset record.
+   * Insert one existing reusable asset into the active slide.
+   *
+   * No new Blob or PresentationAsset is created. The new slide element keeps the
+   * original assetId so images, videos, and audio all reuse one persistent file.
    */
   async function handleInsertExistingAsset(assetId: string) {
     const asset = project.assets[assetId];
 
-    if (!asset || asset.type !== "image") {
+    if (!asset) {
       return;
     }
 
     if (missingAssetIds.includes(assetId)) {
+      window.alert("该资源文件已缺失，请先在资源中心重新挂载。");
+      return;
+    }
+
+    /**
+     * FLV can be stored safely in the resource library, but the browser does not
+     * provide native FLV playback. Keep it out of the canvas until the dedicated
+     * FLV playback layer is implemented.
+     */
+    if (asset.type === "video" && asset.name.toLowerCase().endsWith(".flv")) {
       window.alert(
-        "该图片资源文件已缺失，暂时无法插入。后续资源重新挂载功能可以恢复它。",
+        "FLV 资源已安全保存在资源库中，但当前浏览器原生播放器无法直接播放。FLV 播放将在后续专门接入。",
       );
       return;
     }
@@ -2007,11 +2130,31 @@ function App() {
     }
 
     try {
-      const displaySize = await getImageDisplaySize(source);
+      let displaySize: {
+        width: number;
+        height: number;
+      };
+
+      if (asset.type === "image") {
+        displaySize = await getImageDisplaySize(source);
+      } else if (asset.type === "video") {
+        displaySize = await getVideoDisplaySize(source);
+      } else {
+        /**
+         * Audio has no visual dimensions. Its canvas element acts as a compact media
+         * control card.
+         */
+        displaySize = {
+          width: 420,
+          height: 88,
+        };
+      }
 
       const now = Date.now();
 
-      const elementId = `element-image-reuse-${now}`;
+      const elementId = `element-${asset.type}-reuse-${now}`;
+
+      const elementType: SlideElementType = asset.type;
 
       commitProjectChange((currentProject) => {
         const activeProjectSlide = currentProject.slides.find(
@@ -2022,10 +2165,10 @@ function App() {
           return currentProject;
         }
 
-        const imageOffsetX = 36;
+        const elementOffsetX = 36;
 
-        const lastImageElement = activeProjectSlide.elements
-          .filter((element) => element.type === "image")
+        const lastSameTypeElement = activeProjectSlide.elements
+          .filter((element) => element.type === elementType)
           .at(-1);
 
         const centerX = Math.round(
@@ -2038,32 +2181,62 @@ function App() {
 
         const nextElement: SlideElement = {
           id: elementId,
-          type: "image",
+          type: elementType,
           name: asset.name,
           content: asset.name,
 
           /**
-           * Reuse the original asset ID. No new Blob or asset metadata is created.
+           * Reuse the persistent resource instead of copying its binary file.
            */
           assetId,
 
+          /**
+           * Images do not need playback state. Video and audio start with conservative
+           * manual-playback defaults and can be customized from the property panel.
+           */
+          media:
+            asset.type === "video" || asset.type === "audio"
+              ? {
+                  startBehavior: "manual",
+                  loop: false,
+                  muted: false,
+                  volume: 1,
+                }
+              : undefined,
+
           style: {
-            x: lastImageElement
-              ? lastImageElement.style.x + imageOffsetX
+            x: lastSameTypeElement
+              ? lastSameTypeElement.style.x + elementOffsetX
               : centerX,
-            y: lastImageElement ? lastImageElement.style.y : centerY,
+
+            y: lastSameTypeElement ? lastSameTypeElement.style.y : centerY,
+
             width: displaySize.width,
+
             height: displaySize.height,
+
             rotate: 0,
             opacity: 1,
-            borderRadius: 0,
+
+            backgroundColor:
+              asset.type === "video"
+                ? "#020617"
+                : asset.type === "audio"
+                  ? "#f8fafc"
+                  : undefined,
+
+            borderRadius:
+              asset.type === "video" ? 12 : asset.type === "audio" ? 16 : 0,
           },
+
           animations: [],
         };
 
         return {
           ...currentProject,
+
           updatedAt: new Date().toISOString(),
+
           slides: currentProject.slides.map((slide) =>
             slide.id === currentProject.activeSlideId
               ? {
@@ -2076,148 +2249,253 @@ function App() {
       });
 
       setSelectedElementId(elementId);
+
       setSelectedElementIds([elementId]);
+
       setPropertyTargetElementIds([elementId]);
+
       setPropertyPanelOpen(true);
     } catch (error) {
       console.error("Failed to insert an existing asset.", error);
 
-      window.alert("图片资源插入失败，请稍后重试。");
+      window.alert(
+        asset.type === "video"
+          ? "视频无法被当前浏览器读取或播放，请检查视频格式和编码。"
+          : "资源插入失败，请稍后重试。",
+      );
     }
   }
 
   /**
-   * Permanently delete one project asset that is no longer referenced.
+   * Permanently delete one or more project assets that have no live element
+   * references.
    *
-   * Binary deletion is intentionally not recorded as a normal undo action because
-   * an IndexedDB Blob cannot be reconstructed from a project history snapshot.
-   * Existing undo/redo snapshots are also stripped of this asset metadata so a
-   * later Ctrl + Z cannot resurrect an orphaned Resource Center entry.
+   * Binary deletion is intentionally outside normal undo history because an
+   * IndexedDB Blob cannot be reconstructed from a project snapshot.
    */
-  async function handleDeleteUnusedAsset(assetId: string) {
+  async function deleteUnusedProjectAssets(
+    requestedAssetIds: string[],
+    confirmationMessage: string,
+  ) {
     const currentProject = latestProjectRef.current;
 
-    const asset = currentProject.assets[assetId];
+    const uniqueAssetIds = [...new Set(requestedAssetIds)].filter((assetId) =>
+      Boolean(currentProject.assets[assetId]),
+    );
 
-    if (!asset) {
+    if (uniqueAssetIds.length === 0) {
       return;
     }
 
     /**
-     * Always calculate usage again from the current project instead of trusting
-     * the Resource Center's rendered count.
+     * Recheck references using the latest project. The Resource Center count may
+     * have been rendered before another edit added a new reference.
      */
-    const usageCount = currentProject.slides.reduce(
-      (count, slide) =>
-        count +
-        slide.elements.filter((element) => element.assetId === assetId).length,
-      0,
+    const referencedAssetIds = new Set<string>();
+
+    for (const slide of currentProject.slides) {
+      for (const element of slide.elements) {
+        if (element.assetId) {
+          referencedAssetIds.add(element.assetId);
+        }
+      }
+    }
+
+    const blockedAssetIds = uniqueAssetIds.filter((assetId) =>
+      referencedAssetIds.has(assetId),
     );
 
-    if (usageCount > 0) {
-      window.alert(`该资源仍被引用 ${usageCount} 次，请先删除或替换这些元素。`);
+    if (blockedAssetIds.length > 0) {
+      window.alert(
+        `有 ${blockedAssetIds.length} 项资源仍被页面元素引用，已取消删除。`,
+      );
       return;
     }
 
-    const confirmed = window.confirm(
-      `确定永久删除资源“${asset.name}”吗？\n\n该操作会同时清理本地资源文件，无法通过撤销恢复。`,
-    );
+    const confirmed = window.confirm(confirmationMessage);
 
     if (!confirmed) {
       return;
     }
 
-    try {
-      /**
-       * IndexedDB delete is safe even when the Blob is already missing.
-       */
-      await deleteAssetBlob(assetId);
+    const deletionResults = await Promise.allSettled(
+      uniqueAssetIds.map((assetId) => deleteAssetBlob(assetId)),
+    );
 
-      const runtimeSource = assetSourcesRef.current[assetId];
+    const deletedAssetIds: string[] = [];
+
+    const failedAssetIds: string[] = [];
+
+    deletionResults.forEach((result, index) => {
+      const assetId = uniqueAssetIds[index];
+
+      if (result.status === "fulfilled") {
+        deletedAssetIds.push(assetId);
+        return;
+      }
+
+      failedAssetIds.push(assetId);
+
+      console.error(`Failed to delete asset Blob: ${assetId}`, result.reason);
+    });
+
+    if (deletedAssetIds.length === 0) {
+      window.alert("资源删除失败，没有资源被移除。");
+      return;
+    }
+
+    const deletedAssetIdSet = new Set(deletedAssetIds);
+
+    /**
+     * Revoke and remove every runtime Blob URL belonging to successfully deleted
+     * assets.
+     */
+    const nextAssetSources = {
+      ...assetSourcesRef.current,
+    };
+
+    for (const assetId of deletedAssetIds) {
+      const runtimeSource = nextAssetSources[assetId];
 
       if (runtimeSource?.startsWith("blob:")) {
         URL.revokeObjectURL(runtimeSource);
       }
 
-      const nextAssetSources = {
-        ...assetSourcesRef.current,
+      delete nextAssetSources[assetId];
+    }
+
+    assetSourcesRef.current = nextAssetSources;
+
+    setAssetSources(nextAssetSources);
+
+    setMissingAssetIds((currentMissingAssetIds) =>
+      currentMissingAssetIds.filter(
+        (assetId) => !deletedAssetIdSet.has(assetId),
+      ),
+    );
+
+    /**
+     * The internal clipboard may still contain an image element whose project
+     * asset has just been permanently deleted.
+     */
+    if (
+      copiedElementsRef.current?.elements.some((element) =>
+        Boolean(element.assetId && deletedAssetIdSet.has(element.assetId)),
+      )
+    ) {
+      copiedElementsRef.current = null;
+
+      setHasCopiedElements(false);
+    }
+
+    /**
+     * Remove deleted metadata from one project snapshot.
+     */
+    function removeAssetMetadata(sourceProject: PresentationProject) {
+      let changed = false;
+
+      const nextAssets = {
+        ...sourceProject.assets,
       };
 
-      delete nextAssetSources[assetId];
-
-      assetSourcesRef.current = nextAssetSources;
-
-      setAssetSources(nextAssetSources);
-
-      setMissingAssetIds((currentMissingAssetIds) =>
-        currentMissingAssetIds.filter(
-          (missingAssetId) => missingAssetId !== assetId,
-        ),
-      );
-
-      /**
-       * A copied image could keep an asset ID alive outside the current project.
-       * Clear that clipboard so a later paste cannot recreate a broken element.
-       */
-      if (
-        copiedElementsRef.current?.elements.some(
-          (element) => element.assetId === assetId,
-        )
-      ) {
-        copiedElementsRef.current = null;
-
-        setHasCopiedElements(false);
-      }
-
-      /**
-       * Remove only asset metadata. The reference-count check above guarantees
-       * that no current slide element points at this asset.
-       */
-      function removeAssetMetadata(sourceProject: PresentationProject) {
-        if (!sourceProject.assets[assetId]) {
-          return sourceProject;
+      for (const assetId of deletedAssetIds) {
+        if (!nextAssets[assetId]) {
+          continue;
         }
-
-        const nextAssets = {
-          ...sourceProject.assets,
-        };
 
         delete nextAssets[assetId];
 
-        return {
-          ...sourceProject,
-          assets: nextAssets,
-        };
+        changed = true;
       }
 
-      /**
-       * Permanent binary deletion must also remove the asset entry from history.
-       * Otherwise undoing an unrelated edit could restore metadata whose Blob no
-       * longer exists.
-       */
-      undoStackRef.current = undoStackRef.current.map(removeAssetMetadata);
-
-      redoStackRef.current = redoStackRef.current.map(removeAssetMetadata);
-
-      if (historyGroupSnapshotRef.current) {
-        historyGroupSnapshotRef.current = removeAssetMetadata(
-          historyGroupSnapshotRef.current,
-        );
+      if (!changed) {
+        return sourceProject;
       }
 
-      const nextProject = {
-        ...removeAssetMetadata(latestProjectRef.current),
-        updatedAt: new Date().toISOString(),
+      return {
+        ...sourceProject,
+        assets: nextAssets,
       };
-
-      latestProjectRef.current = nextProject;
-
-      setProject(nextProject);
-    } catch (error) {
-      console.error("Failed to delete unused asset.", error);
-
-      window.alert("资源删除失败，请检查浏览器存储状态后重试。");
     }
+
+    /**
+     * Prevent later undo or redo operations from restoring metadata whose Blob
+     * has already been permanently removed.
+     */
+    undoStackRef.current = undoStackRef.current.map(removeAssetMetadata);
+
+    redoStackRef.current = redoStackRef.current.map(removeAssetMetadata);
+
+    if (historyGroupSnapshotRef.current) {
+      historyGroupSnapshotRef.current = removeAssetMetadata(
+        historyGroupSnapshotRef.current,
+      );
+    }
+
+    const nextProject = {
+      ...removeAssetMetadata(latestProjectRef.current),
+      updatedAt: new Date().toISOString(),
+    };
+
+    latestProjectRef.current = nextProject;
+
+    setProject(nextProject);
+
+    if (failedAssetIds.length > 0) {
+      window.alert(
+        `已清理 ${deletedAssetIds.length} 项资源，另有 ${failedAssetIds.length} 项删除失败并已保留。`,
+      );
+    }
+  }
+
+  /**
+   * Delete one unused resource from its card.
+   */
+  async function handleDeleteUnusedAsset(assetId: string) {
+    const asset = latestProjectRef.current.assets[assetId];
+
+    if (!asset) {
+      return;
+    }
+
+    await deleteUnusedProjectAssets(
+      [assetId],
+      `确定永久删除资源“${asset.name}”吗？\n\n该操作会同时清理本地资源文件，无法通过撤销恢复。`,
+    );
+  }
+
+  /**
+   * Permanently remove every project resource with zero live references.
+   */
+  /**
+   * Permanently remove every project resource with zero live references.
+   */
+  async function handleCleanupUnusedAssets() {
+    const currentProject = latestProjectRef.current;
+
+    const referencedAssetIds = new Set<string>();
+
+    for (const slide of currentProject.slides) {
+      for (const element of slide.elements) {
+        if (element.assetId) {
+          referencedAssetIds.add(element.assetId);
+        }
+      }
+    }
+
+    const unusedAssets = Object.values(currentProject.assets).filter(
+      (asset) => !referencedAssetIds.has(asset.id),
+    );
+
+    if (unusedAssets.length === 0) {
+      window.alert("当前没有未使用资源。");
+      return;
+    }
+
+    await deleteUnusedProjectAssets(
+      unusedAssets.map((asset) => asset.id),
+      `确定永久清理 ${unusedAssets.length} 项未使用资源吗？\n\n这会删除对应的本地资源文件，无法通过撤销恢复。`,
+    );
   }
 
   /**
@@ -3745,7 +4023,12 @@ function App() {
     } catch (error) {
       console.error("Failed to export project.", error);
 
-      window.alert("HTML 导出失败。可能存在缺失或无法读取的资源文件。");
+      const message =
+        error instanceof Error
+          ? error.message
+          : "HTML 导出失败。可能存在缺失或无法读取的资源文件。";
+
+      window.alert(message);
     }
   }
 
@@ -4320,6 +4603,7 @@ function App() {
                       onRelinkAsset={handleOpenAssetRelink}
                       onFocusReference={handleFocusAssetReference}
                       onDeleteAsset={handleDeleteUnusedAsset}
+                      onCleanupUnusedAssets={handleCleanupUnusedAssets}
                     />
                   )}
                 </div>

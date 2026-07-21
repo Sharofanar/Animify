@@ -649,6 +649,7 @@ export function SlideCanvas({
             assetSource={assetSource}
             assetStoreReady={assetStoreReady}
             assetMissing={assetMissing}
+            bare={bare}
             scale={scale}
             compiledAnimations={compiledAnimations}
             legacyAnimationFallback={legacyAnimationFallback}
@@ -800,6 +801,7 @@ function SlideElementView({
   assetSource,
   assetStoreReady,
   assetMissing,
+  bare,
   scale,
   compiledAnimations,
   legacyAnimationFallback,
@@ -825,6 +827,7 @@ function SlideElementView({
   assetSource?: string;
   assetStoreReady: boolean;
   assetMissing: boolean;
+  bare: boolean;
   scale: number;
   compiledAnimations: CompiledElementAnimation[];
   legacyAnimationFallback: boolean;
@@ -853,10 +856,31 @@ function SlideElementView({
   ) => void;
 }) {
   const style = element.style;
+
   const legacyAnimation = element.animations[0];
+
+  const mediaStartBehavior = element.media?.startBehavior ?? "manual";
+
+  const mediaLoop = element.media?.loop ?? false;
+
+  const mediaMuted = element.media?.muted ?? false;
+
+  const rawMediaVolume = element.media?.volume;
+
+  const mediaVolume =
+    typeof rawMediaVolume === "number" && Number.isFinite(rawMediaVolume)
+      ? Math.min(1, Math.max(0, rawMediaVolume))
+      : 1;
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const elementNodeRef = useRef<HTMLDivElement | null>(null);
-  const animationNodeRef = useRef<HTMLSpanElement | null>(null);
+  const animationNodeRef = useRef<HTMLDivElement | null>(null);
+
+  const mediaNodeRef = useRef<HTMLMediaElement | null>(null);
+
+  const [mediaPlaying, setMediaPlaying] = useState(false);
+
+  const [mediaError, setMediaError] = useState(false);
+
   const [draftContent, setDraftContent] = useState(element.content);
 
   const dragStateRef = useRef<{
@@ -890,6 +914,68 @@ function SlideElementView({
     textareaRef.current?.focus();
     textareaRef.current?.select();
   }, [isEditing]);
+
+  /**
+   * Synchronize persistent playback preferences with the native media node.
+   *
+   * DOM media properties are updated directly because volume is a runtime media
+   * property rather than ordinary visual React state.
+   */
+  useEffect(() => {
+    const mediaNode = mediaNodeRef.current;
+
+    if (!mediaNode) {
+      return;
+    }
+
+    mediaNode.loop = mediaLoop;
+
+    mediaNode.muted = mediaMuted;
+
+    mediaNode.volume = mediaVolume;
+  }, [assetSource, mediaLoop, mediaMuted, mediaVolume]);
+
+  /**
+   * Start configured media when the element enters presentation mode.
+   *
+   * Editor preview remains manual so selecting pages and editing properties never
+   * unexpectedly starts several media elements.
+   */
+  useEffect(() => {
+    const mediaNode = mediaNodeRef.current;
+
+    if (!mediaNode || !bare || mediaStartBehavior !== "slide-enter") {
+      return;
+    }
+
+    let cancelled = false;
+
+    const timerId = window.setTimeout(() => {
+      if (cancelled) {
+        return;
+      }
+
+      mediaNode.play().catch((error) => {
+        if (cancelled) {
+          return;
+        }
+
+        /**
+         * Autoplay rejection is normally a browser policy decision rather than
+         * a broken media file, so it should not display the format-error state.
+         */
+        console.warn("Browser blocked automatic media playback.", error);
+      });
+    }, 0);
+
+    return () => {
+      cancelled = true;
+
+      window.clearTimeout(timerId);
+
+      mediaNode.pause();
+    };
+  }, [assetSource, bare, mediaStartBehavior]);
 
   /**
    * Play compiled Animation Schema V2 Clips through the Web Animations API.
@@ -1048,7 +1134,17 @@ function SlideElementView({
     event.stopPropagation();
 
     onSelect?.(element.id);
+
+    if (
+      element.type === "image" ||
+      element.type === "video" ||
+      element.type === "audio"
+    ) {
+      return;
+    }
+
     setDraftContent(element.content);
+
     onStartEditing?.(element.id);
   }
 
@@ -1333,6 +1429,226 @@ function SlideElementView({
     window.addEventListener("pointerup", handlePointerUp);
   }
 
+  /**
+   * Reset transient playback UI when a media element starts loading a new source.
+   *
+   * Media events are the real external-system boundary, so playback state is
+   * synchronized here instead of through a state-setting React effect.
+   */
+  function handleMediaLoadStart() {
+    setMediaPlaying(false);
+    setMediaError(false);
+  }
+
+  async function handleToggleMediaPlayback(
+    event: ReactMouseEvent<HTMLButtonElement>,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const mediaNode = mediaNodeRef.current;
+
+    if (!mediaNode) {
+      return;
+    }
+
+    if (mediaNode.paused) {
+      try {
+        await mediaNode.play();
+      } catch (error) {
+        console.error("Failed to play media.", error);
+
+        setMediaError(true);
+      }
+
+      return;
+    }
+
+    mediaNode.pause();
+  }
+
+  function renderMissingAsset(fallbackName: string) {
+    return (
+      <div
+        className={`flex h-full w-full flex-col items-center justify-center gap-1 rounded-xl border border-dashed px-3 text-center ${
+          assetStoreReady
+            ? "border-rose-300 bg-rose-50/90 text-rose-600"
+            : "border-slate-300 bg-slate-100 text-slate-400"
+        }`}
+      >
+        <span className="text-xs font-black">
+          {assetStoreReady ? "⚠ 资源缺失" : "资源加载中…"}
+        </span>
+
+        {assetStoreReady ? (
+          <span className="max-w-full truncate text-[10px] font-semibold opacity-70">
+            {asset?.name ?? element.content ?? fallbackName}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderElementContent() {
+    if (element.type === "image") {
+      if (asset?.type === "image" && assetSource && !assetMissing) {
+        return (
+          <img
+            src={assetSource}
+            alt={asset.name}
+            draggable={false}
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "contain",
+              pointerEvents: "none",
+              userSelect: "none",
+              borderRadius: element.style.borderRadius ?? 0,
+            }}
+          />
+        );
+      }
+
+      return renderMissingAsset("未知图片");
+    }
+
+    if (element.type === "video") {
+      if (asset?.type !== "video" || !assetSource || assetMissing) {
+        return renderMissingAsset("未知视频");
+      }
+
+      return (
+        <div className="relative flex h-full w-full items-center justify-center overflow-hidden">
+          <video
+            ref={(node) => {
+              mediaNodeRef.current = node;
+            }}
+            src={assetSource}
+            controls={bare}
+            loop={mediaLoop}
+            muted={mediaMuted}
+            onLoadStart={handleMediaLoadStart}
+            preload="metadata"
+            playsInline
+            draggable={false}
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "contain",
+              background: "#020617",
+              pointerEvents: bare ? "auto" : "none",
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => event.stopPropagation()}
+            onPlay={() => setMediaPlaying(true)}
+            onPause={() => setMediaPlaying(false)}
+            onEnded={() => setMediaPlaying(false)}
+            onError={() => setMediaError(true)}
+          />
+
+          {!bare ? (
+            <button
+              type="button"
+              className="absolute bottom-2 right-2 z-20 rounded-full bg-slate-950/80 px-3 py-1.5 text-xs font-black text-white shadow-lg backdrop-blur"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                void handleToggleMediaPlayback(event);
+              }}
+            >
+              {mediaPlaying ? "暂停" : "播放"}
+            </button>
+          ) : null}
+
+          {mediaError ? (
+            <div className="pointer-events-none absolute inset-x-3 top-3 rounded-lg bg-rose-600/90 px-3 py-2 text-center text-[10px] font-bold text-white">
+              当前浏览器无法播放此视频
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
+    if (element.type === "audio") {
+      if (asset?.type !== "audio" || !assetSource || assetMissing) {
+        return renderMissingAsset("未知音频");
+      }
+
+      if (bare) {
+        return (
+          <div className="flex h-full w-full items-center justify-center px-3">
+            <audio
+              ref={(node) => {
+                mediaNodeRef.current = node;
+              }}
+              src={assetSource}
+              controls
+              loop={mediaLoop}
+              muted={mediaMuted}
+              onLoadStart={handleMediaLoadStart}
+              preload="metadata"
+              style={{
+                width: "100%",
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+              onPlay={() => setMediaPlaying(true)}
+              onPause={() => setMediaPlaying(false)}
+              onEnded={() => setMediaPlaying(false)}
+              onError={() => setMediaError(true)}
+            />
+          </div>
+        );
+      }
+
+      return (
+        <div className="flex h-full w-full items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-sm">
+          <audio
+            ref={(node) => {
+              mediaNodeRef.current = node;
+            }}
+            src={assetSource}
+            loop={mediaLoop}
+            muted={mediaMuted}
+            preload="metadata"
+            onLoadStart={handleMediaLoadStart}
+            className="hidden"
+            onPlay={() => setMediaPlaying(true)}
+            onPause={() => setMediaPlaying(false)}
+            onEnded={() => setMediaPlaying(false)}
+            onError={() => setMediaError(true)}
+          />
+
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-violet-100 text-lg font-black text-violet-600">
+            ♪
+          </div>
+
+          <div className="min-w-0 flex-1 text-left">
+            <p className="truncate text-xs font-black text-slate-700">
+              {asset.name}
+            </p>
+
+            <p className="mt-0.5 text-[10px] font-semibold text-slate-400">
+              {mediaError ? "当前浏览器无法播放" : "音频资源"}
+            </p>
+          </div>
+
+          <button
+            type="button"
+            className="shrink-0 rounded-full bg-violet-500 px-3 py-1.5 text-xs font-black text-white shadow-sm"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              void handleToggleMediaPlayback(event);
+            }}
+          >
+            {mediaPlaying ? "暂停" : "播放"}
+          </button>
+        </div>
+      );
+    }
+
+    return element.content;
+  }
+
   return (
     <div
       ref={elementNodeRef}
@@ -1364,49 +1680,13 @@ function SlideElementView({
           onPointerDown={(event) => event.stopPropagation()}
         />
       ) : (
-        <span
+        <div
           ref={animationNodeRef}
           className="flex h-full w-full items-center justify-center whitespace-pre-wrap wrap-break-word"
           style={innerStyle}
         >
-          {element.type === "image" ? (
-            asset?.type === "image" && assetSource && !assetMissing ? (
-              <img
-                src={assetSource}
-                alt={asset.name}
-                draggable={false}
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  objectFit: "contain",
-                  pointerEvents: "none",
-                  userSelect: "none",
-                  borderRadius: element.style.borderRadius ?? 0,
-                }}
-              />
-            ) : (
-              <div
-                className={`flex h-full w-full flex-col items-center justify-center gap-1 rounded-xl border border-dashed px-3 text-center ${
-                  assetStoreReady
-                    ? "border-rose-300 bg-rose-50/90 text-rose-600"
-                    : "border-slate-300 bg-slate-100 text-slate-400"
-                }`}
-              >
-                <span className="text-xs font-black">
-                  {assetStoreReady ? "⚠ 资源缺失" : "资源加载中…"}
-                </span>
-
-                {assetStoreReady ? (
-                  <span className="max-w-full truncate text-[10px] font-semibold opacity-70">
-                    {asset?.name ?? element.content ?? "未知图片"}
-                  </span>
-                ) : null}
-              </div>
-            )
-          ) : (
-            element.content
-          )}
-        </span>
+          {renderElementContent()}
+        </div>
       )}
 
       {/* Show the canvas selection number for each multi-selected element.

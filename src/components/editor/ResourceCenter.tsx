@@ -21,10 +21,9 @@ type ResourceCenterProps = {
 
   onFocusReference: (slideId: string, elementId: string) => void;
 
-  /**
-   * Permanently remove one unused project asset.
-   */
   onDeleteAsset: (assetId: string) => void;
+
+  onCleanupUnusedAssets: () => void;
 };
 
 const assetFilters: Array<{
@@ -82,6 +81,108 @@ function getAssetTypeLabel(type: PresentationAssetType) {
 }
 
 /**
+ * Read the visible file extension without trusting MIME metadata. This is useful
+ * for formats such as FLV whose MIME may be empty or generic on Windows.
+ */
+function getAssetExtension(
+  fileName: string,
+) {
+  const normalizedName =
+    fileName.trim().toLowerCase();
+
+  const lastDotIndex =
+    normalizedName.lastIndexOf(
+      ".",
+    );
+
+  if (
+    lastDotIndex <= 0 ||
+    lastDotIndex ===
+      normalizedName.length - 1
+  ) {
+    return "";
+  }
+
+  return normalizedName.slice(
+    lastDotIndex + 1,
+  );
+}
+
+function getAssetFormatLabel(
+  asset: PresentationAsset,
+) {
+  const extension =
+    getAssetExtension(
+      asset.name,
+    );
+
+  if (extension) {
+    return extension.toUpperCase();
+  }
+
+  const mimeSubtype =
+    asset.mimeType
+      .split("/")[1]
+      ?.split(";")[0]
+      ?.trim();
+
+  return mimeSubtype
+    ? mimeSubtype.toUpperCase()
+    : "未知格式";
+}
+
+/**
+ * Explain what Animify can currently do with the stored resource.
+ */
+function getAssetSupportLabel(asset: PresentationAsset, missing: boolean) {
+  if (missing) {
+    return "资源文件缺失";
+  }
+
+  if (asset.type === "image") {
+    return "可插入画布";
+  }
+
+  if (asset.type === "video" && getAssetExtension(asset.name) === "flv") {
+    return "已入库 · FLV 播放待接入";
+  }
+
+  if (asset.type === "video") {
+    return "可插入画布 · 浏览器原生视频";
+  }
+
+  return "可插入画布 · 浏览器原生音频";
+}
+
+/**
+ * Images and browser-native media can become canvas elements immediately.
+ * FLV remains a library-only asset until the dedicated playback layer exists.
+ */
+function canInsertAssetToCanvas(
+  asset: PresentationAsset,
+  missing: boolean,
+  source?: string,
+) {
+  if (
+    missing ||
+    !source
+  ) {
+    return false;
+  }
+
+  if (
+    asset.type === "video" &&
+    getAssetExtension(
+      asset.name,
+    ) === "flv"
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
  * Resource Center V1.
  *
  * The project remains the source of truth for metadata and references. Runtime
@@ -97,6 +198,7 @@ export function ResourceCenter({
   onRelinkAsset,
   onFocusReference,
   onDeleteAsset,
+  onCleanupUnusedAssets,
 }: ResourceCenterProps) {
   const [activeFilter, setActiveFilter] = useState<AssetFilter>("all");
 
@@ -150,6 +252,14 @@ export function ResourceCenter({
     return nextReferences;
   }, [slides]);
 
+  const unusedAssetCount = useMemo(
+    () =>
+      Object.keys(assets).filter(
+        (assetId) => (referencesByAssetId[assetId] ?? []).length === 0,
+      ).length,
+    [assets, referencesByAssetId],
+  );
+
   const filteredAssets = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
 
@@ -187,13 +297,30 @@ export function ResourceCenter({
           </p>
         </div>
 
-        <button
-          type="button"
-          className="shrink-0 rounded-full bg-violet-500 px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-violet-600"
-          onClick={onUploadResource}
-        >
-          + 上传资源
-        </button>
+        <div className="flex shrink-0 flex-col gap-2">
+          <button
+            type="button"
+            className="rounded-full bg-violet-500 px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-violet-600"
+            onClick={onUploadResource}
+          >
+            + 上传资源
+          </button>
+
+          <button
+            type="button"
+            disabled={unusedAssetCount === 0}
+            className={`rounded-full px-3 py-2 text-[10px] font-bold transition ${
+              unusedAssetCount === 0
+                ? "cursor-not-allowed bg-slate-100 text-slate-300"
+                : "border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
+            }`}
+            onClick={onCleanupUnusedAssets}
+          >
+            {unusedAssetCount === 0
+              ? "暂无未使用"
+              : `清理未使用（${unusedAssetCount}）`}
+          </button>
+        </div>
       </div>
 
       <input
@@ -231,7 +358,7 @@ export function ResourceCenter({
             <p className="text-sm font-bold text-slate-500">暂无资源</p>
 
             <p className="mt-2 text-xs leading-5 text-slate-400">
-              上传图片后会自动出现在资源中心。
+              上传图片、视频或音频后会自动出现在资源中心。
             </p>
           </div>
         ) : (
@@ -245,6 +372,25 @@ export function ResourceCenter({
             const usageCount = references.length;
 
             const referencesExpanded = expandedReferenceAssetId === asset.id;
+
+            const formatLabel = getAssetFormatLabel(asset);
+
+            const supportLabel = getAssetSupportLabel(asset, missing);
+
+            const canInsertToCanvas = canInsertAssetToCanvas(
+              asset,
+              missing,
+              source,
+            );
+
+            const insertButtonLabel = missing
+              ? "资源缺失"
+              : !source
+                ? "资源加载中…"
+                : asset.type === "video" &&
+                    getAssetExtension(asset.name) === "flv"
+                  ? "FLV 播放待接入"
+                  : "插入当前页";
 
             return (
               <article
@@ -305,27 +451,42 @@ export function ResourceCenter({
                   <div className="mt-2 flex flex-wrap gap-2 text-[10px] font-semibold text-slate-400">
                     <span>{formatFileSize(asset.size)}</span>
 
+                    <span>{formatLabel}</span>
+
                     <span>引用 {usageCount} 次</span>
                   </div>
 
-                  {asset.type === "image" ? (
-                    <button
-                      type="button"
-                      disabled={missing || !source}
-                      className={`mt-3 w-full rounded-xl px-3 py-2 text-xs font-bold transition ${
-                        missing || !source
-                          ? "cursor-not-allowed bg-slate-100 text-slate-300"
-                          : "bg-violet-500 text-white hover:bg-violet-600"
-                      }`}
-                      onClick={() => onInsertAsset(asset.id)}
-                    >
-                      {missing ? "资源缺失" : "插入当前页"}
-                    </button>
-                  ) : (
-                    <div className="mt-3 rounded-xl bg-slate-100 px-3 py-2 text-center text-[10px] font-bold text-slate-400">
-                      画布接入将在后续阶段开放
-                    </div>
-                  )}
+                  <p
+                    className="mt-1 truncate text-[10px] font-medium text-slate-400"
+                    title={asset.mimeType}
+                  >
+                    {asset.mimeType || "MIME 未知"}
+                  </p>
+
+                  <p
+                    className={`mt-2 rounded-lg px-2 py-1.5 text-center text-[10px] font-bold ${
+                      missing
+                        ? "bg-rose-50 text-rose-500"
+                        : asset.type === "image"
+                          ? "bg-emerald-50 text-emerald-600"
+                          : "bg-amber-50 text-amber-700"
+                    }`}
+                  >
+                    {supportLabel}
+                  </p>
+
+                  <button
+                    type="button"
+                    disabled={!canInsertToCanvas}
+                    className={`mt-3 w-full rounded-xl px-3 py-2 text-xs font-bold transition ${
+                      canInsertToCanvas
+                        ? "bg-violet-500 text-white hover:bg-violet-600"
+                        : "cursor-not-allowed bg-slate-100 text-slate-300"
+                    }`}
+                    onClick={() => onInsertAsset(asset.id)}
+                  >
+                    {insertButtonLabel}
+                  </button>
 
                   {missing ? (
                     <button

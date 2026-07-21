@@ -1,4 +1,10 @@
-export type SlideElementType = "text" | "shape" | "image" | "svg";
+export type SlideElementType =
+  | "text"
+  | "shape"
+  | "image"
+  | "video"
+  | "audio"
+  | "svg";
 
 export type PresentationAssetType = "image" | "video" | "audio";
 
@@ -303,12 +309,43 @@ export type SlideElementStyle = {
   borderRadius?: number;
 };
 
+/**
+ * Persistent playback behavior shared by video and audio slide elements.
+ *
+ * More advanced trigger-driven playback will later be connected to the unified
+ * Animation & Interaction system. This structure stores only the media element's
+ * basic playback preferences.
+ */
+export type SlideElementMediaSettings = {
+  startBehavior:
+    | "manual"
+    | "slide-enter";
+
+  loop: boolean;
+
+  muted: boolean;
+
+  /**
+   * Normalized volume from 0 to 1.
+   */
+  volume: number;
+};
+
 export type SlideElement = {
   id: string;
   type: SlideElementType;
   name: string;
   content: string;
   assetId?: string;
+
+  /**
+   * Video and audio playback preferences.
+   *
+   * Older projects may not contain this field, so every renderer must preserve
+   * backward-compatible defaults when media is undefined.
+   */
+  media?: SlideElementMediaSettings;
+
   style: SlideElementStyle;
 
   /**

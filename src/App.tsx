@@ -15,6 +15,7 @@ import {
 } from "react";
 import { ComponentLibrary } from "./components/editor/ComponentLibrary";
 import { AnimationFloatingPanel } from "./components/editor/AnimationFloatingPanel";
+import { AnimationTimeline } from "./components/editor/AnimationTimeline";
 import { PropertyPanel } from "./components/editor/PropertyPanel";
 import { ResourceCenter } from "./components/editor/ResourceCenter";
 import { DuplicateResourceReviewPanel } from "./components/editor/DuplicateResourceReviewPanel";
@@ -41,6 +42,7 @@ import {
   deleteAnimationClipFromSlide,
   deleteAnimationKeyframeFromSlide,
   duplicateAnimationClipInSlide,
+  isAnimationClipLiveForElements,
   updateAnimationClipEasingInSlide,
   updateAnimationClipTimingInSlide,
   updateAnimationKeyframeEasingInSlide,
@@ -58,7 +60,6 @@ import {
   type UpdateAnimationKeyframeValueCommand,
 } from "./utils/animationCommands";
 import type {
-  AnimationClip,
   AnimationScene,
   PresentationAsset,
   PresentationAssetType,
@@ -68,6 +69,28 @@ import type {
 } from "./types/presentation";
 
 const STORAGE_KEY = "animify-project";
+
+const ANIMATION_WORKSPACE_DISPLAY_MODE_KEY =
+  "animify-animation-workspace-display-mode";
+
+type AnimationWorkspaceDisplayMode = "on-demand" | "always";
+
+/**
+ * Read the local editor preference without coupling it to presentation data.
+ *
+ * This setting controls only the Animify workspace layout on the current
+ * browser and must never be serialized into PresentationProject.
+ */
+function loadAnimationWorkspaceDisplayMode(): AnimationWorkspaceDisplayMode {
+  try {
+    return localStorage.getItem(ANIMATION_WORKSPACE_DISPLAY_MODE_KEY) ===
+      "always"
+      ? "always"
+      : "on-demand";
+  } catch {
+    return "on-demand";
+  }
+}
 
 type LegacyPresentationAsset = PresentationAsset & {
   source?: string;
@@ -358,28 +381,6 @@ function createSlideElement(
 
 function clampPosition(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
-}
-
-function getAnimationClipCategoryLabel(category: AnimationClip["category"]) {
-  switch (category) {
-    case "enter":
-      return "进入";
-
-    case "emphasis":
-      return "强调";
-
-    case "exit":
-      return "退出";
-
-    case "motion":
-      return "路径";
-
-    case "interaction":
-      return "交互";
-
-    case "custom":
-      return "自定义";
-  }
 }
 
 function loadSavedProject(): PresentationProject {
@@ -761,6 +762,21 @@ function App() {
     useState<LeftPanelMode>("components");
 
   const [animationPreviewKey, setAnimationPreviewKey] = useState(0);
+
+  /**
+   * Shared timeline time state.
+   *
+   * slideId prevents a Playhead position from one page leaking visually into
+   * another page without needing a setState-in-effect reset.
+   */
+  const [animationTimelinePlayhead, setAnimationTimelinePlayhead] = useState<{
+    slideId: string;
+    timeMs: number;
+  }>({
+    slideId: "",
+    timeMs: 0,
+  });
+
   const [presentToolbarOpen, setPresentToolbarOpen] = useState(false);
   const [propertyPanelOpen, setPropertyPanelOpen] = useState(true);
 
@@ -811,10 +827,17 @@ function App() {
   const activeDuplicateReview = duplicateReviewQueue[0];
 
   /**
-   * The floating animation workspace is hidden outside animation mode, but its
-   * open state and dragged position remain available when the user returns.
+   * Decide whether the advanced animation workspace is permanently visible in
+   * animation mode or opened only when detailed editing is requested.
    */
-  const [animationPanelOpen, setAnimationPanelOpen] = useState(true);
+  const [animationWorkspaceDisplayMode, setAnimationWorkspaceDisplayMode] =
+    useState<AnimationWorkspaceDisplayMode>(loadAnimationWorkspaceDisplayMode);
+
+  /**
+   * In on-demand mode this stores whether the user explicitly opened the advanced
+   * workspace. Always mode ignores this flag because visibility is persistent.
+   */
+  const [animationPanelOpen, setAnimationPanelOpen] = useState(false);
 
   /**
    * The Clip currently selected across every animation editor.
@@ -894,6 +917,11 @@ function App() {
   const activeSlide = project.slides.find(
     (slide) => slide.id === project.activeSlideId,
   );
+
+  const animationTimelineCurrentTimeMs =
+    animationTimelinePlayhead.slideId === project.activeSlideId
+      ? animationTimelinePlayhead.timeMs
+      : 0;
 
   const [selectedElementId, setSelectedElementId] = useState(
     demoProject.slides[0]?.elements[0]?.id ?? "",
@@ -1027,6 +1055,23 @@ function App() {
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
   }, [assetStoreReady, project]);
+
+  /**
+   * Persist editor UI preferences independently from the presentation project.
+   */
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        ANIMATION_WORKSPACE_DISPLAY_MODE_KEY,
+        animationWorkspaceDisplayMode,
+      );
+    } catch (error) {
+      console.warn(
+        "Failed to save animation workspace display preference.",
+        error,
+      );
+    }
+  }, [animationWorkspaceDisplayMode]);
 
   useEffect(() => {
     if (!elementContextMenu && !canvasContextMenu) {
@@ -1806,19 +1851,16 @@ function App() {
    */
   const activeSlideTimelineClips =
     activeAnimationScene?.schemaVersion === 2
-      ? Object.values(activeAnimationScene.clips).sort(
-          (left, right) =>
-            left.startMs - right.startMs || left.name.localeCompare(right.name),
-        )
+      ? Object.values(activeAnimationScene.clips)
+          .filter((clip) =>
+            isAnimationClipLiveForElements(clip, activeSlide.elements),
+          )
+          .sort(
+            (left, right) =>
+              left.startMs - right.startMs ||
+              left.name.localeCompare(right.name),
+          )
       : [];
-
-  /**
-   * The furthest Clip end defines the visible timeline scale.
-   */
-  const animationTimelineDurationMs = Math.max(
-    1,
-    ...activeSlideTimelineClips.map((clip) => clip.startMs + clip.durationMs),
-  );
 
   /**
    * Keep stale UI selection harmless after delete, undo, redo, or slide changes.
@@ -4139,10 +4181,6 @@ function App() {
     setPropertyTargetElementIds([elementId]);
     setPropertyPanelOpen(true);
     setActiveAnimationContext(null);
-
-    if (mode === "animation") {
-      setAnimationPanelOpen(true);
-    }
   }
 
   /**
@@ -4164,10 +4202,6 @@ function App() {
     setElementContextMenu(null);
     setPropertyPanelOpen(nextSelectedElementIds.length > 0);
     setActiveAnimationContext(null);
-
-    if (mode === "animation" && nextSelectedElementIds.length > 0) {
-      setAnimationPanelOpen(true);
-    }
   }
 
   /**
@@ -4181,10 +4215,6 @@ function App() {
     setCanvasContextMenu(null);
     setPropertyPanelOpen(elementIds.length > 0);
     setActiveAnimationContext(null);
-
-    if (mode === "animation" && elementIds.length > 0) {
-      setAnimationPanelOpen(true);
-    }
   }
 
   /**
@@ -4681,10 +4711,48 @@ function App() {
   }
 
   /**
-   * Select one lower-timeline Clip and open the detailed track inspector.
+   * Update editor timeline navigation only.
+   *
+   * Timeline V2-A intentionally does not seek the rendered canvas yet.
+   */
+  function handleAnimationTimelineTimeChange(timeMs: number) {
+    setAnimationTimelinePlayhead({
+      slideId: project.activeSlideId,
+      timeMs: Math.max(0, timeMs),
+    });
+  }
+
+  /**
+   * Replaying the page also returns the Playhead to the beginning.
+   *
+   * Actual playback still uses the existing stable animationPreviewKey pipeline.
+   */
+  function handleReplayCurrentSlideAnimation() {
+    setAnimationTimelinePlayhead({
+      slideId: project.activeSlideId,
+      timeMs: 0,
+    });
+
+    setAnimationPreviewKey((key) => key + 1);
+  }
+
+  /**
+   * Select one lower-timeline Clip without forcing the advanced workspace open.
+   *
+   * In on-demand mode a normal click is navigation only.
    */
   function handleFocusTimelineClip(elementId: string, clipId: string) {
     handleSelectAnimationClip(elementId, clipId);
+  }
+
+  /**
+   * Explicitly open one Clip in the advanced track editor.
+   *
+   * This is used by double-click and detailed-edit actions.
+   */
+  function handleOpenAnimationClipDetails(elementId: string, clipId: string) {
+    handleSelectAnimationClip(elementId, clipId);
+
     setAnimationPanelOpen(true);
   }
 
@@ -4729,6 +4797,43 @@ function App() {
         ? animationContextRequestCounterRef.current
         : (activeAnimationContext?.requestId ?? 0),
     });
+  }
+
+  /**
+   * Enter animation mode without treating mode navigation as a request for the
+   * advanced editor.
+   *
+   * Always mode reveals the workspace through the render condition. On-demand
+   * mode starts clean whenever the user enters animation mode from another mode.
+   */
+  function handleEnterAnimationMode() {
+    const enteringFromAnotherMode = mode !== "animation";
+
+    setMode("animation");
+
+    if (
+      enteringFromAnotherMode &&
+      animationWorkspaceDisplayMode === "on-demand"
+    ) {
+      setAnimationPanelOpen(false);
+    }
+  }
+
+  /**
+   * Change the local advanced-editor visibility preference.
+   */
+  function handleAnimationWorkspaceDisplayModeChange(
+    nextMode: AnimationWorkspaceDisplayMode,
+  ) {
+    setAnimationWorkspaceDisplayMode(nextMode);
+
+    /**
+     * Switching back to on-demand should immediately remove a previously
+     * persistent panel. The user can reopen it through an explicit detail action.
+     */
+    if (nextMode === "on-demand") {
+      setAnimationPanelOpen(false);
+    }
   }
 
   /**
@@ -4795,7 +4900,7 @@ function App() {
                       ? "bg-white text-violet-600 shadow-sm"
                       : "text-slate-500 hover:text-slate-900"
                   }`}
-                  onClick={handleOpenAnimationWorkspace}
+                  onClick={handleEnterAnimationMode}
                 >
                   动画
                 </button>
@@ -4812,7 +4917,7 @@ function App() {
               <button
                 type="button"
                 className="rounded-full bg-violet-500 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-600"
-                onClick={() => setAnimationPreviewKey((key) => key + 1)}
+                onClick={handleReplayCurrentSlideAnimation}
               >
                 播放动画
               </button>
@@ -5086,139 +5191,18 @@ function App() {
                 />
               </div>
               {mode === "animation" ? (
-                <section
-                  className="mt-3 flex shrink-0 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white p-4 shadow-sm"
-                  style={{ height: 260 }}
-                >
-                  <div className="flex shrink-0 items-center justify-between">
-                    <div>
-                      <p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-500">
-                        TIMELINE
-                      </p>
-                      <h2 className="text-lg font-black text-slate-950">
-                        动画时间轴
-                      </h2>
-                    </div>
-
-                    <button
-                      type="button"
-                      className="rounded-full bg-violet-500 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-violet-600"
-                      onClick={() => setAnimationPreviewKey((key) => key + 1)}
-                    >
-                      播放当前页动画
-                    </button>
-                  </div>
-
-                  <div className="mt-3 min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-2">
-                    {activeSlide.elements.map((element, index) => {
-                      const elementClips = activeSlideTimelineClips.filter(
-                        (clip) =>
-                          clip.targets.some(
-                            (target) => target.elementId === element.id,
-                          ),
-                      );
-
-                      return (
-                        <div
-                          key={element.id}
-                          className="grid grid-cols-[140px_minmax(0,1fr)] items-start gap-3 rounded-2xl bg-slate-50 px-3 py-1.5"
-                        >
-                          <div
-                            className="truncate pt-1 text-sm font-semibold text-slate-700"
-                            title={element.name}
-                          >
-                            {index + 1}.{" "}
-                            {element.content || element.name || element.id}
-                          </div>
-
-                          {elementClips.length > 0 ? (
-                            <div className="space-y-1">
-                              {elementClips.map((clip) => {
-                                const leftPercentage = Math.min(
-                                  100,
-                                  Math.max(
-                                    0,
-                                    (clip.startMs /
-                                      animationTimelineDurationMs) *
-                                      100,
-                                  ),
-                                );
-
-                                const availablePercentage = Math.max(
-                                  1,
-                                  100 - leftPercentage,
-                                );
-
-                                const durationPercentage =
-                                  (clip.durationMs /
-                                    animationTimelineDurationMs) *
-                                  100;
-
-                                const widthPercentage = Math.min(
-                                  availablePercentage,
-                                  Math.max(4, durationPercentage),
-                                );
-
-                                const focused =
-                                  effectiveActiveAnimationContext?.elementId ===
-                                    element.id &&
-                                  effectiveActiveAnimationContext.clipId ===
-                                    clip.id;
-
-                                return (
-                                  <div
-                                    key={clip.id}
-                                    className="relative h-7 overflow-hidden rounded-full bg-white"
-                                  >
-                                    <button
-                                      type="button"
-                                      className={`absolute top-1 flex h-5 min-w-0 items-center gap-1 overflow-hidden rounded-full px-2 text-left text-[10px] font-black text-white shadow-sm transition hover:z-10 hover:brightness-105 ${
-                                        focused
-                                          ? "bg-violet-600 ring-2 ring-violet-300"
-                                          : "bg-violet-400"
-                                      }`}
-                                      style={{
-                                        left: `${leftPercentage}%`,
-                                        width: `${widthPercentage}%`,
-                                      }}
-                                      title={`${clip.name} · ${getAnimationClipCategoryLabel(
-                                        clip.category,
-                                      )} · 开始 ${clip.startMs}ms · 时长 ${
-                                        clip.durationMs
-                                      }ms`}
-                                      onClick={(event) => {
-                                        event.stopPropagation();
-
-                                        handleFocusTimelineClip(
-                                          element.id,
-                                          clip.id,
-                                        );
-                                      }}
-                                    >
-                                      <span className="min-w-0 flex-1 truncate">
-                                        {clip.name}
-                                      </span>
-
-                                      <span className="shrink-0 rounded-full bg-white/20 px-1.5 text-[9px]">
-                                        {getAnimationClipCategoryLabel(
-                                          clip.category,
-                                        )}
-                                      </span>
-                                    </button>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          ) : (
-                            <div className="h-7 rounded-full bg-white px-3 text-xs leading-7 text-slate-400">
-                              暂无动画
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </section>
+                <AnimationTimeline
+                  elements={activeSlide.elements}
+                  clips={activeSlideTimelineClips}
+                  currentTimeMs={animationTimelineCurrentTimeMs}
+                  activeAnimationContext={
+                    effectiveActiveAnimationContext ?? undefined
+                  }
+                  onCurrentTimeChange={handleAnimationTimelineTimeChange}
+                  onSelectClip={handleFocusTimelineClip}
+                  onOpenClipDetails={handleOpenAnimationClipDetails}
+                  onReplayAnimation={handleReplayCurrentSlideAnimation}
+                />
               ) : null}
             </div>
             {showPropertyPanel ? (
@@ -5232,6 +5216,11 @@ function App() {
                   activeAnimationContext={
                     effectiveActiveAnimationContext ?? undefined
                   }
+                  animationWorkspaceDisplayMode={animationWorkspaceDisplayMode}
+                  onAnimationWorkspaceDisplayModeChange={
+                    handleAnimationWorkspaceDisplayModeChange
+                  }
+                  onOpenAnimationClipDetails={handleOpenAnimationClipDetails}
                   onSelectAnimationClip={handleSelectAnimationClip}
                   onUpdateAnimationClipTiming={handleUpdateAnimationClipTiming}
                   onOpenAnimationWorkspace={handleOpenAnimationWorkspace}
@@ -5251,13 +5240,17 @@ function App() {
       </main>
 
       <AnimationFloatingPanel
-        visible={mode === "animation" && animationPanelOpen}
+        visible={
+          mode === "animation" &&
+          (animationWorkspaceDisplayMode === "always" || animationPanelOpen)
+        }
+        persistent={animationWorkspaceDisplayMode === "always"}
         scene={activeSlide.animationScene}
         elements={selectedElements}
         activeAnimationContext={effectiveActiveAnimationContext ?? undefined}
         onSelectClip={handleSelectAnimationClipFromWorkspace}
         onClose={() => setAnimationPanelOpen(false)}
-        onReplayAnimation={() => setAnimationPreviewKey((key) => key + 1)}
+        onReplayAnimation={handleReplayCurrentSlideAnimation}
         onAddClip={handleAddAnimationClip}
         onDuplicateClip={handleDuplicateAnimationClip}
         onDeleteClip={handleDeleteAnimationClip}

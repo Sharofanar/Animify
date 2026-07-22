@@ -35,6 +35,7 @@ type ActiveAnimationContext = {
 
 type AnimationFloatingPanelProps = {
   visible: boolean;
+  persistent?: boolean;
   scene?: AnimationScene;
   elements: SlideElement[];
   activeAnimationContext?: ActiveAnimationContext;
@@ -144,6 +145,7 @@ function createInitialPanelPosition(): PanelPosition {
  */
 export function AnimationFloatingPanel({
   visible,
+  persistent = false,
   scene,
   elements,
   activeAnimationContext,
@@ -306,16 +308,25 @@ export function AnimationFloatingPanel({
             播放
           </button>
 
-          <button
-            type="button"
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-sm font-black text-slate-400 shadow-sm transition hover:bg-rose-50 hover:text-rose-500"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={onClose}
-            aria-label="关闭动画工作区"
-            title="关闭动画工作区"
-          >
-            ×
-          </button>
+          {persistent ? (
+            <span
+              className="rounded-full bg-white px-3 py-1.5 text-xs font-black text-violet-600 shadow-sm"
+              title="高级轨道编辑器当前设置为始终显示"
+            >
+              常驻
+            </span>
+          ) : (
+            <button
+              type="button"
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-sm font-black text-slate-400 shadow-sm transition hover:bg-rose-50 hover:text-rose-500"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={onClose}
+              aria-label="关闭动画工作区"
+              title="关闭动画工作区"
+            >
+              ×
+            </button>
+          )}
         </div>
       </div>
 
@@ -325,7 +336,7 @@ export function AnimationFloatingPanel({
             <p className="text-base font-black text-slate-700">尚未选择元素</p>
 
             <p className="mt-2 text-sm leading-6 text-slate-400">
-              在幕布上点击一个元素，动画工作区会自动显示该元素的 Clip、Track 和
+              在幕布上选择一个元素后，这里会显示该元素的 Clip、Track 和
               Keyframe。
             </p>
           </section>

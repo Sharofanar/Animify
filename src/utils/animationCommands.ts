@@ -80,6 +80,61 @@ export type DeleteAnimationClipCommand = {
   clipId: string;
 };
 
+/**
+ * Check whether one Clip still belongs to live slide elements.
+ *
+ * Pure V2 Clips only need a valid target element. Legacy-compatible Clips must
+ * additionally keep their matching element.animations entry; otherwise they are
+ * stale migration records and must not appear in current editor views.
+ */
+export function isAnimationClipLiveForElements(
+  clip: AnimationClip,
+  elements: SlideElement[],
+) {
+  const targetElements =
+    clip.targets.flatMap(
+      (target) => {
+        const element =
+          elements.find(
+            (item) =>
+              item.id ===
+              target.elementId,
+          );
+
+        return element
+          ? [element]
+          : [];
+      },
+    );
+
+  if (
+    targetElements.length === 0
+  ) {
+    return false;
+  }
+
+  const legacyAnimationId =
+    getLegacyAnimationId(
+      clip,
+    );
+
+  /**
+   * Native V2 Clips do not require the temporary legacy compatibility mirror.
+   */
+  if (!legacyAnimationId) {
+    return true;
+  }
+
+  return targetElements.some(
+    (element) =>
+      element.animations.some(
+        (animation) =>
+          animation.id ===
+          legacyAnimationId,
+      ),
+  );
+}
+
 export type UpdateAnimationClipTimingCommand = {
   clipId: string;
   updates: {

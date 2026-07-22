@@ -4,7 +4,10 @@ import type {
   AnimationScene,
   SlideElement,
 } from "../../types/presentation";
-import type { UpdateAnimationClipTimingCommand } from "../../utils/animationCommands";
+import {
+  isAnimationClipLiveForElements,
+  type UpdateAnimationClipTimingCommand,
+} from "../../utils/animationCommands";
 
 type LayerAction =
   | "bring-forward"
@@ -13,6 +16,8 @@ type LayerAction =
   | "send-to-back";
 
 type PropertyTab = "basic" | "font" | "animation" | "layer";
+
+type AnimationWorkspaceDisplayMode = "on-demand" | "always";
 
 type ElementUpdates = Partial<Omit<SlideElement, "style">> & {
   style?: Partial<SlideElement["style"]>;
@@ -47,6 +52,13 @@ type PropertyPanelProps = {
   readOnly?: boolean;
   animationScene?: AnimationScene;
   activeAnimationContext?: ActiveAnimationContext;
+  animationWorkspaceDisplayMode?: AnimationWorkspaceDisplayMode;
+
+  onAnimationWorkspaceDisplayModeChange?: (
+    mode: AnimationWorkspaceDisplayMode,
+  ) => void;
+
+  onOpenAnimationClipDetails?: (elementId: string, clipId: string) => void;
   onSelectAnimationClip?: (elementId: string, clipId: string) => void;
   onUpdateAnimationClipTiming?: (
     command: UpdateAnimationClipTimingCommand,
@@ -142,7 +154,7 @@ function getPageAnimationItems(
 
     const clip = activeScene.clips[clipId];
 
-    if (!clip) {
+    if (!clip || !isAnimationClipLiveForElements(clip, elements)) {
       return;
     }
 
@@ -221,7 +233,14 @@ export function PropertyPanel({
 
   animationScene,
   activeAnimationContext,
+
+  animationWorkspaceDisplayMode = "on-demand",
+
+  onAnimationWorkspaceDisplayModeChange,
+
   onSelectAnimationClip,
+
+  onOpenAnimationClipDetails,
   onUpdateAnimationClipTiming,
   onOpenAnimationWorkspace,
   onTargetElementIdsChange,
@@ -630,6 +649,11 @@ export function PropertyPanel({
             activeClip={activeAnimationClip}
             activeElement={activeAnimationElement}
             canAddAnimation={selectedElements.length === 1}
+            animationWorkspaceDisplayMode={animationWorkspaceDisplayMode}
+            onAnimationWorkspaceDisplayModeChange={
+              onAnimationWorkspaceDisplayModeChange
+            }
+            onOpenClipDetails={onOpenAnimationClipDetails}
             onSelectClip={onSelectAnimationClip}
             onUpdateClipTiming={onUpdateAnimationClipTiming}
             onOpenAnimationWorkspace={onOpenAnimationWorkspace}
@@ -1011,7 +1035,13 @@ function AnimationTab({
   activeClip,
   activeElement,
   canAddAnimation,
+
+  animationWorkspaceDisplayMode,
+  onAnimationWorkspaceDisplayModeChange,
+
   onSelectClip,
+  onOpenClipDetails,
+
   onUpdateClipTiming,
   onOpenAnimationWorkspace,
   onBeginChange,
@@ -1022,6 +1052,13 @@ function AnimationTab({
   activeClip?: AnimationClip;
   activeElement?: SlideElement;
   canAddAnimation: boolean;
+  animationWorkspaceDisplayMode: AnimationWorkspaceDisplayMode;
+
+  onAnimationWorkspaceDisplayModeChange?: (
+    mode: AnimationWorkspaceDisplayMode,
+  ) => void;
+
+  onOpenClipDetails?: (elementId: string, clipId: string) => void;
   onSelectClip?: (elementId: string, clipId: string) => void;
   onUpdateClipTiming?: (
     command: UpdateAnimationClipTimingCommand,
@@ -1060,6 +1097,58 @@ function AnimationTab({
         >
           ＋ 添加动画
         </button>
+      </section>
+
+      <section className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-black text-slate-800">
+              高级轨道编辑器
+            </h3>
+
+            <p className="mt-1 text-xs leading-5 text-slate-400">
+              控制浮动 Track / Keyframe 编辑器什么时候出现。
+            </p>
+          </div>
+
+          <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[10px] font-black text-slate-400 shadow-sm">
+            本机偏好
+          </span>
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-2 rounded-2xl bg-slate-200/70 p-1">
+          <button
+            type="button"
+            disabled={!onAnimationWorkspaceDisplayModeChange}
+            className={`rounded-xl px-3 py-2 text-xs font-black transition ${
+              animationWorkspaceDisplayMode === "on-demand"
+                ? "bg-white text-violet-600 shadow-sm"
+                : "text-slate-500 hover:bg-white/60 hover:text-slate-800"
+            }`}
+            onClick={() => onAnimationWorkspaceDisplayModeChange?.("on-demand")}
+          >
+            按需打开
+          </button>
+
+          <button
+            type="button"
+            disabled={!onAnimationWorkspaceDisplayModeChange}
+            className={`rounded-xl px-3 py-2 text-xs font-black transition ${
+              animationWorkspaceDisplayMode === "always"
+                ? "bg-white text-violet-600 shadow-sm"
+                : "text-slate-500 hover:bg-white/60 hover:text-slate-800"
+            }`}
+            onClick={() => onAnimationWorkspaceDisplayModeChange?.("always")}
+          >
+            始终显示
+          </button>
+        </div>
+
+        <p className="mt-3 text-xs leading-5 text-slate-500">
+          {animationWorkspaceDisplayMode === "always"
+            ? "进入动画模式后，高级轨道编辑器会保持常驻。"
+            : "单击 Clip 只负责选择；双击 Clip 或点击详细编辑时才打开高级轨道编辑器。"}
+        </p>
       </section>
 
       {activeClip && activeAnimationContext ? (
@@ -1188,6 +1277,10 @@ function AnimationTab({
                   }`}
                   disabled={!onSelectClip}
                   onClick={() => onSelectClip?.(item.elementId, item.clip.id)}
+                  onDoubleClick={() =>
+                    onOpenClipDetails?.(item.elementId, item.clip.id)
+                  }
+                  title="单击选择 · 双击详细编辑"
                 >
                   <span className="flex items-start gap-3">
                     <span

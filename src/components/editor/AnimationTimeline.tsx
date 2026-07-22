@@ -1,4 +1,5 @@
 import {
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -33,6 +34,14 @@ const LABEL_COLUMN_WIDTH = 168;
 
 const BASE_PIXELS_PER_SECOND = 220;
 
+/**
+ * Keyframes from different property Tracks commonly share the same offset.
+ *
+ * The lower Timeline shows one aggregate diamond for one visual time position
+ * rather than stacking several indistinguishable markers on top of each other.
+ */
+const KEYFRAME_OFFSET_MERGE_TOLERANCE = 0.000001;
+
 const ZOOM_LEVELS = [0.5, 0.75, 1, 1.5, 2, 3, 4] as const;
 
 const MAJOR_TICK_CANDIDATES_MS = [
@@ -41,6 +50,37 @@ const MAJOR_TICK_CANDIDATES_MS = [
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+/**
+ * Read the unique visible keyframe positions inside one Clip.
+ *
+ * Timeline V2-B intentionally shows an aggregate Clip-level overview. The
+ * advanced track editor remains responsible for displaying separate property
+ * tracks and editing their individual keyframes.
+ */
+function getClipKeyframeOffsets(clip: AnimationClip) {
+  const offsets = clip.tracks
+    .filter((track) => track.enabled)
+    .flatMap((track) =>
+      track.keyframes.map((keyframe) => clamp(keyframe.offset, 0, 1)),
+    )
+    .sort((left, right) => left - right);
+
+  const uniqueOffsets: number[] = [];
+
+  for (const offset of offsets) {
+    const previousOffset = uniqueOffsets.at(-1);
+
+    if (
+      previousOffset === undefined ||
+      Math.abs(offset - previousOffset) > KEYFRAME_OFFSET_MERGE_TOLERANCE
+    ) {
+      uniqueOffsets.push(offset);
+    }
+  }
+
+  return uniqueOffsets;
 }
 
 function getAnimationCategoryLabel(category: AnimationClip["category"]) {
@@ -121,11 +161,13 @@ function formatCurrentTime(timeMs: number) {
 }
 
 /**
- * Timeline V2-A.
+ * Timeline V2-B.
  *
- * This component owns only timeline navigation and visual scale. It does not
- * seek the rendered animation yet; Timeline V2-B will connect currentTimeMs to
- * the shared playback controller.
+ * This phase adds persistent ruler navigation, AE-style horizontal wheel
+ * scrolling, and Clip-level keyframe visualization.
+ *
+ * Playback and canvas seeking remain intentionally separate. A shared playback
+ * controller will connect currentTimeMs to rendered animation state later.
  */
 export function AnimationTimeline({
   elements,
@@ -140,6 +182,71 @@ export function AnimationTimeline({
   const [zoom, setZoom] = useState<number>(1);
 
   const rulerRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * Shared horizontal / vertical Timeline viewport.
+   *
+   * The time area converts wheel movement into horizontal navigation while the
+   * sticky layer-label column keeps ordinary vertical scrolling available.
+   */
+  const scrollViewportRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * Convert wheel movement into horizontal Timeline navigation only when the
+   * pointer is inside the time-track area.
+   *
+   * The listener is registered as non-passive so preventDefault can reliably
+   * suppress the browser's simultaneous vertical scrolling.
+   */
+  useEffect(() => {
+    const viewport = scrollViewportRef.current;
+
+    if (!viewport) {
+      return;
+    }
+
+    function handleWheel(event: WheelEvent) {
+      const viewportRect = viewport!.getBoundingClientRect();
+
+      /**
+       * The sticky Layer-name column keeps native vertical scrolling.
+       */
+      const pointerInsideLayerColumn =
+        event.clientX < viewportRect.left + LABEL_COLUMN_WIDTH;
+
+      if (pointerInsideLayerColumn) {
+        return;
+      }
+
+      const canScrollHorizontally =
+        viewport!.scrollWidth > viewport!.clientWidth;
+
+      if (!canScrollHorizontally) {
+        return;
+      }
+
+      const horizontalDelta =
+        Math.abs(event.deltaX) > Math.abs(event.deltaY)
+          ? event.deltaX
+          : event.deltaY;
+
+      if (horizontalDelta === 0) {
+        return;
+      }
+
+      event.preventDefault();
+
+      viewport!.scrollLeft += horizontalDelta;
+    }
+
+    viewport.addEventListener("wheel", handleWheel, {
+      passive: false,
+    });
+
+    return () => {
+      viewport.removeEventListener("wheel", handleWheel);
+    };
+  }, []);
 
   const timelineDurationMs = getTimelineDurationMs(clips);
 
@@ -333,7 +440,10 @@ export function AnimationTimeline({
         </div>
       </div>
 
-      <div className="mt-3 min-h-0 flex-1 overflow-auto rounded-2xl border border-slate-200 bg-slate-50">
+      <div
+        ref={scrollViewportRef}
+        className="mt-3 min-h-0 flex-1 overflow-auto rounded-2xl border border-slate-200 bg-slate-50"
+      >
         <div
           className="relative"
           style={{
@@ -343,12 +453,12 @@ export function AnimationTimeline({
         >
           {/* Time ruler */}
           <div
-            className="grid border-b border-slate-200"
+            className="sticky top-0 z-60 grid border-b border-slate-200 bg-white shadow-[0_1px_0_rgba(15,23,42,0.06)]"
             style={{
               gridTemplateColumns: `${LABEL_COLUMN_WIDTH}px ${timelineTrackWidth}px`,
             }}
           >
-            <div className="sticky left-0 z-40 flex h-9 items-center border-r border-slate-200 bg-slate-100 px-3 text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">
+            <div className="sticky left-0 z-70 flex h-9 items-center border-r border-slate-200 bg-slate-100 px-3 text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">
               LAYERS
             </div>
 
@@ -356,7 +466,7 @@ export function AnimationTimeline({
               ref={rulerRef}
               className="relative h-9 cursor-ew-resize select-none bg-white"
               onPointerDown={handleRulerPointerDown}
-              title="点击或拖动设置 Playhead"
+              title="点击或拖动 Playhead · 滚轮横向浏览时间轴"
             >
               {ticks.map((timeMs) => {
                 const major = majorTicks.includes(timeMs);
@@ -382,7 +492,7 @@ export function AnimationTimeline({
 
               {/* Playhead handle */}
               <div
-                className="pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-rose-500"
+                className="pointer-events-none absolute bottom-0 top-0 z-40 w-px bg-rose-500"
                 style={{
                   left: playheadX,
                 }}
@@ -407,7 +517,7 @@ export function AnimationTimeline({
                 }}
               >
                 <div
-                  className="sticky left-0 z-20 flex items-center border-r border-slate-200 bg-slate-50 px-3"
+                  className="sticky left-0 z-50 flex items-center border-r border-slate-200 bg-slate-50 px-3 shadow-[1px_0_0_rgba(15,23,42,0.06)]"
                   style={{
                     height: rowHeight,
                   }}
@@ -420,7 +530,7 @@ export function AnimationTimeline({
                 </div>
 
                 <div
-                  className="relative bg-white"
+                  className="relative z-0 overflow-hidden bg-white"
                   style={{
                     height: rowHeight,
                   }}
@@ -453,51 +563,76 @@ export function AnimationTimeline({
                         clip.durationMs * pixelsPerMs,
                       );
 
+                      const keyframeOffsets = getClipKeyframeOffsets(clip);
+
                       return (
-                        <button
-                          key={clip.id}
-                          type="button"
-                          className={`absolute flex h-5 min-w-0 items-center gap-1 overflow-hidden rounded-md px-2 text-left text-[10px] font-black text-white shadow-sm transition hover:z-20 hover:brightness-105 ${
-                            focused
-                              ? "z-10 bg-violet-600 ring-2 ring-violet-300"
-                              : "bg-violet-400"
-                          }`}
-                          style={{
-                            left: clipLeft,
-                            top: 4 + clipIndex * 28,
-                            width: clipWidth,
-                          }}
-                          title={`${clip.name} · ${getAnimationCategoryLabel(
-                            clip.category,
-                          )} · 开始 ${clip.startMs}ms · 时长 ${
-                            clip.durationMs
-                          }ms · 单击选择 · 双击详细编辑`}
-                          onClick={(event) => {
-                            event.stopPropagation();
+                        <div key={clip.id}>
+                          <button
+                            type="button"
+                            className={`absolute flex h-5 min-w-0 items-center gap-1 overflow-hidden rounded-md px-2 text-left text-[10px] font-black text-white shadow-sm transition hover:z-20 hover:brightness-105 ${
+                              focused
+                                ? "z-10 bg-violet-600 ring-2 ring-violet-300"
+                                : "bg-violet-400"
+                            }`}
+                            style={{
+                              left: clipLeft,
+                              top: 4 + clipIndex * 28,
+                              width: clipWidth,
+                            }}
+                            title={`${clip.name} · ${getAnimationCategoryLabel(
+                              clip.category,
+                            )} · 开始 ${clip.startMs}ms · 时长 ${
+                              clip.durationMs
+                            }ms · 单击选择 · 双击详细编辑`}
+                            onClick={(event) => {
+                              event.stopPropagation();
 
-                            onSelectClip(element.id, clip.id);
-                          }}
-                          onDoubleClick={(event) => {
-                            event.stopPropagation();
+                              onSelectClip(element.id, clip.id);
+                            }}
+                            onDoubleClick={(event) => {
+                              event.stopPropagation();
 
-                            onOpenClipDetails(element.id, clip.id);
-                          }}
-                        >
-                          <span className="min-w-0 flex-1 truncate">
-                            {clip.name}
-                          </span>
+                              onOpenClipDetails(element.id, clip.id);
+                            }}
+                          >
+                            <span className="min-w-0 flex-1 truncate">
+                              {clip.name}
+                            </span>
 
-                          <span className="shrink-0 rounded-full bg-white/20 px-1 text-[8px]">
-                            {getAnimationCategoryLabel(clip.category)}
-                          </span>
-                        </button>
+                            <span className="shrink-0 rounded-full bg-white/20 px-1 text-[8px]">
+                              {getAnimationCategoryLabel(clip.category)}
+                            </span>
+                          </button>
+
+                          {keyframeOffsets.map((offset) => {
+                            const keyframeTimeMs =
+                              clip.startMs + clip.durationMs * offset;
+
+                            const keyframeLeft = keyframeTimeMs * pixelsPerMs;
+
+                            return (
+                              <span
+                                key={`${clip.id}-keyframe-${offset}`}
+                                className={`pointer-events-none absolute z-30 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[1px] border shadow-sm ${
+                                  focused
+                                    ? "border-violet-700 bg-violet-100"
+                                    : "border-violet-500 bg-white"
+                                }`}
+                                style={{
+                                  left: keyframeLeft,
+                                  top: 14 + clipIndex * 28,
+                                }}
+                              />
+                            );
+                          })}
+                        </div>
                       );
                     })
                   )}
 
                   {/* Playhead line continues through every row. */}
                   <div
-                    className="pointer-events-none absolute bottom-0 top-0 z-30 w-px bg-rose-500"
+                    className="pointer-events-none absolute bottom-0 top-0 z-40 w-px bg-rose-500"
                     style={{
                       left: playheadX,
                     }}

@@ -259,3 +259,44 @@ export function blobToDataUrl(blob: Blob) {
     reader.readAsDataURL(blob);
   });
 }
+
+/**
+ * Calculate a stable SHA-256 fingerprint from the real binary contents.
+ *
+ * File names and MIME metadata are intentionally excluded so renamed copies are
+ * still recognized as the same resource.
+ *
+ * This first implementation uses SubtleCrypto asynchronously. Very large media
+ * can later move hashing into a Worker without changing the project data model.
+ */
+export async function computeBlobSha256(
+  blob: Blob,
+) {
+  if (
+    !window.crypto ||
+    !window.crypto.subtle
+  ) {
+    throw new Error(
+      "This browser does not support SHA-256 resource hashing.",
+    );
+  }
+
+  const sourceBuffer =
+    await blob.arrayBuffer();
+
+  const digest =
+    await window.crypto.subtle.digest(
+      "SHA-256",
+      sourceBuffer,
+    );
+
+  return Array.from(
+    new Uint8Array(digest),
+  )
+    .map((byte) =>
+      byte
+        .toString(16)
+        .padStart(2, "0"),
+    )
+    .join("");
+}

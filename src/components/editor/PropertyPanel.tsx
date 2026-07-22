@@ -44,6 +44,7 @@ type PropertyPanelProps = {
   selectedElements: SlideElement[];
   targetElementIds: string[];
   slideElements: SlideElement[];
+  readOnly?: boolean;
   animationScene?: AnimationScene;
   activeAnimationContext?: ActiveAnimationContext;
   onSelectAnimationClip?: (elementId: string, clipId: string) => void;
@@ -215,6 +216,9 @@ export function PropertyPanel({
   selectedElements,
   targetElementIds,
   slideElements,
+
+  readOnly = false,
+
   animationScene,
   activeAnimationContext,
   onSelectAnimationClip,
@@ -480,6 +484,14 @@ export function PropertyPanel({
         </div>
       </div>
 
+      {readOnly ? (
+        <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold leading-5 text-amber-700">
+          🔒 当前为只读审查模式
+          <br />
+          可以查看属性和切换标签页，但不能修改项目内容。
+        </div>
+      ) : null}
+
       <div className="mt-4 grid grid-cols-4 gap-1 rounded-2xl bg-slate-100 p-1">
         {propertyTabs.map((tab) => (
           <button
@@ -571,7 +583,10 @@ export function PropertyPanel({
         </section>
       ) : null}
 
-      <div className="mt-4">
+      <fieldset
+        disabled={readOnly}
+        className={`mt-4 min-w-0 border-0 p-0 ${readOnly ? "opacity-65" : ""}`}
+      >
         {activeTab === "basic" ? (
           <BasicTab
             selectedElements={selectedElements}
@@ -630,7 +645,7 @@ export function PropertyPanel({
             onDeleteElement={deleteActiveElement}
           />
         ) : null}
-      </div>
+      </fieldset>
     </aside>
   );
 }

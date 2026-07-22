@@ -17,10 +17,12 @@ import { ComponentLibrary } from "./components/editor/ComponentLibrary";
 import { AnimationFloatingPanel } from "./components/editor/AnimationFloatingPanel";
 import { PropertyPanel } from "./components/editor/PropertyPanel";
 import { ResourceCenter } from "./components/editor/ResourceCenter";
+import { DuplicateResourceReviewPanel } from "./components/editor/DuplicateResourceReviewPanel";
 import { SlideCanvas } from "./components/editor/SlideCanvas";
 import { demoProject } from "./data/demoProject";
 import { exportProjectAsHtml } from "./utils/exportHtml";
 import {
+  computeBlobSha256,
   dataUrlToBlob,
   deleteAssetBlob,
   getAssetBlob,
@@ -158,6 +160,16 @@ type ActiveAnimationContext = {
    * selected Clip without duplicating any animation data in UI state.
    */
   requestId: number;
+};
+
+type PendingDuplicateResource = {
+  id: string;
+  file: File;
+  assetType: PresentationAssetType;
+  contentHash: string;
+  duplicateAssetId: string;
+  reviewIndex: number;
+  reviewTotal: number;
 };
 
 const MAX_HISTORY_LENGTH = 60;
@@ -771,6 +783,34 @@ function App() {
   const [assetStoreReady, setAssetStoreReady] = useState(false);
 
   /**
+   * Files waiting for an explicit duplicate-resource decision.
+   *
+   * The File itself stays only in transient React state. It must not enter
+   * IndexedDB or project.assets until the user chooses "keep duplicate".
+   */
+  const [duplicateReviewQueue, setDuplicateReviewQueue] = useState<
+    PendingDuplicateResource[]
+  >([]);
+
+  const duplicateReviewQueueRef = useRef<PendingDuplicateResource[]>([]);
+
+  const duplicateReviewActiveRef = useRef(false);
+
+  /**
+   * Request the Resource Center to reveal and highlight one exact asset.
+   *
+   * requestId lets the same resource be located repeatedly.
+   */
+  const [resourceFocusRequest, setResourceFocusRequest] = useState<{
+    assetId: string;
+    requestId: number;
+  } | null>(null);
+
+  const isDuplicateReviewActive = duplicateReviewQueue.length > 0;
+
+  const activeDuplicateReview = duplicateReviewQueue[0];
+
+  /**
    * The floating animation workspace is hidden outside animation mode, but its
    * open state and dragged position remain available when the user returns.
    */
@@ -1026,6 +1066,13 @@ function App() {
 
   const commitProjectChange = useCallback(
     (updater: ProjectUpdater, options: { recordHistory?: boolean } = {}) => {
+      /**
+       * Duplicate review is a global read-only inspection context.
+       */
+      if (duplicateReviewActiveRef.current) {
+        return;
+      }
+
       const currentProject = latestProjectRef.current;
       const nextProject = updater(currentProject);
 
@@ -1072,6 +1119,10 @@ function App() {
   }, [pushUndoSnapshot]);
 
   const undoProject = useCallback(() => {
+    if (duplicateReviewActiveRef.current) {
+      return;
+    }
+
     const previousProject = undoStackRef.current.at(-1);
 
     if (!previousProject) {
@@ -1098,6 +1149,10 @@ function App() {
   }, [setAnimationPreviewKey, setSelectedElementId]);
 
   const redoProject = useCallback(() => {
+    if (duplicateReviewActiveRef.current) {
+      return;
+    }
+
     const nextProject = redoStackRef.current.at(-1);
 
     if (!nextProject) {
@@ -1318,6 +1373,10 @@ function App() {
      * editing element content are not interrupted.
      */
     function handleSelectedElementKeyDown(event: KeyboardEvent) {
+      if (duplicateReviewActiveRef.current) {
+        return;
+      }
+
       const target = event.target;
 
       const isTyping =
@@ -1834,6 +1893,10 @@ function App() {
    * Open the hidden image file input from a normal toolbar button.
    */
   function handleOpenImagePicker() {
+    if (duplicateReviewActiveRef.current) {
+      return;
+    }
+
     if (!assetStoreReady) {
       window.alert("资源存储正在初始化，请稍后再添加图片。");
       return;
@@ -1843,12 +1906,117 @@ function App() {
   }
 
   /**
+   * Replace the duplicate-review queue while keeping the mutation guard Ref in
+   * sync with React rendering state.
+   */
+  function replaceDuplicateReviewQueue(nextQueue: PendingDuplicateResource[]) {
+    duplicateReviewQueueRef.current = nextQueue;
+
+    duplicateReviewActiveRef.current = nextQueue.length > 0;
+
+    setDuplicateReviewQueue(nextQueue);
+  }
+
+  /**
+   * Advance to the next unresolved duplicate candidate.
+   */
+  function finishCurrentDuplicateReview() {
+    const nextQueue = duplicateReviewQueueRef.current.slice(1);
+
+    replaceDuplicateReviewQueue(nextQueue);
+  }
+
+  /**
+   * Merge resource metadata into the live project and every history snapshot.
+   *
+   * Resource persistence is independent from ordinary canvas undo, so an
+   * unrelated Ctrl+Z must never discard a verified hash or imported asset.
+   */
+  function mergePersistentAssetMetadata(
+    assetUpdates: Record<string, PresentationAsset>,
+    updatedAt = new Date().toISOString(),
+  ) {
+    if (Object.keys(assetUpdates).length === 0) {
+      return;
+    }
+
+    function mergeAssets(sourceProject: PresentationProject) {
+      return {
+        ...sourceProject,
+
+        assets: {
+          ...sourceProject.assets,
+          ...assetUpdates,
+        },
+      };
+    }
+
+    undoStackRef.current = undoStackRef.current.map(mergeAssets);
+
+    redoStackRef.current = redoStackRef.current.map(mergeAssets);
+
+    if (historyGroupSnapshotRef.current) {
+      historyGroupSnapshotRef.current = mergeAssets(
+        historyGroupSnapshotRef.current,
+      );
+    }
+
+    const nextProject = {
+      ...mergeAssets(latestProjectRef.current),
+
+      updatedAt,
+    };
+
+    latestProjectRef.current = nextProject;
+
+    setProject(nextProject);
+  }
+
+  /**
+   * Older Animify projects do not contain content hashes.
+   *
+   * Backfill fingerprints lazily only when duplicate detection is actually needed.
+   * Missing resource Blobs are skipped because they cannot be fingerprinted.
+   */
+  async function ensureProjectAssetContentHashes() {
+    const currentProject = latestProjectRef.current;
+
+    const updates: Record<string, PresentationAsset> = {};
+
+    for (const asset of Object.values(currentProject.assets)) {
+      if (asset.contentHash) {
+        continue;
+      }
+
+      const blob = await getAssetBlob(asset.id);
+
+      if (!blob) {
+        continue;
+      }
+
+      updates[asset.id] = {
+        ...asset,
+
+        contentHash: await computeBlobSha256(blob),
+      };
+    }
+
+    mergePersistentAssetMetadata(updates);
+
+    return latestProjectRef.current.assets;
+  }
+
+  /**
    * Open the Resource Center importer.
    *
    * Imported files become reusable project assets. Unlike the image component
    * picker, this action does not automatically insert anything onto the slide.
    */
   function handleOpenResourcePicker() {
+    if (duplicateReviewActiveRef.current) {
+      return;
+    }
+
     if (!assetStoreReady) {
       window.alert("资源存储正在初始化，请稍后再上传资源。");
       return;
@@ -1868,12 +2036,17 @@ function App() {
 
     event.target.value = "";
 
+    if (duplicateReviewActiveRef.current) {
+      return;
+    }
+
     if (selectedFiles.length === 0) {
       return;
     }
 
     if (!assetStoreReady) {
       window.alert("资源存储尚未准备完成，请稍后重试。");
+
       return;
     }
 
@@ -1892,29 +2065,96 @@ function App() {
 
     if (supportedFiles.length === 0) {
       window.alert("请选择图片、视频或音频文件。");
+
       return;
     }
 
     const storedAssetIds: string[] = [];
+
     const createdObjectUrls: string[] = [];
 
     try {
+      /**
+       * Hash existing legacy assets before comparing the incoming files.
+       */
+      const existingAssets = await ensureProjectAssetContentHashes();
+
+      const knownAssetIdByHash = new Map<string, string>();
+
+      for (const asset of Object.values(existingAssets)) {
+        if (asset.contentHash) {
+          knownAssetIdByHash.set(asset.contentHash, asset.id);
+        }
+      }
+
       const timestamp = Date.now();
+
       const createdAt = new Date().toISOString();
 
+      const uniqueCandidates: Array<{
+        file: File;
+        assetType: PresentationAssetType;
+        contentHash: string;
+        assetId: string;
+      }> = [];
+
+      const duplicateCandidates: Array<
+        Omit<PendingDuplicateResource, "reviewIndex" | "reviewTotal">
+      > = [];
+
+      /**
+       * Hash every selected file before writing anything to IndexedDB.
+       */
+      for (let index = 0; index < supportedFiles.length; index += 1) {
+        const { file, assetType } = supportedFiles[index];
+
+        const contentHash = await computeBlobSha256(file);
+
+        const duplicateAssetId = knownAssetIdByHash.get(contentHash);
+
+        if (duplicateAssetId) {
+          duplicateCandidates.push({
+            id: `duplicate-review-${timestamp}-${index}`,
+            file,
+            assetType,
+            contentHash,
+            duplicateAssetId,
+          });
+
+          continue;
+        }
+
+        const assetId = `asset-${assetType}-${timestamp}-${index}`;
+
+        /**
+         * Remember this candidate immediately so another file in the same picker
+         * batch can be recognized as its duplicate.
+         */
+        knownAssetIdByHash.set(contentHash, assetId);
+
+        uniqueCandidates.push({
+          file,
+          assetType,
+          contentHash,
+          assetId,
+        });
+      }
+
+      /**
+       * Only genuinely unique files are persisted immediately.
+       */
       const importedItems: Array<{
         asset: PresentationAsset;
         objectUrl: string;
       }> = [];
 
-      for (let index = 0; index < supportedFiles.length; index += 1) {
-        const { file, assetType } = supportedFiles[index];
+      for (const candidate of uniqueCandidates) {
+        const storedBlob = await putVerifiedAssetBlob(
+          candidate.assetId,
+          candidate.file,
+        );
 
-        const assetId = `asset-${assetType}-${timestamp}-${index}`;
-
-        const storedBlob = await putVerifiedAssetBlob(assetId, file);
-
-        storedAssetIds.push(assetId);
+        storedAssetIds.push(candidate.assetId);
 
         const objectUrl = URL.createObjectURL(storedBlob);
 
@@ -1922,80 +2162,82 @@ function App() {
 
         importedItems.push({
           asset: {
-            id: assetId,
-            type: assetType,
-            name: file.name || `未命名${assetType}`,
-            mimeType: file.type || `${assetType}/*`,
-            size: file.size,
+            id: candidate.assetId,
+            type: candidate.assetType,
+
+            name: candidate.file.name || `未命名${candidate.assetType}`,
+
+            mimeType: candidate.file.type || `${candidate.assetType}/*`,
+
+            size: candidate.file.size,
+
             createdAt,
+
+            contentHash: candidate.contentHash,
           },
+
           objectUrl,
         });
       }
 
-      const newAssets = Object.fromEntries(
-        importedItems.map(({ asset }) => [asset.id, asset]),
-      );
+      if (importedItems.length > 0) {
+        const newAssets = Object.fromEntries(
+          importedItems.map(({ asset }) => [asset.id, asset]),
+        );
 
-      /**
-       * Resource-library mutations are persistent and are not normal canvas undo
-       * operations. Add metadata to existing history snapshots as well so undoing
-       * an unrelated edit cannot accidentally make a successfully imported asset
-       * disappear while leaving its IndexedDB Blob orphaned.
-       */
-      function addAssetMetadata(sourceProject: PresentationProject) {
-        return {
-          ...sourceProject,
-          assets: {
-            ...sourceProject.assets,
-            ...newAssets,
-          },
-        };
-      }
+        mergePersistentAssetMetadata(newAssets, createdAt);
 
-      undoStackRef.current = undoStackRef.current.map(addAssetMetadata);
+        const importedSources = Object.fromEntries(
+          importedItems.map(({ asset, objectUrl }) => [asset.id, objectUrl]),
+        );
 
-      redoStackRef.current = redoStackRef.current.map(addAssetMetadata);
+        setAssetSources((currentSources) => {
+          const nextSources = {
+            ...currentSources,
+            ...importedSources,
+          };
 
-      if (historyGroupSnapshotRef.current) {
-        historyGroupSnapshotRef.current = addAssetMetadata(
-          historyGroupSnapshotRef.current,
+          assetSourcesRef.current = nextSources;
+
+          return nextSources;
+        });
+
+        const importedAssetIdSet = new Set(
+          importedItems.map(({ asset }) => asset.id),
+        );
+
+        setMissingAssetIds((currentMissingAssetIds) =>
+          currentMissingAssetIds.filter(
+            (assetId) => !importedAssetIdSet.has(assetId),
+          ),
         );
       }
 
-      const nextProject = {
-        ...addAssetMetadata(latestProjectRef.current),
-        updatedAt: createdAt,
-      };
+      if (duplicateCandidates.length > 0) {
+        const reviewTotal = duplicateCandidates.length;
 
-      latestProjectRef.current = nextProject;
+        const reviewQueue = duplicateCandidates.map((candidate, index) => ({
+          ...candidate,
 
-      setProject(nextProject);
+          reviewIndex: index + 1,
 
-      const importedSources = Object.fromEntries(
-        importedItems.map(({ asset, objectUrl }) => [asset.id, objectUrl]),
-      );
+          reviewTotal,
+        }));
 
-      setAssetSources((currentSources) => {
-        const nextSources = {
-          ...currentSources,
-          ...importedSources,
-        };
+        /**
+         * Duplicate candidates remain only as temporary File objects at this point.
+         * None of them has entered project.assets or IndexedDB.
+         */
+        replaceDuplicateReviewQueue(reviewQueue);
 
-        assetSourcesRef.current = nextSources;
+        setMode("edit");
 
-        return nextSources;
-      });
+        setAnimationPanelOpen(false);
 
-      const importedAssetIdSet = new Set(
-        importedItems.map(({ asset }) => asset.id),
-      );
+        setElementContextMenu(null);
 
-      setMissingAssetIds((currentMissingAssetIds) =>
-        currentMissingAssetIds.filter(
-          (assetId) => !importedAssetIdSet.has(assetId),
-        ),
-      );
+        setCanvasContextMenu(null);
+      }
     } catch (error) {
       console.error("Failed to import project resources.", error);
 
@@ -2007,14 +2249,124 @@ function App() {
         storedAssetIds.map((assetId) => deleteAssetBlob(assetId)),
       );
 
-      window.alert("资源导入失败，本次导入已安全回滚。");
+      window.alert("资源导入失败，本次尚未完成的资源已安全回滚。");
     }
+  }
+
+  function handleLocateExistingDuplicateResource() {
+    const currentReview = duplicateReviewQueueRef.current[0];
+
+    if (!currentReview) {
+      return;
+    }
+
+    /**
+     * Keep the duplicate-review window open while revealing the existing asset.
+     */
+    setLeftPanelMode("assets");
+    setComponentPanelOpen(true);
+
+    setResourceFocusRequest((currentRequest) => ({
+      assetId: currentReview.duplicateAssetId,
+
+      requestId: (currentRequest?.requestId ?? 0) + 1,
+    }));
+  }
+
+  function handleUseExistingDuplicateResource() {
+    handleLocateExistingDuplicateResource();
+
+    finishCurrentDuplicateReview();
+  }
+
+  async function handleKeepDuplicateResource() {
+    const currentReview = duplicateReviewQueueRef.current[0];
+
+    if (!currentReview) {
+      return;
+    }
+
+    const suffix = Math.random().toString(36).slice(2, 8);
+
+    const assetId = `asset-${currentReview.assetType}-${Date.now()}-${suffix}`;
+
+    let objectUrl: string | null = null;
+
+    try {
+      const storedBlob = await putVerifiedAssetBlob(
+        assetId,
+        currentReview.file,
+      );
+
+      objectUrl = URL.createObjectURL(storedBlob);
+
+      const asset: PresentationAsset = {
+        id: assetId,
+
+        type: currentReview.assetType,
+
+        name: currentReview.file.name || `未命名${currentReview.assetType}`,
+
+        mimeType: currentReview.file.type || `${currentReview.assetType}/*`,
+
+        size: currentReview.file.size,
+
+        createdAt: new Date().toISOString(),
+
+        /**
+         * Intentionally preserve the same fingerprint. The user explicitly chose
+         * to keep two metadata entries pointing to identical binary contents.
+         */
+        contentHash: currentReview.contentHash,
+      };
+
+      mergePersistentAssetMetadata({
+        [asset.id]: asset,
+      });
+
+      setAssetSources((currentSources) => {
+        const nextSources = {
+          ...currentSources,
+          [asset.id]: objectUrl as string,
+        };
+
+        assetSourcesRef.current = nextSources;
+
+        return nextSources;
+      });
+
+      setMissingAssetIds((currentMissingAssetIds) =>
+        currentMissingAssetIds.filter(
+          (missingAssetId) => missingAssetId !== asset.id,
+        ),
+      );
+
+      finishCurrentDuplicateReview();
+    } catch (error) {
+      console.error("Failed to keep duplicate resource.", error);
+
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+
+      await Promise.allSettled([deleteAssetBlob(assetId)]);
+
+      window.alert("重复资源保留失败，请稍后重试。");
+    }
+  }
+
+  function handleSkipDuplicateResource() {
+    finishCurrentDuplicateReview();
   }
 
   /**
    * Open a file picker for one missing project asset.
    */
   function handleOpenAssetRelink(assetId: string) {
+    if (duplicateReviewActiveRef.current) {
+      return;
+    }
+
     const asset = latestProjectRef.current.assets[assetId];
 
     if (!asset) {
@@ -2452,6 +2804,10 @@ function App() {
    * Delete one unused resource from its card.
    */
   async function handleDeleteUnusedAsset(assetId: string) {
+    if (duplicateReviewActiveRef.current) {
+      return;
+    }
+
     const asset = latestProjectRef.current.assets[assetId];
 
     if (!asset) {
@@ -2471,6 +2827,10 @@ function App() {
    * Permanently remove every project resource with zero live references.
    */
   async function handleCleanupUnusedAssets() {
+    if (duplicateReviewActiveRef.current) {
+      return;
+    }
+
     const currentProject = latestProjectRef.current;
 
     const referencedAssetIds = new Set<string>();
@@ -4033,6 +4393,10 @@ function App() {
   }
 
   function handleResetProject() {
+    if (duplicateReviewActiveRef.current) {
+      return;
+    }
+
     const firstElementId = demoProject.slides[0]?.elements[0]?.id ?? "";
 
     localStorage.removeItem(STORAGE_KEY);
@@ -4255,6 +4619,10 @@ function App() {
    * image element must be backed by a real asset record from the file picker.
    */
   function handleDragEnd(event: DragEndEvent) {
+    if (duplicateReviewActiveRef.current) {
+      return;
+    }
+
     const draggedKind = event.active.data.current?.kind;
 
     // Slide thumbnail dragging: reorder slides instead of creating canvas elements.
@@ -4513,6 +4881,12 @@ function App() {
             </div>
           </header>
 
+          {isDuplicateReviewActive ? (
+            <div className="shrink-0 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-center text-sm font-black text-amber-700 shadow-sm">
+              🔒 重复资源确认中 · 当前为只读模式
+            </div>
+          ) : null}
+
           <div className="hidden">
             <section className="grid gap-4 py-4 md:grid-cols-2 xl:grid-cols-4">
               {featureCards.map((card) => (
@@ -4598,6 +4972,9 @@ function App() {
                       assetSources={assetSources}
                       missingAssetIds={missingAssetIds}
                       slides={project.slides}
+                      readOnly={isDuplicateReviewActive}
+                      focusAssetId={resourceFocusRequest?.assetId}
+                      focusRequestId={resourceFocusRequest?.requestId ?? 0}
                       onUploadResource={handleOpenResourcePicker}
                       onInsertAsset={handleInsertExistingAsset}
                       onRelinkAsset={handleOpenAssetRelink}
@@ -4642,6 +5019,7 @@ function App() {
 
             <SlideNavigator
               project={project}
+              readOnly={isDuplicateReviewActive}
               assetSources={assetSources}
               assetStoreReady={assetStoreReady}
               missingAssetIds={missingAssetIds}
@@ -4662,6 +5040,7 @@ function App() {
                   assetSources={assetSources}
                   assetStoreReady={assetStoreReady}
                   missingAssetIds={missingAssetIds}
+                  readOnly={isDuplicateReviewActive}
                   scale={canvasScale}
                   selectedElementId={selectedElement?.id}
                   selectedElementIds={selectedElementIds}
@@ -4848,6 +5227,7 @@ function App() {
                   selectedElements={selectedElements}
                   targetElementIds={effectivePropertyTargetElementIds}
                   slideElements={activeSlide.elements}
+                  readOnly={isDuplicateReviewActive}
                   animationScene={activeSlide.animationScene}
                   activeAnimationContext={
                     effectiveActiveAnimationContext ?? undefined
@@ -4893,6 +5273,35 @@ function App() {
         onBeginChange={beginProjectHistoryGroup}
         onFinishChange={finishProjectHistoryGroup}
       />
+
+      {activeDuplicateReview &&
+      project.assets[activeDuplicateReview.duplicateAssetId] ? (
+        <DuplicateResourceReviewPanel
+          candidate={{
+            name: activeDuplicateReview.file.name,
+
+            size: activeDuplicateReview.file.size,
+
+            type: activeDuplicateReview.assetType,
+          }}
+          existingAsset={project.assets[activeDuplicateReview.duplicateAssetId]}
+          existingUsageCount={project.slides.reduce(
+            (usageCount, slide) =>
+              usageCount +
+              slide.elements.filter(
+                (element) =>
+                  element.assetId === activeDuplicateReview.duplicateAssetId,
+              ).length,
+            0,
+          )}
+          reviewIndex={activeDuplicateReview.reviewIndex}
+          reviewTotal={activeDuplicateReview.reviewTotal}
+          onLocateExisting={handleLocateExistingDuplicateResource}
+          onUseExisting={handleUseExistingDuplicateResource}
+          onKeepDuplicate={handleKeepDuplicateResource}
+          onSkip={handleSkipDuplicateResource}
+        />
+      ) : null}
 
       {elementContextMenu ? (
         <div
@@ -5015,6 +5424,7 @@ function SlideNavigator({
   assetStoreReady,
   missingAssetIds,
   activeSlideId,
+  readOnly,
   onAddSlide,
   onSelectSlide,
   onDeleteSlide,
@@ -5025,6 +5435,7 @@ function SlideNavigator({
   assetStoreReady: boolean;
   missingAssetIds: string[];
   activeSlideId: string;
+  readOnly: boolean;
   onAddSlide: () => void;
   onSelectSlide: (slideId: string) => void;
   onDeleteSlide: (slideId: string) => void;
@@ -5045,9 +5456,14 @@ function SlideNavigator({
 
         <button
           type="button"
-          className="flex h-9 w-9 items-center justify-center rounded-2xl bg-violet-500 text-lg font-black text-white shadow-sm transition hover:bg-violet-600"
+          disabled={readOnly}
+          className={`flex h-9 w-9 items-center justify-center rounded-2xl text-lg font-black transition ${
+            readOnly
+              ? "cursor-not-allowed bg-slate-200 text-slate-400"
+              : "bg-violet-500 text-white shadow-sm hover:bg-violet-600"
+          }`}
           onClick={onAddSlide}
-          title="新增页面"
+          title={readOnly ? "重复资源确认期间不可新增页面" : "新增页面"}
         >
           +
         </button>
@@ -5061,6 +5477,7 @@ function SlideNavigator({
           {project.slides.map((slide, index) => (
             <SortableSlideCard
               key={slide.id}
+              readOnly={readOnly}
               slide={slide}
               index={index}
               isActive={slide.id === activeSlideId}
@@ -5095,6 +5512,7 @@ function SortableSlideCard({
   assetSources,
   assetStoreReady,
   missingAssetIds,
+  readOnly,
   onSelectSlide,
   onDeleteSlide,
   onDuplicateSlide,
@@ -5110,6 +5528,7 @@ function SortableSlideCard({
   assetSources: Record<string, string>;
   assetStoreReady: boolean;
   missingAssetIds: string[];
+  readOnly: boolean;
   onSelectSlide: (slideId: string) => void;
   onDeleteSlide: (slideId: string) => void;
   onDuplicateSlide: (slideId: string) => void;
@@ -5123,6 +5542,9 @@ function SortableSlideCard({
     isDragging,
   } = useSortable({
     id: slide.id,
+
+    disabled: readOnly,
+
     data: {
       kind: "slide",
     },
@@ -5146,7 +5568,12 @@ function SortableSlideCard({
         <div className="flex min-w-0 items-center gap-1">
           <button
             type="button"
-            className="flex h-5 w-5 shrink-0 cursor-grab items-center justify-center rounded-md text-xs font-black text-slate-400 transition hover:bg-violet-100 hover:text-violet-500 active:cursor-grabbing"
+            disabled={readOnly}
+            className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-xs font-black transition ${
+              readOnly
+                ? "cursor-not-allowed text-slate-300"
+                : "cursor-grab text-slate-400 hover:bg-violet-100 hover:text-violet-500 active:cursor-grabbing"
+            }`}
             onClick={(event) => event.stopPropagation()}
             title="拖拽排序"
             {...attributes}
@@ -5261,7 +5688,8 @@ function SortableSlideCard({
         <div className="flex items-center gap-1">
           <button
             type="button"
-            className="rounded-full bg-violet-50 px-2 py-1 text-xs font-bold text-violet-500 transition hover:bg-violet-100"
+            disabled={readOnly}
+            className="rounded-full bg-violet-50 px-2 py-1 text-xs font-bold text-violet-500 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-300"
             onClick={(event) => {
               event.stopPropagation();
               onDuplicateSlide(slide.id);
@@ -5273,7 +5701,7 @@ function SortableSlideCard({
           <button
             type="button"
             className="rounded-full bg-red-50 px-2 py-1 text-xs font-bold text-red-500 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
-            disabled={slideCount <= 1}
+            disabled={readOnly || slideCount <= 1}
             onClick={(event) => {
               event.stopPropagation();
               onDeleteSlide(slide.id);

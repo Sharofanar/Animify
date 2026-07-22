@@ -21,6 +21,14 @@ export type PresentationAsset = {
   mimeType: string;
   size: number;
   createdAt: string;
+
+  /**
+   * SHA-256 fingerprint of the binary file contents.
+   *
+   * Duplicate detection must be based on actual bytes rather than file names.
+   * Older projects may not contain this field and are backfilled lazily.
+   */
+  contentHash?: string;
 };
 
 /**

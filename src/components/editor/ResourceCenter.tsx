@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   PresentationAsset,
   PresentationAssetType,
@@ -12,6 +12,12 @@ type ResourceCenterProps = {
   assetSources: Record<string, string>;
   missingAssetIds: string[];
   slides: Slide[];
+
+  readOnly?: boolean;
+
+  focusAssetId?: string;
+
+  focusRequestId?: number;
 
   onUploadResource: () => void;
 
@@ -84,51 +90,28 @@ function getAssetTypeLabel(type: PresentationAssetType) {
  * Read the visible file extension without trusting MIME metadata. This is useful
  * for formats such as FLV whose MIME may be empty or generic on Windows.
  */
-function getAssetExtension(
-  fileName: string,
-) {
-  const normalizedName =
-    fileName.trim().toLowerCase();
+function getAssetExtension(fileName: string) {
+  const normalizedName = fileName.trim().toLowerCase();
 
-  const lastDotIndex =
-    normalizedName.lastIndexOf(
-      ".",
-    );
+  const lastDotIndex = normalizedName.lastIndexOf(".");
 
-  if (
-    lastDotIndex <= 0 ||
-    lastDotIndex ===
-      normalizedName.length - 1
-  ) {
+  if (lastDotIndex <= 0 || lastDotIndex === normalizedName.length - 1) {
     return "";
   }
 
-  return normalizedName.slice(
-    lastDotIndex + 1,
-  );
+  return normalizedName.slice(lastDotIndex + 1);
 }
 
-function getAssetFormatLabel(
-  asset: PresentationAsset,
-) {
-  const extension =
-    getAssetExtension(
-      asset.name,
-    );
+function getAssetFormatLabel(asset: PresentationAsset) {
+  const extension = getAssetExtension(asset.name);
 
   if (extension) {
     return extension.toUpperCase();
   }
 
-  const mimeSubtype =
-    asset.mimeType
-      .split("/")[1]
-      ?.split(";")[0]
-      ?.trim();
+  const mimeSubtype = asset.mimeType.split("/")[1]?.split(";")[0]?.trim();
 
-  return mimeSubtype
-    ? mimeSubtype.toUpperCase()
-    : "未知格式";
+  return mimeSubtype ? mimeSubtype.toUpperCase() : "未知格式";
 }
 
 /**
@@ -163,19 +146,11 @@ function canInsertAssetToCanvas(
   missing: boolean,
   source?: string,
 ) {
-  if (
-    missing ||
-    !source
-  ) {
+  if (missing || !source) {
     return false;
   }
 
-  if (
-    asset.type === "video" &&
-    getAssetExtension(
-      asset.name,
-    ) === "flv"
-  ) {
+  if (asset.type === "video" && getAssetExtension(asset.name) === "flv") {
     return false;
   }
 
@@ -193,6 +168,13 @@ export function ResourceCenter({
   assetSources,
   missingAssetIds,
   slides,
+
+  readOnly = false,
+
+  focusAssetId,
+
+  focusRequestId = 0,
+
   onUploadResource,
   onInsertAsset,
   onRelinkAsset,
@@ -204,9 +186,74 @@ export function ResourceCenter({
 
   const [searchTerm, setSearchTerm] = useState("");
 
+  /**
+   * Keep DOM references so duplicate-review navigation can reveal one exact
+   * resource card without rebuilding the resource list.
+   */
+  const assetCardRefs = useRef<Record<string, HTMLElement | null>>({});
+
+  const [highlightedAssetId, setHighlightedAssetId] = useState<string | null>(
+    null,
+  );
+
   const [expandedReferenceAssetId, setExpandedReferenceAssetId] = useState<
     string | null
   >(null);
+
+  /**
+   * Reveal the resource selected by the duplicate-review panel.
+   *
+   * Search is cleared and the matching category is opened first. The card is then
+   * scrolled into view and temporarily highlighted so the user can inspect it
+   * while the review window remains open.
+   */
+  useEffect(() => {
+    if (!focusAssetId || focusRequestId <= 0) {
+      return;
+    }
+
+    const focusedAsset = assets[focusAssetId];
+
+    if (!focusedAsset) {
+      return;
+    }
+
+    let scrollFrameId = 0;
+
+    const prepareFrameId = window.requestAnimationFrame(() => {
+      setSearchTerm("");
+
+      setActiveFilter(focusedAsset.type);
+
+      setHighlightedAssetId(focusAssetId);
+
+      /**
+       * Wait one more frame for filtering to expose the requested card.
+       */
+      scrollFrameId = window.requestAnimationFrame(() => {
+        assetCardRefs.current[focusAssetId]?.scrollIntoView({
+          behavior: "smooth",
+          block: "center",
+        });
+      });
+    });
+
+    const clearHighlightTimer = window.setTimeout(() => {
+      setHighlightedAssetId((currentAssetId) =>
+        currentAssetId === focusAssetId ? null : currentAssetId,
+      );
+    }, 2200);
+
+    return () => {
+      window.cancelAnimationFrame(prepareFrameId);
+
+      if (scrollFrameId) {
+        window.cancelAnimationFrame(scrollFrameId);
+      }
+
+      window.clearTimeout(clearHighlightTimer);
+    };
+  }, [assets, focusAssetId, focusRequestId]);
 
   const missingAssetIdSet = useMemo(
     () => new Set(missingAssetIds),
@@ -300,7 +347,12 @@ export function ResourceCenter({
         <div className="flex shrink-0 flex-col gap-2">
           <button
             type="button"
-            className="rounded-full bg-violet-500 px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-violet-600"
+            disabled={readOnly}
+            className={`rounded-full px-3 py-2 text-xs font-bold transition ${
+              readOnly
+                ? "cursor-not-allowed bg-slate-200 text-slate-400"
+                : "bg-violet-500 text-white shadow-sm hover:bg-violet-600"
+            }`}
             onClick={onUploadResource}
           >
             + 上传资源
@@ -308,9 +360,9 @@ export function ResourceCenter({
 
           <button
             type="button"
-            disabled={unusedAssetCount === 0}
+            disabled={readOnly || unusedAssetCount === 0}
             className={`rounded-full px-3 py-2 text-[10px] font-bold transition ${
-              unusedAssetCount === 0
+              readOnly || unusedAssetCount === 0
                 ? "cursor-not-allowed bg-slate-100 text-slate-300"
                 : "border border-rose-200 bg-rose-50 text-rose-600 hover:bg-rose-100"
             }`}
@@ -322,6 +374,14 @@ export function ResourceCenter({
           </button>
         </div>
       </div>
+
+      {readOnly ? (
+        <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold leading-5 text-amber-700">
+          🔒 重复资源确认中
+          <br />
+          可搜索、筛选和查看引用，资源修改操作暂时锁定。
+        </div>
+      ) : null}
 
       <input
         type="search"
@@ -383,6 +443,8 @@ export function ResourceCenter({
               source,
             );
 
+            const insertDisabled = readOnly || !canInsertToCanvas;
+
             const insertButtonLabel = missing
               ? "资源缺失"
               : !source
@@ -395,8 +457,15 @@ export function ResourceCenter({
             return (
               <article
                 key={asset.id}
-                className={`overflow-hidden rounded-2xl border bg-white ${
-                  missing ? "border-rose-200" : "border-slate-200"
+                ref={(node) => {
+                  assetCardRefs.current[asset.id] = node;
+                }}
+                className={`overflow-hidden rounded-2xl border bg-white transition-all duration-300 ${
+                  highlightedAssetId === asset.id
+                    ? "animate-pulse border-amber-400 ring-4 ring-amber-200 shadow-lg shadow-amber-100"
+                    : missing
+                      ? "border-rose-200"
+                      : "border-slate-200"
                 }`}
               >
                 <div className="relative flex h-28 items-center justify-center overflow-hidden bg-slate-100">
@@ -477,21 +546,22 @@ export function ResourceCenter({
 
                   <button
                     type="button"
-                    disabled={!canInsertToCanvas}
+                    disabled={insertDisabled}
                     className={`mt-3 w-full rounded-xl px-3 py-2 text-xs font-bold transition ${
-                      canInsertToCanvas
+                      !insertDisabled
                         ? "bg-violet-500 text-white hover:bg-violet-600"
                         : "cursor-not-allowed bg-slate-100 text-slate-300"
                     }`}
                     onClick={() => onInsertAsset(asset.id)}
                   >
-                    {insertButtonLabel}
+                    {readOnly ? "只读审查中" : insertButtonLabel}
                   </button>
 
                   {missing ? (
                     <button
                       type="button"
-                      className="mt-2 w-full rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700 transition hover:border-amber-300 hover:bg-amber-100"
+                      disabled={readOnly}
+                      className="mt-2 w-full rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-700 transition hover:border-amber-300 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
                       onClick={() => onRelinkAsset(asset.id)}
                     >
                       重新挂载资源
@@ -501,7 +571,8 @@ export function ResourceCenter({
                   {usageCount === 0 ? (
                     <button
                       type="button"
-                      className="mt-2 w-full rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-600 transition hover:border-rose-300 hover:bg-rose-100"
+                      disabled={readOnly}
+                      className="mt-2 w-full rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-600 transition hover:border-rose-300 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40"
                       onClick={() => onDeleteAsset(asset.id)}
                     >
                       删除资源

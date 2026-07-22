@@ -184,6 +184,7 @@ type SlideCanvasProps = {
   animationPreviewKey?: number;
   chrome?: boolean;
   clipOverflow?: boolean;
+  readOnly?: boolean;
   bare?: boolean;
 };
 
@@ -212,6 +213,9 @@ export function SlideCanvas({
   onUpdateElementContent,
   slideSurfaceRef,
   animationPreviewKey = 0,
+
+  readOnly = false,
+
   chrome = true,
   clipOverflow = false,
   bare = false,
@@ -375,6 +379,12 @@ export function SlideCanvas({
   function handleSlideSurfaceContextMenu(
     event: ReactMouseEvent<HTMLDivElement>,
   ) {
+    if (readOnly) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     if (event.target !== event.currentTarget) {
       return;
     }
@@ -412,6 +422,7 @@ export function SlideCanvas({
     const primaryElement = selectedElements[0];
 
     if (
+      readOnly ||
       event.button !== 0 ||
       !primaryElement ||
       !onMoveElement ||
@@ -465,6 +476,7 @@ export function SlideCanvas({
     const resizeSelectedElements = onResizeSelectedElements;
 
     if (
+      readOnly ||
       event.button !== 0 ||
       !surfaceNode ||
       !multiSelectionBounds ||
@@ -628,11 +640,11 @@ export function SlideCanvas({
         const assetSource = element.assetId
           ? assetSources[element.assetId]
           : undefined;
-        
+
         const assetMissing = Boolean(
           element.assetId && missingAssetIds.includes(element.assetId),
         );
-        
+
         const selectionIndex = selectedElementIds.indexOf(element.id);
         const selectionNumber =
           multiSelectionActive && selectionIndex >= 0
@@ -659,19 +671,19 @@ export function SlideCanvas({
             }
             selectionNumber={selectionNumber}
             propertyTargeted={propertyTargeted}
-            showTransformControls={!multiSelectionActive}
-            isEditing={element.id === editingElementId}
+            showTransformControls={!multiSelectionActive && !readOnly}
+            isEditing={!readOnly && element.id === editingElementId}
             onSelect={onSelectElement}
             onToggleSelect={onToggleElementSelection}
-            onOpenContextMenu={onOpenElementContextMenu}
-            onMove={onMoveElement}
-            onResize={onResizeElement}
-            onRotate={onRotateElement}
-            onBeginChange={onBeginElementChange}
-            onFinishChange={onFinishElementChange}
-            onStartEditing={setEditingElementId}
+            onOpenContextMenu={readOnly ? undefined : onOpenElementContextMenu}
+            onMove={readOnly ? undefined : onMoveElement}
+            onResize={readOnly ? undefined : onResizeElement}
+            onRotate={readOnly ? undefined : onRotateElement}
+            onBeginChange={readOnly ? undefined : onBeginElementChange}
+            onFinishChange={readOnly ? undefined : onFinishElementChange}
+            onStartEditing={readOnly ? undefined : setEditingElementId}
             onStopEditing={() => setEditingElementId(null)}
-            onUpdateContent={onUpdateElementContent}
+            onUpdateContent={readOnly ? undefined : onUpdateElementContent}
           />
         );
       })}
@@ -685,37 +697,44 @@ export function SlideCanvas({
             height: multiSelectionBounds.height * scale,
           }}
         >
-          {/* Transparent edge hit areas let the user drag the unified frame. */}
-          <div
-            className="pointer-events-auto absolute -left-1 -right-1 -top-2 h-4 cursor-move"
-            onPointerDown={handleMultiSelectionMovePointerDown}
-          />
-          <div
-            className="pointer-events-auto absolute -bottom-2 -left-1 -right-1 h-4 cursor-move"
-            onPointerDown={handleMultiSelectionMovePointerDown}
-          />
-          <div
-            className="pointer-events-auto absolute -bottom-1 -left-2 -top-1 w-4 cursor-move"
-            onPointerDown={handleMultiSelectionMovePointerDown}
-          />
-          <div
-            className="pointer-events-auto absolute -bottom-1 -right-2 -top-1 w-4 cursor-move"
-            onPointerDown={handleMultiSelectionMovePointerDown}
-          />
+          {!readOnly ? (
+            <>
+              {/* Transparent edge hit areas let the user drag the unified frame. */}
+              <div
+                className="pointer-events-auto absolute -left-1 -right-1 -top-2 h-4 cursor-move"
+                onPointerDown={handleMultiSelectionMovePointerDown}
+              />
+              <div
+                className="pointer-events-auto absolute -bottom-2 -left-1 -right-1 h-4 cursor-move"
+                onPointerDown={handleMultiSelectionMovePointerDown}
+              />
+              <div
+                className="pointer-events-auto absolute -bottom-1 -left-2 -top-1 w-4 cursor-move"
+                onPointerDown={handleMultiSelectionMovePointerDown}
+              />
+              <div
+                className="pointer-events-auto absolute -bottom-1 -right-2 -top-1 w-4 cursor-move"
+                onPointerDown={handleMultiSelectionMovePointerDown}
+              />
 
-          {resizeHandleConfigs.map((handle) => (
-            <button
-              key={handle.direction}
-              type="button"
-              className={`pointer-events-auto absolute z-50 h-4 w-4 rounded-full border-2 border-white bg-violet-500 shadow-md ${handle.className}`}
-              aria-label={`整组${handle.label}`}
-              title={`整组${handle.label}`}
-              onPointerDown={(event) =>
-                handleMultiSelectionResizePointerDown(handle.direction, event)
-              }
-              onClick={(event) => event.stopPropagation()}
-            />
-          ))}
+              {resizeHandleConfigs.map((handle) => (
+                <button
+                  key={handle.direction}
+                  type="button"
+                  className={`pointer-events-auto absolute z-50 h-4 w-4 rounded-full border-2 border-white bg-violet-500 shadow-md ${handle.className}`}
+                  aria-label={`整组${handle.label}`}
+                  title={`整组${handle.label}`}
+                  onPointerDown={(event) =>
+                    handleMultiSelectionResizePointerDown(
+                      handle.direction,
+                      event,
+                    )
+                  }
+                  onClick={(event) => event.stopPropagation()}
+                />
+              ))}
+            </>
+          ) : null}
         </div>
       ) : null}
     </div>

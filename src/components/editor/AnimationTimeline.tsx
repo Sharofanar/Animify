@@ -13,11 +13,15 @@ type ActiveAnimationContext = {
   requestId: number;
 };
 
+type TimelinePlaybackStatus = "idle" | "playing" | "paused";
+
 type AnimationTimelineProps = {
   elements: SlideElement[];
   clips: AnimationClip[];
 
   currentTimeMs: number;
+
+  playbackStatus: TimelinePlaybackStatus;
 
   activeAnimationContext?: ActiveAnimationContext;
 
@@ -27,7 +31,8 @@ type AnimationTimelineProps = {
 
   onOpenClipDetails: (elementId: string, clipId: string) => void;
 
-  onReplayAnimation: () => void;
+  onTogglePlayback: () => void;
+  onStopPlayback: () => void;
 };
 
 const LABEL_COLUMN_WIDTH = 168;
@@ -173,11 +178,13 @@ export function AnimationTimeline({
   elements,
   clips,
   currentTimeMs,
+  playbackStatus,
   activeAnimationContext,
   onCurrentTimeChange,
   onSelectClip,
   onOpenClipDetails,
-  onReplayAnimation,
+  onTogglePlayback,
+  onStopPlayback,
 }: AnimationTimelineProps) {
   const [zoom, setZoom] = useState<number>(1);
 
@@ -432,10 +439,21 @@ export function AnimationTimeline({
 
           <button
             type="button"
-            className="rounded-full bg-violet-500 px-4 py-2 text-xs font-black text-white shadow-sm transition hover:bg-violet-600"
-            onClick={onReplayAnimation}
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-xs font-black text-slate-500 transition hover:bg-slate-200 hover:text-slate-900"
+            onClick={onStopPlayback}
+            title="停止并返回 0 秒"
+            aria-label="停止动画播放"
           >
-            ▶ 播放当前页
+            ■
+          </button>
+
+          <button
+            type="button"
+            disabled={clips.length === 0}
+            className="min-w-24 rounded-full bg-violet-500 px-4 py-2 text-xs font-black text-white shadow-sm transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+            onClick={onTogglePlayback}
+          >
+            {playbackStatus === "playing" ? "⏸ 暂停" : "▶ 播放"}
           </button>
         </div>
       </div>

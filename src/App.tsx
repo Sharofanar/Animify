@@ -67,6 +67,7 @@ import type {
   SlideElement,
   SlideElementType,
 } from "./types/presentation";
+import { useTimelinePlaybackController } from "./hooks/useTimelinePlaybackController";
 
 const STORAGE_KEY = "animify-project";
 
@@ -763,20 +764,6 @@ function App() {
 
   const [animationPreviewKey, setAnimationPreviewKey] = useState(0);
 
-  /**
-   * Shared timeline time state.
-   *
-   * slideId prevents a Playhead position from one page leaking visually into
-   * another page without needing a setState-in-effect reset.
-   */
-  const [animationTimelinePlayhead, setAnimationTimelinePlayhead] = useState<{
-    slideId: string;
-    timeMs: number;
-  }>({
-    slideId: "",
-    timeMs: 0,
-  });
-
   const [presentToolbarOpen, setPresentToolbarOpen] = useState(false);
   const [propertyPanelOpen, setPropertyPanelOpen] = useState(true);
 
@@ -918,10 +905,28 @@ function App() {
     (slide) => slide.id === project.activeSlideId,
   );
 
-  const animationTimelineCurrentTimeMs =
-    animationTimelinePlayhead.slideId === project.activeSlideId
-      ? animationTimelinePlayhead.timeMs
+  /**
+   * PlaybackController must be created before the active-slide early return so
+   * React Hooks always execute in the same order.
+   */
+  const animationPlaybackDurationMs =
+    activeSlide?.animationScene?.schemaVersion === 2
+      ? Math.max(
+          0,
+          ...Object.values(activeSlide.animationScene.clips)
+            .filter((clip) =>
+              isAnimationClipLiveForElements(clip, activeSlide.elements),
+            )
+            .map((clip) => clip.startMs + clip.durationMs),
+        )
       : 0;
+
+  const timelinePlayback = useTimelinePlaybackController({
+    slideId: project.activeSlideId,
+    durationMs: animationPlaybackDurationMs,
+  });
+
+  const animationTimelineCurrentTimeMs = timelinePlayback.currentTimeMs;
 
   const [selectedElementId, setSelectedElementId] = useState(
     demoProject.slides[0]?.elements[0]?.id ?? "",
@@ -4711,29 +4716,40 @@ function App() {
   }
 
   /**
-   * Update editor timeline navigation only.
+   * Seek the shared editor Timeline.
    *
-   * Timeline V2-A intentionally does not seek the rendered canvas yet.
+   * SlideCanvas now samples this exact time, so moving the Playhead immediately
+   * changes the rendered animation frame.
    */
   function handleAnimationTimelineTimeChange(timeMs: number) {
-    setAnimationTimelinePlayhead({
-      slideId: project.activeSlideId,
-      timeMs: Math.max(0, timeMs),
-    });
+    timelinePlayback.seek(timeMs);
   }
 
   /**
-   * Replaying the page also returns the Playhead to the beginning.
-   *
-   * Actual playback still uses the existing stable animationPreviewKey pipeline.
+   * Replay the complete active page from zero using the shared Timeline clock.
    */
   function handleReplayCurrentSlideAnimation() {
-    setAnimationTimelinePlayhead({
-      slideId: project.activeSlideId,
-      timeMs: 0,
-    });
+    setMode("animation");
+    timelinePlayback.replay();
+  }
 
-    setAnimationPreviewKey((key) => key + 1);
+  /**
+   * Toggle between Timeline play and pause without changing the current position.
+   */
+  function handleToggleTimelinePlayback() {
+    if (timelinePlayback.status === "playing") {
+      timelinePlayback.pause();
+      return;
+    }
+
+    timelinePlayback.play();
+  }
+
+  /**
+   * Stop editor Timeline playback and return the Playhead to zero.
+   */
+  function handleStopTimelinePlayback() {
+    timelinePlayback.stop();
   }
 
   /**
@@ -5188,6 +5204,11 @@ function App() {
                   onFinishElementChange={finishProjectHistoryGroup}
                   slideSurfaceRef={slideSurfaceRef}
                   animationPreviewKey={animationPreviewKey}
+                  animationTimelineTimeMs={
+                    mode === "animation"
+                      ? animationTimelineCurrentTimeMs
+                      : undefined
+                  }
                 />
               </div>
               {mode === "animation" ? (
@@ -5195,13 +5216,15 @@ function App() {
                   elements={activeSlide.elements}
                   clips={activeSlideTimelineClips}
                   currentTimeMs={animationTimelineCurrentTimeMs}
+                  playbackStatus={timelinePlayback.status}
                   activeAnimationContext={
                     effectiveActiveAnimationContext ?? undefined
                   }
                   onCurrentTimeChange={handleAnimationTimelineTimeChange}
                   onSelectClip={handleFocusTimelineClip}
                   onOpenClipDetails={handleOpenAnimationClipDetails}
-                  onReplayAnimation={handleReplayCurrentSlideAnimation}
+                  onTogglePlayback={handleToggleTimelinePlayback}
+                  onStopPlayback={handleStopTimelinePlayback}
                 />
               ) : null}
             </div>

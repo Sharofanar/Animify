@@ -182,6 +182,13 @@ type SlideCanvasProps = {
   ) => void;
   slideSurfaceRef?: { current: HTMLDivElement | null };
   animationPreviewKey?: number;
+
+  /**
+   * When defined, editor animation rendering is controlled by the shared
+   * Timeline instead of autonomous setTimeout playback.
+   */
+  animationTimelineTimeMs?: number;
+
   chrome?: boolean;
   clipOverflow?: boolean;
   readOnly?: boolean;
@@ -213,6 +220,7 @@ export function SlideCanvas({
   onUpdateElementContent,
   slideSurfaceRef,
   animationPreviewKey = 0,
+  animationTimelineTimeMs,
 
   readOnly = false,
 
@@ -664,6 +672,7 @@ export function SlideCanvas({
             bare={bare}
             scale={scale}
             compiledAnimations={compiledAnimations}
+            animationTimelineTimeMs={animationTimelineTimeMs}
             legacyAnimationFallback={legacyAnimationFallback}
             selected={
               element.id === selectedElementId ||
@@ -814,6 +823,41 @@ function measureTextElementSize(element: SlideElement, content: string) {
   };
 }
 
+/**
+ * Convert compiler output into Web Animations API keyframes.
+ */
+function createBrowserAnimationKeyframes(
+  compiledAnimation:
+    CompiledElementAnimation,
+): Keyframe[] {
+  return compiledAnimation.keyframes.map(
+    (frame): Keyframe => ({
+      offset: frame.offset,
+
+      ...(frame.opacity !== undefined
+        ? {
+            opacity:
+              frame.opacity,
+          }
+        : {}),
+
+      ...(frame.transform !== undefined
+        ? {
+            transform:
+              frame.transform,
+          }
+        : {}),
+
+      ...(frame.easing !== undefined
+        ? {
+            easing:
+              frame.easing,
+          }
+        : {}),
+    }),
+  );
+}
+
 function SlideElementView({
   element,
   asset,
@@ -823,6 +867,7 @@ function SlideElementView({
   bare,
   scale,
   compiledAnimations,
+  animationTimelineTimeMs,
   legacyAnimationFallback,
   selected,
   selectionNumber,
@@ -849,6 +894,7 @@ function SlideElementView({
   bare: boolean;
   scale: number;
   compiledAnimations: CompiledElementAnimation[];
+  animationTimelineTimeMs?: number;
   legacyAnimationFallback: boolean;
   selected: boolean;
   selectionNumber?: number;
@@ -893,6 +939,14 @@ function SlideElementView({
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const elementNodeRef = useRef<HTMLDivElement | null>(null);
   const animationNodeRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * Web Animation instances owned by Timeline-controlled editor playback.
+   *
+   * They remain paused permanently. The shared Timeline writes currentTime
+   * directly so play, pause, and seek always render the exact same frame.
+   */
+  const timelineAnimationsRef = useRef<Map<string, Animation>>(new Map());
 
   const mediaNodeRef = useRef<HTMLMediaElement | null>(null);
 
@@ -997,6 +1051,138 @@ function SlideElementView({
   }, [assetSource, bare, mediaStartBehavior]);
 
   /**
+   * Render the exact editor Timeline position.
+   *
+   * The Web Animation instances stay paused. The shared Timeline clock advances
+   * their currentTime explicitly, making playback and manual scrubbing use one
+   * deterministic rendering path.
+   */
+  useEffect(() => {
+    const animationNode = animationNodeRef.current;
+
+    const managedAnimations = timelineAnimationsRef.current;
+
+    if (animationTimelineTimeMs === undefined || !animationNode || isEditing) {
+      managedAnimations.forEach((animation) => animation.cancel());
+
+      managedAnimations.clear();
+
+      return;
+    }
+
+    const currentTimeMs = Math.max(0, animationTimelineTimeMs);
+
+    const visibleAnimationIds = new Set<string>();
+
+    for (const compiledAnimation of compiledAnimations) {
+      const startTimeMs = Math.max(0, compiledAnimation.timing.delay);
+
+      const playbackRate =
+        compiledAnimation.playbackRate > 0 ? compiledAnimation.playbackRate : 1;
+
+      const elapsedTimelineMs = currentTimeMs - startTimeMs;
+
+      /**
+       * Future Clips must not exist yet. This preserves Animify's established
+       * behavior where a later fill:"both" Clip cannot cover an earlier Clip
+       * before its actual start time.
+       */
+      if (elapsedTimelineMs < 0) {
+        const existingAnimation = managedAnimations.get(compiledAnimation.id);
+
+        existingAnimation?.cancel();
+
+        managedAnimations.delete(compiledAnimation.id);
+
+        continue;
+      }
+
+      const totalAnimationTimeMs =
+        compiledAnimation.timing.duration * compiledAnimation.timing.iterations;
+
+      const sampledAnimationTimeMs = elapsedTimelineMs * playbackRate;
+
+      const reachedEnd = sampledAnimationTimeMs >= totalAnimationTimeMs;
+
+      const keepsFinalFrame =
+        compiledAnimation.timing.fill === "forwards" ||
+        compiledAnimation.timing.fill === "both";
+
+      if (reachedEnd && !keepsFinalFrame) {
+        const existingAnimation = managedAnimations.get(compiledAnimation.id);
+
+        existingAnimation?.cancel();
+
+        managedAnimations.delete(compiledAnimation.id);
+
+        continue;
+      }
+
+      let animation = managedAnimations.get(compiledAnimation.id);
+
+      if (!animation) {
+        const keyframes = createBrowserAnimationKeyframes(compiledAnimation);
+
+        if (keyframes.length === 0) {
+          continue;
+        }
+
+        animation = animationNode.animate(keyframes, {
+          delay: 0,
+          duration: compiledAnimation.timing.duration,
+          fill: compiledAnimation.timing.fill,
+          iterations: compiledAnimation.timing.iterations,
+          direction: compiledAnimation.timing.direction,
+          easing: "linear",
+        });
+
+        /**
+         * Timeline playback is manually sampled, so these animations must never
+         * advance using their own browser clock.
+         */
+        animation.pause();
+
+        managedAnimations.set(compiledAnimation.id, animation);
+      }
+
+      animation.pause();
+
+      animation.currentTime = Math.min(
+        totalAnimationTimeMs,
+        Math.max(0, sampledAnimationTimeMs),
+      );
+
+      visibleAnimationIds.add(compiledAnimation.id);
+    }
+
+    managedAnimations.forEach((animation, animationId) => {
+      if (visibleAnimationIds.has(animationId)) {
+        return;
+      }
+
+      animation.cancel();
+
+      managedAnimations.delete(animationId);
+    });
+  }, [animationTimelineTimeMs, compiledAnimations, isEditing]);
+
+  /**
+   * A Clip edit may keep the same ID while changing its keyframes or timing.
+   *
+   * Cancel old browser Animation instances before the next compiled version is
+   * sampled so stale keyframes can never survive an animation edit.
+   */
+  useEffect(() => {
+    const managedAnimations = timelineAnimationsRef.current;
+
+    return () => {
+      managedAnimations.forEach((animation) => animation.cancel());
+
+      managedAnimations.clear();
+    };
+  }, [compiledAnimations]);
+
+  /**
    * Play compiled Animation Schema V2 Clips through the Web Animations API.
    *
    * Do not create every delayed animation immediately. A future Clip using
@@ -1009,7 +1195,14 @@ function SlideElementView({
   useEffect(() => {
     const animationNode = animationNodeRef.current;
 
-    if (!animationNode || isEditing || compiledAnimations.length === 0) {
+    const timelineControlled = animationTimelineTimeMs !== undefined;
+
+    if (
+      timelineControlled ||
+      !animationNode ||
+      isEditing ||
+      compiledAnimations.length === 0
+    ) {
       return;
     }
 
@@ -1025,29 +1218,7 @@ function SlideElementView({
           return;
         }
 
-        const keyframes = compiledAnimation.keyframes.map(
-          (frame): Keyframe => ({
-            offset: frame.offset,
-
-            ...(frame.opacity !== undefined
-              ? {
-                  opacity: frame.opacity,
-                }
-              : {}),
-
-            ...(frame.transform !== undefined
-              ? {
-                  transform: frame.transform,
-                }
-              : {}),
-
-            ...(frame.easing !== undefined
-              ? {
-                  easing: frame.easing,
-                }
-              : {}),
-          }),
-        );
+        const keyframes = createBrowserAnimationKeyframes(compiledAnimation);
 
         if (keyframes.length === 0) {
           return;
@@ -1089,7 +1260,7 @@ function SlideElementView({
         runningAnimation.cancel();
       });
     };
-  }, [compiledAnimations, isEditing]);
+  }, [animationTimelineTimeMs, compiledAnimations, isEditing]);
 
   /**
    * Only a Clip using backwards fill should affect the element before its start

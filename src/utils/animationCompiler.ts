@@ -77,6 +77,37 @@ type TransformChannels = {
 export function compileSlideAnimations(
   scene?: AnimationScene,
 ): CompiledSlideAnimations {
+  return compileSceneAnimations(scene);
+}
+
+/**
+ * Compile one selected Clip for isolated editor preview.
+ *
+ * Explicit preview ignores the sequence trigger because the user is requesting
+ * that Clip directly. The first containing sequence remains authoritative for
+ * sequence-level repeat, direction, and playback-rate settings.
+ */
+export function compileAnimationClipPreview(
+  scene: AnimationScene | undefined,
+  clipId: string,
+): CompiledSlideAnimations {
+  return compileSceneAnimations(scene, {
+    clipId,
+    includeNonSlideEnter: true,
+    stopAfterFirstSequenceMatch: true,
+  });
+}
+
+type CompileAnimationOptions = {
+  clipId?: string;
+  includeNonSlideEnter?: boolean;
+  stopAfterFirstSequenceMatch?: boolean;
+};
+
+function compileSceneAnimations(
+  scene?: AnimationScene,
+  options: CompileAnimationOptions = {},
+): CompiledSlideAnimations {
   const compiled: CompiledSlideAnimations = {
     revision: scene?.revision ?? 0,
     byElementId: {},
@@ -103,11 +134,22 @@ export function compileSlideAnimations(
      * Compiler V1 only automatically plays slide-enter sequences.
      * Click, hover, keyboard, and media triggers will be connected later.
      */
-    if (sequence.trigger.type !== "slide-enter") {
+    if (
+      sequence.trigger.type !== "slide-enter" &&
+      !options.includeNonSlideEnter
+    ) {
       continue;
     }
 
+    const sequenceContainsRequestedClip =
+      options.clipId !== undefined &&
+      sequence.clipIds.includes(options.clipId);
+
     for (const clipId of sequence.clipIds) {
+      if (options.clipId !== undefined && clipId !== options.clipId) {
+        continue;
+      }
+
       const clip = scene.clips[clipId];
 
       if (!clip) {
@@ -192,6 +234,13 @@ export function compileSlideAnimations(
         compiled.byElementId[target.elementId] = elementAnimations;
       });
     }
+
+    if (
+      options.stopAfterFirstSequenceMatch &&
+      sequenceContainsRequestedClip
+    ) {
+      break;
+    }
   }
 
   /**
@@ -207,6 +256,45 @@ export function compileSlideAnimations(
   });
 
   return compiled;
+}
+
+/**
+ * Read the absolute editor Timeline window needed to render one Clip once.
+ */
+export function getAnimationClipPreviewWindow(
+  scene: AnimationScene | undefined,
+  clipId: string,
+) {
+  const compiledPreview = compileAnimationClipPreview(scene, clipId);
+
+  const compiledAnimations = Object.values(
+    compiledPreview.byElementId,
+  ).flat();
+
+  if (compiledAnimations.length === 0) {
+    return null;
+  }
+
+  const startTimeMs = Math.min(
+    ...compiledAnimations.map((animation) => Math.max(0, animation.timing.delay)),
+  );
+
+  const endTimeMs = Math.max(
+    ...compiledAnimations.map((animation) => {
+      const playbackRate =
+        animation.playbackRate > 0 ? animation.playbackRate : 1;
+
+      return (
+        Math.max(0, animation.timing.delay) +
+        (animation.timing.duration * animation.timing.iterations) / playbackRate
+      );
+    }),
+  );
+
+  return {
+    startTimeMs,
+    endTimeMs,
+  };
 }
 
 /**

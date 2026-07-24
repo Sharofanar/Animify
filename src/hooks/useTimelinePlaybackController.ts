@@ -6,6 +6,8 @@ type TimelinePlaybackSnapshot = {
   slideId: string;
   currentTimeMs: number;
   status: TimelinePlaybackStatus;
+  rangeStartTimeMs?: number;
+  rangeEndTimeMs?: number;
 };
 
 type TimelinePlaybackAnchor = {
@@ -46,8 +48,26 @@ export function useTimelinePlaybackController({
 
   const snapshotBelongsToSlide = snapshot.slideId === slideId;
 
+  const playbackRangeStartTimeMs = snapshotBelongsToSlide
+    ? snapshot.rangeStartTimeMs
+    : undefined;
+
+  const playbackRangeEndTimeMs = snapshotBelongsToSlide
+    ? snapshot.rangeEndTimeMs
+    : undefined;
+
+  const hasPlaybackRange =
+    playbackRangeStartTimeMs !== undefined &&
+    playbackRangeEndTimeMs !== undefined &&
+    playbackRangeEndTimeMs > playbackRangeStartTimeMs;
+
+  const currentTimelineLimitMs = Math.max(
+    safeDurationMs,
+    hasPlaybackRange ? playbackRangeEndTimeMs : 0,
+  );
+
   const currentTimeMs = snapshotBelongsToSlide
-    ? clampTime(snapshot.currentTimeMs, safeDurationMs)
+    ? clampTime(snapshot.currentTimeMs, currentTimelineLimitMs)
     : 0;
 
   const status: TimelinePlaybackStatus = snapshotBelongsToSlide
@@ -102,11 +122,25 @@ export function useTimelinePlaybackController({
    * Starting again from the end automatically restarts from zero.
    */
   const play = useCallback(() => {
-    if (safeDurationMs <= 0) {
+    const playbackStartTimeMs = hasPlaybackRange
+      ? playbackRangeStartTimeMs
+      : 0;
+
+    const playbackEndTimeMs = hasPlaybackRange
+      ? playbackRangeEndTimeMs
+      : safeDurationMs;
+
+    if (playbackEndTimeMs <= playbackStartTimeMs) {
       return;
     }
 
-    const startTimeMs = currentTimeMs >= safeDurationMs ? 0 : currentTimeMs;
+    const startTimeMs =
+      currentTimeMs < playbackStartTimeMs ||
+      currentTimeMs >= playbackEndTimeMs
+        ? playbackStartTimeMs
+        : currentTimeMs;
+
+    cancelAnimationFrame();
 
     playbackAnchorRef.current = {
       wallClockMs: performance.now(),
@@ -117,8 +151,22 @@ export function useTimelinePlaybackController({
       slideId,
       currentTimeMs: startTimeMs,
       status: "playing",
+      ...(hasPlaybackRange
+        ? {
+            rangeStartTimeMs: playbackRangeStartTimeMs,
+            rangeEndTimeMs: playbackRangeEndTimeMs,
+          }
+        : {}),
     });
-  }, [currentTimeMs, safeDurationMs, slideId]);
+  }, [
+    cancelAnimationFrame,
+    currentTimeMs,
+    hasPlaybackRange,
+    playbackRangeEndTimeMs,
+    playbackRangeStartTimeMs,
+    safeDurationMs,
+    slideId,
+  ]);
 
   /**
    * Freeze playback at the currently rendered frame.
@@ -132,8 +180,21 @@ export function useTimelinePlaybackController({
       slideId,
       currentTimeMs,
       status: "paused",
+      ...(hasPlaybackRange
+        ? {
+            rangeStartTimeMs: playbackRangeStartTimeMs,
+            rangeEndTimeMs: playbackRangeEndTimeMs,
+          }
+        : {}),
     });
-  }, [cancelAnimationFrame, currentTimeMs, slideId]);
+  }, [
+    cancelAnimationFrame,
+    currentTimeMs,
+    hasPlaybackRange,
+    playbackRangeEndTimeMs,
+    playbackRangeStartTimeMs,
+    slideId,
+  ]);
 
   /**
    * Stop playback and return to the beginning.
@@ -159,6 +220,8 @@ export function useTimelinePlaybackController({
       return;
     }
 
+    cancelAnimationFrame();
+
     playbackAnchorRef.current = {
       wallClockMs: performance.now(),
       timelineTimeMs: 0,
@@ -169,7 +232,61 @@ export function useTimelinePlaybackController({
       currentTimeMs: 0,
       status: "playing",
     });
-  }, [safeDurationMs, slideId, stop]);
+  }, [cancelAnimationFrame, safeDurationMs, slideId, stop]);
+
+  /**
+   * Start one isolated Clip preview on the shared absolute Timeline.
+   *
+   * Repeated preview requests replace the previous range and animation frame,
+   * so rapid clicks can never create overlapping playback loops.
+   */
+  const playRange = useCallback(
+    (startTimeMs: number, endTimeMs: number) => {
+      const safeStartTimeMs = Math.max(0, startTimeMs);
+
+      const safeEndTimeMs = Math.max(safeStartTimeMs, endTimeMs);
+
+      if (safeEndTimeMs <= safeStartTimeMs) {
+        return;
+      }
+
+      cancelAnimationFrame();
+
+      playbackAnchorRef.current = {
+        wallClockMs: performance.now(),
+        timelineTimeMs: safeStartTimeMs,
+      };
+
+      setSnapshot({
+        slideId,
+        currentTimeMs: safeStartTimeMs,
+        status: "playing",
+        rangeStartTimeMs: safeStartTimeMs,
+        rangeEndTimeMs: safeEndTimeMs,
+      });
+    },
+    [cancelAnimationFrame, slideId],
+  );
+
+  /**
+   * Leave Clip-preview mode and restore the full-page Timeline position.
+   */
+  const clearPlaybackRange = useCallback(
+    (timeMs: number) => {
+      cancelAnimationFrame();
+
+      playbackAnchorRef.current = null;
+
+      const nextTimeMs = clampTime(timeMs, safeDurationMs);
+
+      setSnapshot({
+        slideId,
+        currentTimeMs: nextTimeMs,
+        status: nextTimeMs > 0 ? "paused" : "idle",
+      });
+    },
+    [cancelAnimationFrame, safeDurationMs, slideId],
+  );
 
   /**
    * Advance the single shared Timeline clock.
@@ -177,7 +294,11 @@ export function useTimelinePlaybackController({
    * SlideCanvas never owns another playback timer in controlled editor mode.
    */
   useEffect(() => {
-    if (status !== "playing" || safeDurationMs <= 0) {
+    const playbackEndTimeMs = hasPlaybackRange
+      ? playbackRangeEndTimeMs
+      : safeDurationMs;
+
+    if (status !== "playing" || playbackEndTimeMs <= 0) {
       return;
     }
 
@@ -203,15 +324,21 @@ export function useTimelinePlaybackController({
 
       const nextTimeMs = clampTime(
         anchor.timelineTimeMs + (now - anchor.wallClockMs),
-        safeDurationMs,
+        playbackEndTimeMs,
       );
 
-      const reachedEnd = nextTimeMs >= safeDurationMs;
+      const reachedEnd = nextTimeMs >= playbackEndTimeMs;
 
       setSnapshot({
         slideId,
         currentTimeMs: nextTimeMs,
         status: reachedEnd ? "paused" : "playing",
+        ...(hasPlaybackRange
+          ? {
+              rangeStartTimeMs: playbackRangeStartTimeMs,
+              rangeEndTimeMs: playbackRangeEndTimeMs,
+            }
+          : {}),
       });
 
       if (reachedEnd) {
@@ -231,7 +358,16 @@ export function useTimelinePlaybackController({
       disposed = true;
       cancelAnimationFrame();
     };
-  }, [cancelAnimationFrame, currentTimeMs, safeDurationMs, slideId, status]);
+  }, [
+    cancelAnimationFrame,
+    currentTimeMs,
+    hasPlaybackRange,
+    playbackRangeEndTimeMs,
+    playbackRangeStartTimeMs,
+    safeDurationMs,
+    slideId,
+    status,
+  ]);
 
   return {
     currentTimeMs,
@@ -242,5 +378,7 @@ export function useTimelinePlaybackController({
     pause,
     stop,
     replay,
+    playRange,
+    clearPlaybackRange,
   };
 }

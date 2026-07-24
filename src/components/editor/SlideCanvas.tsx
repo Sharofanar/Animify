@@ -15,6 +15,7 @@ import type {
   SlideElement,
 } from "../../types/presentation";
 import {
+  compileAnimationClipPreview,
   compileSlideAnimations,
   type CompiledElementAnimation,
 } from "../../utils/animationCompiler";
@@ -189,6 +190,12 @@ type SlideCanvasProps = {
    */
   animationTimelineTimeMs?: number;
 
+  /**
+   * When defined, compile and sample only this Clip while keeping the project
+   * scene unchanged.
+   */
+  animationClipPreviewId?: string;
+
   chrome?: boolean;
   clipOverflow?: boolean;
   readOnly?: boolean;
@@ -221,6 +228,7 @@ export function SlideCanvas({
   slideSurfaceRef,
   animationPreviewKey = 0,
   animationTimelineTimeMs,
+  animationClipPreviewId,
 
   readOnly = false,
 
@@ -245,8 +253,14 @@ export function SlideCanvas({
    * result instead of rebuilding every animation.
    */
   const compiledSlideAnimations = useMemo(
-    () => compileSlideAnimations(slide.animationScene),
-    [slide.animationScene],
+    () =>
+      animationClipPreviewId
+        ? compileAnimationClipPreview(
+            slide.animationScene,
+            animationClipPreviewId,
+          )
+        : compileSlideAnimations(slide.animationScene),
+    [animationClipPreviewId, slide.animationScene],
   );
 
   /**

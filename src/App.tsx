@@ -22,6 +22,7 @@ import { DuplicateResourceReviewPanel } from "./components/editor/DuplicateResou
 import { SlideCanvas } from "./components/editor/SlideCanvas";
 import { demoProject } from "./data/demoProject";
 import { exportProjectAsHtml } from "./utils/exportHtml";
+import { getAnimationClipPreviewWindow } from "./utils/animationCompiler";
 import {
   computeBlobSha256,
   dataUrlToBlob,
@@ -184,6 +185,19 @@ type ActiveAnimationContext = {
    * selected Clip without duplicating any animation data in UI state.
    */
   requestId: number;
+};
+
+/**
+ * Temporary editor-only state for one isolated Clip preview.
+ *
+ * The project scene remains the authority for every animation value. This state
+ * only remembers which compiled Clip is sampled and where the page Playhead
+ * should return when preview stops.
+ */
+type AnimationClipPreviewState = {
+  slideId: string;
+  clipId: string;
+  returnTimeMs: number;
 };
 
 type PendingDuplicateResource = {
@@ -764,6 +778,9 @@ function App() {
 
   const [animationPreviewKey, setAnimationPreviewKey] = useState(0);
 
+  const [animationClipPreview, setAnimationClipPreview] =
+    useState<AnimationClipPreviewState | null>(null);
+
   const [presentToolbarOpen, setPresentToolbarOpen] = useState(false);
   const [propertyPanelOpen, setPropertyPanelOpen] = useState(true);
 
@@ -905,6 +922,18 @@ function App() {
     (slide) => slide.id === project.activeSlideId,
   );
 
+  const effectiveAnimationClipPreview =
+    animationClipPreview &&
+    activeSlide?.animationScene?.schemaVersion === 2 &&
+    animationClipPreview.slideId === activeSlide.id &&
+    activeSlide.animationScene.clips[animationClipPreview.clipId] &&
+    isAnimationClipLiveForElements(
+      activeSlide.animationScene.clips[animationClipPreview.clipId],
+      activeSlide.elements,
+    )
+      ? animationClipPreview
+      : null;
+
   /**
    * PlaybackController must be created before the active-slide early return so
    * React Hooks always execute in the same order.
@@ -927,6 +956,8 @@ function App() {
   });
 
   const animationTimelineCurrentTimeMs = timelinePlayback.currentTimeMs;
+  const clearTimelinePlaybackRange = timelinePlayback.clearPlaybackRange;
+  const stopTimelinePlayback = timelinePlayback.stop;
 
   const [selectedElementId, setSelectedElementId] = useState(
     demoProject.slides[0]?.elements[0]?.id ?? "",
@@ -1114,6 +1145,29 @@ function App() {
     redoStackRef.current = [];
   }, []);
 
+  /**
+   * Clip preview is transient editor state. Every navigation or project mutation
+   * exits that mode before changing the underlying slide/scene data.
+   */
+  const clearAnimationClipPreview = useCallback(() => {
+    if (!animationClipPreview) {
+      return;
+    }
+
+    if (animationClipPreview.slideId === project.activeSlideId) {
+      clearTimelinePlaybackRange(animationClipPreview.returnTimeMs);
+    } else {
+      stopTimelinePlayback();
+    }
+
+    setAnimationClipPreview(null);
+  }, [
+    animationClipPreview,
+    project.activeSlideId,
+    clearTimelinePlaybackRange,
+    stopTimelinePlayback,
+  ]);
+
   const commitProjectChange = useCallback(
     (updater: ProjectUpdater, options: { recordHistory?: boolean } = {}) => {
       /**
@@ -1130,6 +1184,8 @@ function App() {
         return;
       }
 
+      clearAnimationClipPreview();
+
       if (options.recordHistory === false) {
         if (historyGroupSnapshotRef.current) {
           historyGroupChangedRef.current = true;
@@ -1143,7 +1199,7 @@ function App() {
       latestProjectRef.current = nextProject;
       setProject(nextProject);
     },
-    [pushUndoSnapshot],
+    [clearAnimationClipPreview, pushUndoSnapshot],
   );
 
   const beginProjectHistoryGroup = useCallback(() => {
@@ -1179,6 +1235,8 @@ function App() {
       return;
     }
 
+    clearAnimationClipPreview();
+
     const currentProject = latestProjectRef.current;
 
     undoStackRef.current = undoStackRef.current.slice(0, -1);
@@ -1196,7 +1254,11 @@ function App() {
     setProject(projectToRestore);
     setSelectedElementId(previousActiveSlide?.elements[0]?.id ?? "");
     setAnimationPreviewKey((key) => key + 1);
-  }, [setAnimationPreviewKey, setSelectedElementId]);
+  }, [
+    clearAnimationClipPreview,
+    setAnimationPreviewKey,
+    setSelectedElementId,
+  ]);
 
   const redoProject = useCallback(() => {
     if (duplicateReviewActiveRef.current) {
@@ -1208,6 +1270,8 @@ function App() {
     if (!nextProject) {
       return;
     }
+
+    clearAnimationClipPreview();
 
     const currentProject = latestProjectRef.current;
 
@@ -1226,7 +1290,11 @@ function App() {
     setProject(projectToRestore);
     setSelectedElementId(nextActiveSlide?.elements[0]?.id ?? "");
     setAnimationPreviewKey((key) => key + 1);
-  }, [setAnimationPreviewKey, setSelectedElementId]);
+  }, [
+    clearAnimationClipPreview,
+    setAnimationPreviewKey,
+    setSelectedElementId,
+  ]);
 
   useEffect(() => {
     function handleHistoryKeyDown(event: KeyboardEvent) {
@@ -1882,6 +1950,21 @@ function App() {
       ? activeAnimationContext
       : null;
 
+  const selectedClipPreviewWindow = effectiveActiveAnimationContext
+    ? getAnimationClipPreviewWindow(
+        activeAnimationScene,
+        effectiveActiveAnimationContext.clipId,
+      )
+    : null;
+
+  const selectedClipPreviewStatus =
+    effectiveAnimationClipPreview && selectedClipPreviewWindow
+      ? timelinePlayback.status === "paused" &&
+        animationTimelineCurrentTimeMs >= selectedClipPreviewWindow.endTimeMs
+        ? "idle"
+        : timelinePlayback.status
+      : undefined;
+
   const slideCanvasHorizontalChrome = mode === "animation" ? 96 : 88;
   const slideCanvasVerticalChrome = mode === "animation" ? 142 : 132;
 
@@ -2016,6 +2099,7 @@ function App() {
 
     latestProjectRef.current = nextProject;
 
+    clearAnimationClipPreview();
     setProject(nextProject);
   }
 
@@ -2277,6 +2361,7 @@ function App() {
          */
         replaceDuplicateReviewQueue(reviewQueue);
 
+        clearAnimationClipPreview();
         setMode("edit");
 
         setAnimationPanelOpen(false);
@@ -2838,6 +2923,7 @@ function App() {
 
     latestProjectRef.current = nextProject;
 
+    clearAnimationClipPreview();
     setProject(nextProject);
 
     if (failedAssetIds.length > 0) {
@@ -4468,6 +4554,10 @@ function App() {
       return;
     }
 
+    if (slideId !== project.activeSlideId) {
+      clearAnimationClipPreview();
+    }
+
     setProject((currentProject) => ({
       ...currentProject,
       activeSlideId: slideId,
@@ -4508,6 +4598,7 @@ function App() {
 
     latestProjectRef.current = nextProject;
 
+    clearAnimationClipPreview();
     setProject(nextProject);
 
     setMode("edit");
@@ -4700,6 +4791,13 @@ function App() {
    * selected Clip can still be reopened and scrolled into view.
    */
   function handleSelectAnimationClip(elementId: string, clipId: string) {
+    if (
+      effectiveAnimationClipPreview &&
+      effectiveAnimationClipPreview.clipId !== clipId
+    ) {
+      handleStopAnimationClipPreview();
+    }
+
     animationContextRequestCounterRef.current += 1;
 
     setMode("animation");
@@ -4718,10 +4816,16 @@ function App() {
   /**
    * Seek the shared editor Timeline.
    *
-   * SlideCanvas now samples this exact time, so moving the Playhead immediately
-   * changes the rendered animation frame.
+   * Manual seeking exits isolated preview because the ruler represents the full
+   * page Timeline rather than Clip-local navigation.
    */
   function handleAnimationTimelineTimeChange(timeMs: number) {
+    if (effectiveAnimationClipPreview) {
+      setAnimationClipPreview(null);
+      timelinePlayback.clearPlaybackRange(timeMs);
+      return;
+    }
+
     timelinePlayback.seek(timeMs);
   }
 
@@ -4730,13 +4834,23 @@ function App() {
    */
   function handleReplayCurrentSlideAnimation() {
     setMode("animation");
+    setAnimationClipPreview(null);
     timelinePlayback.replay();
   }
 
   /**
-   * Toggle between Timeline play and pause without changing the current position.
+   * Toggle full-page Timeline playback.
+   *
+   * Choosing full-page playback while a Clip is isolated deliberately replaces
+   * preview mode rather than allowing two playback intents to compete.
    */
   function handleToggleTimelinePlayback() {
+    if (effectiveAnimationClipPreview) {
+      setAnimationClipPreview(null);
+      timelinePlayback.replay();
+      return;
+    }
+
     if (timelinePlayback.status === "playing") {
       timelinePlayback.pause();
       return;
@@ -4746,9 +4860,73 @@ function App() {
   }
 
   /**
-   * Stop editor Timeline playback and return the Playhead to zero.
+   * Start or restart the selected Clip inside one shared absolute time range.
+   */
+  function handleReplaySelectedAnimationClip() {
+    if (!effectiveActiveAnimationContext || !selectedClipPreviewWindow) {
+      return;
+    }
+
+    const previewingSameClip =
+      effectiveAnimationClipPreview?.clipId ===
+      effectiveActiveAnimationContext.clipId;
+
+    setMode("animation");
+
+    setAnimationClipPreview({
+      slideId: project.activeSlideId,
+      clipId: effectiveActiveAnimationContext.clipId,
+      returnTimeMs: previewingSameClip
+        ? effectiveAnimationClipPreview.returnTimeMs
+        : animationTimelineCurrentTimeMs,
+    });
+
+    timelinePlayback.playRange(
+      selectedClipPreviewWindow.startTimeMs,
+      selectedClipPreviewWindow.endTimeMs,
+    );
+  }
+
+  /**
+   * Pause or continue the active Clip preview without resetting its frame.
+   */
+  function handleToggleSelectedAnimationClipPreview() {
+    if (
+      effectiveAnimationClipPreview?.clipId !==
+      effectiveActiveAnimationContext?.clipId
+    ) {
+      handleReplaySelectedAnimationClip();
+      return;
+    }
+
+    if (timelinePlayback.status === "playing") {
+      timelinePlayback.pause();
+      return;
+    }
+
+    timelinePlayback.play();
+  }
+
+  /**
+   * Stop isolated preview and restore the page frame visible before it started.
+   */
+  function handleStopAnimationClipPreview() {
+    if (!effectiveAnimationClipPreview) {
+      return;
+    }
+
+    clearAnimationClipPreview();
+  }
+
+  /**
+   * Stop whichever editor playback mode is currently active.
    */
   function handleStopTimelinePlayback() {
+    if (effectiveAnimationClipPreview) {
+      handleStopAnimationClipPreview();
+      return;
+    }
+
     timelinePlayback.stop();
   }
 
@@ -4783,6 +4961,13 @@ function App() {
     elementId: string,
     clipId: string,
   ) {
+    if (
+      effectiveAnimationClipPreview &&
+      effectiveAnimationClipPreview.clipId !== clipId
+    ) {
+      handleStopAnimationClipPreview();
+    }
+
     const selectingDifferentClip =
       activeAnimationContext?.elementId !== elementId ||
       activeAnimationContext?.clipId !== clipId;
@@ -4904,7 +5089,10 @@ function App() {
                       ? "bg-white text-violet-600 shadow-sm"
                       : "text-slate-500 hover:text-slate-900"
                   }`}
-                  onClick={() => setMode("edit")}
+                  onClick={() => {
+                    clearAnimationClipPreview();
+                    setMode("edit");
+                  }}
                 >
                   编辑
                 </button>
@@ -4924,7 +5112,10 @@ function App() {
                 <button
                   type="button"
                   className="rounded-full px-4 py-2 text-sm font-semibold text-slate-500 transition hover:text-slate-900"
-                  onClick={() => setMode("present")}
+                  onClick={() => {
+                    clearAnimationClipPreview();
+                    setMode("present");
+                  }}
                 >
                   放映
                 </button>
@@ -5209,6 +5400,11 @@ function App() {
                       ? animationTimelineCurrentTimeMs
                       : undefined
                   }
+                  animationClipPreviewId={
+                    mode === "animation"
+                      ? effectiveAnimationClipPreview?.clipId
+                      : undefined
+                  }
                 />
               </div>
               {mode === "animation" ? (
@@ -5216,7 +5412,13 @@ function App() {
                   elements={activeSlide.elements}
                   clips={activeSlideTimelineClips}
                   currentTimeMs={animationTimelineCurrentTimeMs}
-                  playbackStatus={timelinePlayback.status}
+                  playbackStatus={
+                    effectiveAnimationClipPreview
+                      ? "idle"
+                      : timelinePlayback.status
+                  }
+                  clipPreviewStatus={selectedClipPreviewStatus}
+                  clipPreviewAvailable={Boolean(selectedClipPreviewWindow)}
                   activeAnimationContext={
                     effectiveActiveAnimationContext ?? undefined
                   }
@@ -5224,6 +5426,11 @@ function App() {
                   onSelectClip={handleFocusTimelineClip}
                   onOpenClipDetails={handleOpenAnimationClipDetails}
                   onTogglePlayback={handleToggleTimelinePlayback}
+                  onToggleClipPreview={
+                    handleToggleSelectedAnimationClipPreview
+                  }
+                  onReplayClipPreview={handleReplaySelectedAnimationClip}
+                  onStopClipPreview={handleStopAnimationClipPreview}
                   onStopPlayback={handleStopTimelinePlayback}
                 />
               ) : null}
@@ -5274,6 +5481,11 @@ function App() {
         onSelectClip={handleSelectAnimationClipFromWorkspace}
         onClose={() => setAnimationPanelOpen(false)}
         onReplayAnimation={handleReplayCurrentSlideAnimation}
+        clipPreviewStatus={selectedClipPreviewStatus}
+        clipPreviewAvailable={Boolean(selectedClipPreviewWindow)}
+        onToggleClipPreview={handleToggleSelectedAnimationClipPreview}
+        onReplayClipPreview={handleReplaySelectedAnimationClip}
+        onStopClipPreview={handleStopAnimationClipPreview}
         onAddClip={handleAddAnimationClip}
         onDuplicateClip={handleDuplicateAnimationClip}
         onDeleteClip={handleDeleteAnimationClip}

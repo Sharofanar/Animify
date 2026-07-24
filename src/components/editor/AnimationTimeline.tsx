@@ -23,6 +23,9 @@ type AnimationTimelineProps = {
 
   playbackStatus: TimelinePlaybackStatus;
 
+  clipPreviewStatus?: TimelinePlaybackStatus;
+  clipPreviewAvailable?: boolean;
+
   activeAnimationContext?: ActiveAnimationContext;
 
   onCurrentTimeChange: (timeMs: number) => void;
@@ -32,6 +35,9 @@ type AnimationTimelineProps = {
   onOpenClipDetails: (elementId: string, clipId: string) => void;
 
   onTogglePlayback: () => void;
+  onToggleClipPreview: () => void;
+  onReplayClipPreview: () => void;
+  onStopClipPreview: () => void;
   onStopPlayback: () => void;
 };
 
@@ -171,19 +177,25 @@ function formatCurrentTime(timeMs: number) {
  * This phase adds persistent ruler navigation, AE-style horizontal wheel
  * scrolling, and Clip-level keyframe visualization.
  *
- * Playback and canvas seeking remain intentionally separate. A shared playback
- * controller will connect currentTimeMs to rendered animation state later.
+ * Full-page playback and isolated Clip preview both use the shared playback
+ * controller, while this component remains responsible only for navigation and
+ * user intent.
  */
 export function AnimationTimeline({
   elements,
   clips,
   currentTimeMs,
   playbackStatus,
+  clipPreviewStatus,
+  clipPreviewAvailable = false,
   activeAnimationContext,
   onCurrentTimeChange,
   onSelectClip,
   onOpenClipDetails,
   onTogglePlayback,
+  onToggleClipPreview,
+  onReplayClipPreview,
+  onStopClipPreview,
   onStopPlayback,
 }: AnimationTimelineProps) {
   const [zoom, setZoom] = useState<number>(1);
@@ -439,13 +451,41 @@ export function AnimationTimeline({
 
           <button
             type="button"
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-xs font-black text-slate-500 transition hover:bg-slate-200 hover:text-slate-900"
-            onClick={onStopPlayback}
-            title="停止并返回 0 秒"
-            aria-label="停止动画播放"
+            disabled={!activeAnimationContext || !clipPreviewAvailable}
+            className="min-w-22 rounded-full bg-amber-100 px-3 py-2 text-xs font-black text-amber-700 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-300"
+            onClick={onToggleClipPreview}
+            title="只播放当前选中的 Clip"
           >
-            ■
+            {clipPreviewStatus === "playing"
+              ? "暂停 Clip"
+              : clipPreviewStatus === "paused"
+                ? "继续 Clip"
+                : "预览 Clip"}
           </button>
+
+          {clipPreviewStatus ? (
+            <>
+              <button
+                type="button"
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-100 text-xs font-black text-amber-700 transition hover:bg-amber-200"
+                onClick={onReplayClipPreview}
+                title="从头重播当前 Clip"
+                aria-label="从头重播当前 Clip"
+              >
+                ↻
+              </button>
+
+              <button
+                type="button"
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-[10px] font-black text-slate-500 transition hover:bg-slate-200 hover:text-slate-900"
+                onClick={onStopClipPreview}
+                title="停止 Clip 预览并恢复原画面"
+                aria-label="停止 Clip 预览"
+              >
+                ■
+              </button>
+            </>
+          ) : null}
 
           <button
             type="button"
@@ -453,8 +493,19 @@ export function AnimationTimeline({
             className="min-w-24 rounded-full bg-violet-500 px-4 py-2 text-xs font-black text-white shadow-sm transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
             onClick={onTogglePlayback}
           >
-            {playbackStatus === "playing" ? "⏸ 暂停" : "▶ 播放"}
+            {playbackStatus === "playing" ? "⏸ 整页" : "▶ 整页"}
           </button>
+
+          {playbackStatus !== "idle" ? (
+            <button
+              type="button"
+              className="rounded-full bg-violet-100 px-3 py-2 text-xs font-black text-violet-600 transition hover:bg-violet-200"
+              onClick={onStopPlayback}
+              title="停止整页播放并返回 0 秒"
+            >
+              停止整页
+            </button>
+          ) : null}
         </div>
       </div>
 

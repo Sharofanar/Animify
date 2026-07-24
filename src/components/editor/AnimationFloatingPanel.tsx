@@ -42,6 +42,11 @@ type AnimationFloatingPanelProps = {
   onSelectClip?: (elementId: string, clipId: string) => void;
   onClose?: () => void;
   onReplayAnimation?: () => void;
+  clipPreviewStatus?: "idle" | "playing" | "paused";
+  clipPreviewAvailable?: boolean;
+  onToggleClipPreview?: () => void;
+  onReplayClipPreview?: () => void;
+  onStopClipPreview?: () => void;
   onAddClip?: (command: AddAnimationClipCommand) => void;
   onDuplicateClip?: (command: DuplicateAnimationClipCommand) => void;
   onDeleteClip?: (command: DeleteAnimationClipCommand) => void;
@@ -152,6 +157,11 @@ export function AnimationFloatingPanel({
   onSelectClip,
   onClose,
   onReplayAnimation,
+  clipPreviewStatus,
+  clipPreviewAvailable = false,
+  onToggleClipPreview,
+  onReplayClipPreview,
+  onStopClipPreview,
   onAddClip,
   onDuplicateClip,
   onDeleteClip,
@@ -301,11 +311,52 @@ export function AnimationFloatingPanel({
         <div className="flex shrink-0 items-center gap-2">
           <button
             type="button"
+            disabled={!activeAnimationContext || !clipPreviewAvailable}
+            className="rounded-full bg-amber-100 px-3 py-1.5 text-xs font-black text-amber-700 transition hover:bg-amber-200 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-300"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={onToggleClipPreview}
+            title="只播放当前选中的 Clip"
+          >
+            {clipPreviewStatus === "playing"
+              ? "暂停 Clip"
+              : clipPreviewStatus === "paused"
+                ? "继续 Clip"
+                : "预览 Clip"}
+          </button>
+
+          {clipPreviewStatus ? (
+            <>
+              <button
+                type="button"
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-100 text-xs font-black text-amber-700 transition hover:bg-amber-200"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={onReplayClipPreview}
+                aria-label="从头重播当前 Clip"
+                title="从头重播当前 Clip"
+              >
+                ↻
+              </button>
+
+              <button
+                type="button"
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-[10px] font-black text-slate-500 transition hover:bg-slate-200"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={onStopClipPreview}
+                aria-label="停止 Clip 预览"
+                title="停止 Clip 预览并恢复原画面"
+              >
+                ■
+              </button>
+            </>
+          ) : null}
+
+          <button
+            type="button"
             className="rounded-full bg-violet-500 px-3 py-1.5 text-xs font-black text-white transition hover:bg-violet-600"
             onPointerDown={(event) => event.stopPropagation()}
             onClick={onReplayAnimation}
           >
-            播放
+            整页
           </button>
 
           {persistent ? (

@@ -1,9 +1,9 @@
 # Animify 项目状态
 
-> 最后更新：2026-07-24  
+> 最后更新：2026-07-26
 > 仓库：`https://github.com/Sharofanar/Animify`  
 > 主分支：`main`  
-> GitHub 已知最新基线：`ba1cecc Add unified timeline playback controller`
+> GitHub 已知最新基线：`c7756b5 feat: add isolated clip preview`
 
 本文档是 Animify 当前开发状态的长期事实来源。
 
@@ -34,12 +34,13 @@
 当前已知 GitHub `origin/main` 最新提交：
 
 ```text
-ba1cecc Add unified timeline playback controller
+c7756b5 feat: add isolated clip preview
 ```
 
 该提交之前已知的连续功能提交包括：
 
 ```text
+ba1cecc Add unified timeline playback controller
 7cd0747 Enhance Timeline V2 with sticky ruler and keyframes
 c6e8448 Add Timeline V2 and fix stale animation clip visibility
 8f0234e Add duplicate asset review and read-only inspection mode
@@ -145,6 +146,22 @@ Tailwind CSS、dnd-kit 以及其他依赖的当前实际版本和使用范围，
 - 两个维护文件仍未被 Git 跟踪，存在被误删或未随仓库传递的维护风险，但不影响本地运行和人工回归；未经用户允许不得执行 `git add`。
 - 结论：**第 0 阶段可以正式结束，可以进入第 1 阶段“最新基线回归测试”。**
 
+### 5. 当前 Git 同步状态
+
+复核日期：2026-07-25
+
+- 当前分支：`main`
+- 当前 HEAD：`c7756b58c7aff13fc17dd832d807058a2555c775`
+- 本地 `origin/main`：`c7756b58c7aff13fc17dd832d807058a2555c775`
+- 最新提交：`c7756b5 feat: add isolated clip preview`
+- 本地与 `origin/main`：ahead 0、behind 0
+- 第 3 阶段开始前工作区：仅有已授权的 `PROJECT_STATUS.md` 状态同步修改
+- 当前未提交修改：`PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/PropertyPanel.tsx`、`src/types/presentation.ts`、`src/utils/animationCommands.ts`、`src/utils/animationCompiler.ts`、`src/utils/animationSequence.ts`
+- 暂存修改：无
+- 单 Clip 预览 V1：已 commit 并 push
+- 第 3 阶段 Click Step 数据与命令层：已验证完成（2026-07-26）
+- GitHub 状态：第 3 阶段尚未 commit 或 push
+
 ---
 
 ## 二、当前阶段总目标
@@ -240,7 +257,8 @@ Tailwind CSS、dnd-kit 以及其他依赖的当前实际版本和使用范围，
 
 - Build、Lint 和 Diff 检查通过。
 - 项目未定义自动化 `test` 脚本，该限制已记录。
-- 本功能尚未 commit 或 push。
+- 对应提交：`c7756b5 feat: add isolated clip preview`。
+- GitHub 状态：已 push。
 
 ---
 
@@ -416,7 +434,110 @@ c6e8448 Add Timeline V2 and fix stale animation clip visibility
 
 ## 五、当前开发状态
 
-# 单 Clip 预览 V1
+# 第 3 阶段：Click Step 数据与命令层
+
+状态：**已验证完成（2026-07-26）**
+
+本阶段实现：
+
+- 继续使用现有 `AnimationSequence`，没有新增第二套 Click Step 持久化结构。
+- `trigger.type === "slide-enter"` 表示页面进入自动播放；`trigger.type === "click"` 表示一个页面点击步骤。
+- 一个 Click Step 直接通过现有 `clipIds` 保存一个或多个 Clip。
+- Click Step 顺序继续以现有 `animationScene.sequenceOrder` 为唯一持久化顺序来源。
+- `AnimationSequence` 正式作为独立动画步骤的局部时间上下文；`AnimationClip.startMs` 正式定义为相对所属 Sequence 局部 0ms 的开始偏移。
+- Sequence 的触发时刻属于后续运行时状态，不写回 Clip；用户在页面进入多久后点击都不会改变已保存的 `startMs`。
+- 一个 Clip 只能归属一个 Sequence；Clip 跨 Sequence 移动时保留原有局部 `startMs` 数值，不计算或保存页面绝对时间。
+- 新增创建、修改、触发切换、步骤移动和按稳定顺序读取 Click Step 的不可变命令。
+- 创建或修改步骤时移动 Clip 归属，不复制引用；从 Click Step 移出的 Clip 自动回到 `slide-enter` Sequence。
+- 旧版兼容动画首次迁移仍默认建立 `slide-enter` Sequence。
+- 旧版兼容 Clip 被明确移入 Click Step 后，后续属性同步不会再把它重复加入 `slide-enter` Sequence。
+- 删除 Clip 时继续从所有 Sequence 清理引用并删除空 Sequence。
+- 删除对象时在同一项目事务中清理 Clip target、空 Clip、空 Sequence 和对象触发引用；多目标 Clip 保留仍有效的目标。
+- 所有新增步骤命令保持输入不可变，可由现有 `commitProjectChange` 作为单次 Undo / Redo 事务调用。
+- 新增 Sequence 级公共规则，统一解析有序 Clip、局部开始、错峰、Clip effective duration、Sequence effective local duration、repeat、direction 和 playbackRate。
+- 新增指定 Sequence 的公共编译入口；`compileAnimationSequence(scene, sequenceId)` 只编译指定 Sequence，编译结果从该 Sequence 局部 0ms 开始并保持时间隔离；本阶段未实现点击推进或运行时调度。
+- 新增 Clip 和复制 Clip 的“下一个开始时间”只读取目标 / 所属 Sequence，不再扫描 Scene 全部 Clip。
+- Click Step 数据和触发方式修改继续进入现有保存恢复和 Undo / Redo 体系。
+
+本阶段明确未开发：
+
+- PPT 式放映控制器。
+- Click Step 编辑界面。
+- HTML 导出 Click Step 同步。
+- Timeline V2-C。
+
+Marker 决定：
+
+- 当前 Marker 仍是 `AnimationScene.markers` 下的 Scene-level 时间点，没有 Sequence 归属。
+- 本阶段不修改 Marker 数据，避免借机扩大范围；在第 7 阶段 Timeline V2-C 开始前，必须决定 Marker 是页面级参考线、Sequence-local Marker，还是两者并存。
+
+当前临时 Timeline 状态：
+
+- 当前 Timeline V2-B 仍会把不同 Sequence 的 Clip 临时扁平显示到同一视觉标尺。
+- 这只是当前 UI 的阶段性限制，不改变底层真实数据。
+- 从第 3 阶段开始，底层正式时间语义是 **AnimationSequence-local time**。
+- 当前扁平 Timeline 中的视觉位置不得解释为 Click Step 的页面全局绝对时间。
+- 本轮没有修改 Timeline UI。
+
+源代码变更：
+
+```text
+src/App.tsx
+src/components/editor/PropertyPanel.tsx
+src/types/presentation.ts
+src/utils/animationCommands.ts
+src/utils/animationCompiler.ts
+src/utils/animationSequence.ts
+```
+
+检查结果：
+
+- `npm.cmd run build`：通过。
+- `npm.cmd run lint`：通过。
+- 自动化测试：`package.json` 未定义 `test` 脚本。
+- 使用仓库现有 Rolldown 对命令层执行不落盘断言：原 15 项通过。
+- 本轮新增 Sequence-local 专项断言：16 项通过；新增 Clip 的目标 Sequence 隔离路径及 Sequence playback direction 2 项断言另行通过。
+- 断言覆盖多 Clip 分组、步骤顺序、触发切换、旧项目默认 `slide-enter`、Clip 删除、对象删除引用清理、Sequence 隔离时长、指定 Sequence 编译、复制 / 新增 Clip 和跨 Sequence 移动保留 `startMs`。
+- Git Diff：已检查，改动范围保持在本阶段数据与命令层及维护文档。
+
+用户人工验收（2026-07-26）：
+
+1. 原 `slide-enter` 动画新增和时间设置正常。
+2. 整页播放顺序正常。
+3. 暂停、继续、停止和重播正常。
+4. 单 Clip 预览、暂停、继续、停止以及两个入口状态同步正常。
+5. 关键帧新增、修改、Undo、Redo 正常。
+6. 自动保存和刷新恢复正常。
+7. 独立 HTML 中现有 `slide-enter` 动画顺序和时间正常。
+8. Sequence-local 专项 QA 通过：
+   - `slide-enter`：1 个 Clip，局部 `startMs = 0`。
+   - Click Step 1：2 个 Clip，局部 `startMs = 0 / 1000`。
+   - Click Step 2：1 个 Clip，局部 `startMs = 0`。
+   - Step 1 effective duration = `1500ms`。
+   - Step 2 effective duration = `9000ms`。
+   - Step 1 compiled delays = `[0, 1000]`。
+   - Step 1 dry duplicate `startMs = 1500ms`。
+   - Step 2 的 `9000ms` 不影响 Step 1。
+9. QA 数据经过刷新、重新读取后，Sequence 归属和局部时间保持正确。
+10. QA 数据成功从 `localStorage` 备份恢复。
+11. 恢复后再次整页播放正常。
+12. Console 在编辑器测试过程中没有出现新的产品运行红色错误。
+
+HTML 本地打开兼容性观察：
+
+- 独立 HTML 通过 `file://` 直接打开时，Console 曾出现一次浏览器本地 file URL / unique security origin 相关错误。
+- 本轮实际动画播放正常，当前没有证据证明该错误由第 3 阶段引起，因此不作为第 3 阶段阻塞项。
+- 该现象记录为待后续定位的 HTML 本地打开兼容性观察项，本轮不修复。
+
+当前结论：**已验证完成**
+
+下一步边界：
+
+- 第 3 阶段已经结束。
+- 下一计划阶段是第 4 阶段“PPT 式放映控制器”，但尚未开始，必须等待用户明确要求。
+- 第 4 阶段必须直接复用本阶段的 Sequence-local time、`compileAnimationSequence` 和公共时长规则，禁止重新建立另一套 Click Step 时间模型。
+
+## 已完成前置：单 Clip 预览 V1
 
 状态：**已验证完成（2026-07-24）**
 
@@ -456,13 +577,15 @@ src/utils/animationCompiler.ts
 - 自动化测试：`package.json` 未定义 `test` 脚本。
 - `git diff --check`：通过，仅有 LF / CRLF 转换提示。
 - 用户人工测试：通过。
-- 未执行 git add、commit、push、pull、merge、rebase、reset、clean、restore 或 PR 操作。
-- `PROJECT_STATUS.md` 和 `DEVELOPMENT_RULES.md` 仍为未跟踪维护文件。
+- 用户已手动完成 commit 和 push。
+- 对应提交：`c7756b58c7aff13fc17dd832d807058a2555c775`。
+- 第 3 阶段开始前 `main` 与 `origin/main` 一致，且当时仅 `PROJECT_STATUS.md` 有状态同步修改；当前工作区状态见第一节第 5 项。
+- `PROJECT_STATUS.md` 和 `DEVELOPMENT_RULES.md` 已纳入版本控制。
 
-下一项计划任务：
+阶段衔接：
 
-- 第 3 阶段“Click Step 数据与命令层”。
-- 当前仅完成路线图整理，尚未开始第 3 阶段代码开发。
+- 第 3 阶段“Click Step 数据与命令层”已经用户验收通过。
+- 当前不自动进入第 4 阶段。
 
 ---
 
@@ -624,6 +747,8 @@ src/utils/animationCompiler.ts
 
 ### 第 3 阶段：Click Step 数据与命令层
 
+状态：**已验证完成（2026-07-26）**
+
 目标：
 
 - 使用现有 `AnimationSequence` 作为动画步骤的主要组织结构。
@@ -633,6 +758,8 @@ src/utils/animationCompiler.ts
 - 编辑步骤触发方式必须进入 Undo 和 Redo。
 - 旧项目继续使用默认 `slide-enter` 行为。
 - 不破坏现有 Animation Schema V2 数据。
+- 每个 Sequence 建立独立局部 0ms，Clip 的 `startMs` 只相对所属 Sequence。
+- 公共计算和编译规则必须让第 4、5、7 阶段复用，不得各自重新实现时长算法。
 
 需要检查的文件：
 
@@ -650,6 +777,8 @@ src/App.tsx
 - 必须先确定运行时需要的数据形态，再开发界面。
 
 ### 第 4 阶段：PPT 式放映控制器
+
+状态：**计划开发，尚未开始**
 
 目标行为：
 
@@ -669,8 +798,10 @@ src/App.tsx
 
 依赖：
 
-- Click Step 数据与命令层完成。
+- Click Step 数据与命令层已验证完成。
 - 单 Clip 播放能力稳定。
+- 必须直接使用第 3 阶段已经建立的 Sequence-local time、`compileAnimationSequence` 和 Sequence 级公共计算规则，禁止建立第二套 Click Step 时间模型。
+- 必须等待用户明确要求后才能开始。
 
 ### 第 5 阶段：HTML 导出 Click Step 同步
 
@@ -716,17 +847,62 @@ src/types/presentation.ts
 
 ### 第 7 阶段：Timeline V2-C
 
-计划内容：
+正式产品设计：
 
-- 在 Timeline 上显示动画步骤分组。
-- 拖动 Clip 调整开始时间。
-- 拖动 Clip 边缘调整持续时间。
-- 直接拖动单个关键帧。
-- 框选多个关键帧并批量移动。
-- 展开和折叠多条属性轨道。
-- 提供区域循环和 Marker 编辑。
-- 为音频等可用媒体显示波形。
-- 提供统一的多层吸附、边界和冲突提示。
+- 采用偏 After Effects 风格的“纵向 `AnimationSequence` 分组 + 多层可展开轨道”。
+- 不采用“自动播放 / Step 1 / Step 2 / Step 3 标签页切换”作为主要 Timeline 架构。
+- 目标层级是：
+
+```text
+AnimationSequence
+→ Object / Clip
+→ AnimationTrack
+→ Keyframe
+```
+
+顶层示意：
+
+```text
+▼ 页面进入 · 自动播放
+    标题
+        Opacity
+        Position
+    背景
+        Opacity
+
+▼ Click Step 1
+    图片
+        Position
+        Scale
+    箭头
+        Opacity
+
+▼ Click Step 2
+    说明文字
+        Position
+        Opacity
+
+▶ Click Step 3
+```
+
+正式原则：
+
+1. `slide-enter` 和每个 Click Step 都是一级 Sequence 分组。
+2. Sequence 按实际演示步骤顺序纵向排列。
+3. 每个 Sequence 都拥有自己的局部 0ms。
+4. `Clip.startMs` 相对于所属 Sequence。
+5. 每个 Sequence 可以展开和折叠。
+6. Sequence 内按 Object / Clip 展示。
+7. Object / Clip 后续可以继续展开具体 `AnimationTrack`。
+8. Keyframe 显示在对应属性轨道。
+9. 折叠时仍保留 Clip 摘要时间条和聚合关键帧信息。
+10. Timeline 应能从简洁折叠状态逐级展开到专业轨道编辑状态。
+11. Clip 开始时间拖动、Clip 持续时间边缘拖动、单关键帧拖动、多关键帧框选和移动、多属性轨道、Marker、区域循环、音频波形、吸附和冲突提示，都必须建立在这一纵向层级结构中。
+12. 不允许第 7 阶段重新退回“整张幻灯片一个页面绝对时间轴”的 Click Step 时间模型。
+
+其他实现要求：
+
+- 开始 Timeline V2-C 前先确定现有 Scene-level Marker 与 Sequence-local Timeline 的页面级 / Sequence-local / 双层归属和显示规则。
 - 拖动期间实时预览。
 - 一次拖动只生成一个 Undo 记录。
 - 禁止产生负时间、无效持续时间或非法关键帧顺序。
@@ -1162,6 +1338,19 @@ src/types/presentation.ts
 - 不是产品功能 Bug。
 - 必须在新本地环境中安全处理。
 
+### 11. 独立 HTML 通过 `file://` 打开时的 Console 兼容性观察
+
+现象：
+
+- 第 3 阶段人工验收期间，独立 HTML 通过 `file://` 直接打开时，Console 曾出现一次浏览器本地 file URL / unique security origin 相关错误。
+- 同一次验收中的实际动画播放正常。
+
+分类：
+
+- 当前没有证据证明该错误由第 3 阶段引起。
+- 不作为第 3 阶段阻塞项。
+- 作为 HTML 本地打开兼容性观察项留待后续定位，本轮不修复。
+
 ---
 
 ## 十、最近测试状态
@@ -1216,6 +1405,22 @@ GitHub 状态：已 push
 - Diff：已检查变更范围和关键播放、清理路径；`git diff --check` 通过，仅输出行尾转换提示。
 - 人工功能测试：首轮发现停止状态显示不同步；修复后用户复测正常，单 Clip 预览 V1 已验证完成。
 
+### 第 3 阶段 Click Step 数据与命令层代码检查
+
+- Build：`npm.cmd run build` 通过。
+- Lint：`npm.cmd run lint` 通过。
+- 自动化测试：项目未定义 `test` 脚本。
+- 命令级断言：原 15 项通过，覆盖多 Clip 步骤、顺序、触发切换、兼容迁移和删除清理。
+- Sequence-local 专项断言：16 项通过；新增 Clip 的目标 Sequence 隔离路径及 Sequence playback direction 2 项断言另行通过。
+- 专项检查确认指定 Sequence 编译不泄漏其他步骤、复制 / 新增 Clip 不读取其他 Sequence 的末尾时间、Clip 跨 Sequence 移动保留局部 `startMs`、旧 `slide-enter` 时间数值无需迁移。
+- Diff：`git diff --check` 通过，仅输出工作区 LF / CRLF 转换提示。
+- 人工功能测试：用户已完成并确认全部测试正常；详细结果见第五节“用户人工验收（2026-07-26）”。
+- Sequence-local QA：三个 Sequence 的局部 `startMs`、effective duration、编译 delay、复制开始时间、保存读取和 `localStorage` 备份恢复全部通过。
+- 现有 `slide-enter` 整页播放、单 Clip 预览、关键帧、Undo / Redo、自动保存、刷新恢复和独立 HTML 播放均回归正常。
+- 编辑器测试期间 Console 没有出现新的产品运行红色错误。
+- `file://` 直接打开独立 HTML 时曾出现一次浏览器安全来源相关错误，但播放正常且无证据表明由第 3 阶段引起，已列为非阻塞兼容性观察项。
+- 状态：**已验证完成（2026-07-26）**。
+
 ### 阶段转换记录
 
 ```text
@@ -1226,8 +1431,14 @@ GitHub 状态：已 push
 2026-07-24：用户测试发现高级工作区与 Timeline 的停止状态显示不同步
 2026-07-24：状态显示根因已修复，Lint、Build 和 Diff 检查通过
 2026-07-24：用户反馈修复后测试正常，第 2 阶段已验证完成
-当前状态：第 2 阶段“单 Clip 预览 V1”已验证完成，尚未 commit 或 push
-下一计划任务：第 3 阶段“Click Step 数据与命令层”，尚未开始开发
+2026-07-25：确认本地 HEAD 与 origin/main 均为 c7756b58c7aff13fc17dd832d807058a2555c775
+2026-07-25：第 3 阶段“Click Step 数据与命令层”首轮代码实现和命令级检查完成
+2026-07-25：用户只读复核确认首轮实现仅部分满足 Sequence-local time 模型
+2026-07-25：补齐 Sequence-local time 正式语义、公共时长规则、指定 Sequence 编译和命令层隔离计算
+2026-07-26：用户完成人工回归和 Sequence-local 专项 QA，确认全部测试正常
+2026-07-26：第 3 阶段“Click Step 数据与命令层”正式标记为已验证完成
+当前状态：第 3 阶段已验证完成
+下一计划阶段：第 4 阶段“PPT 式放映控制器”，尚未开始，等待用户明确要求
 ```
 
 ---
@@ -1236,10 +1447,13 @@ GitHub 状态：已 push
 
 当前入口：
 
-- 第 2 阶段“单 Clip 预览 V1”已经由用户验证通过。
-- Build、Lint 和 Diff 检查通过；项目没有自动化 `test` 脚本。
-- 当前变更尚未执行 git add、commit 或 push。
-- 下一计划任务是第 3 阶段“Click Step 数据与命令层”，但尚未开始，必须等待用户明确要求。
+- 第 2 阶段“单 Clip 预览 V1”已经由用户验证通过，并通过提交 `c7756b5` push。
+- 第 3 阶段“Click Step 数据与命令层”已经用户验收并标记为已验证完成。
+- Build、Lint、Diff、原 15 项命令级断言及本轮 Sequence-local 专项检查通过；项目没有自动化 `test` 脚本。
+- 当前改动尚未 commit 或 push。
+- 下一计划阶段是第 4 阶段“PPT 式放映控制器”，但尚未开始，必须等待用户明确要求。
+- 第 4 阶段开始后必须复用 Sequence-local time、`compileAnimationSequence` 和 Sequence 级公共计算规则，禁止另建 Click Step 时间模型。
+- 不得提前开发第 5 阶段导出、第 6 阶段界面或其他后续功能。
 - 原暂缓项目已经分配到第 7、9、10、11、12 阶段；不得提前并行开发。
 
 ### 下次第一步：安全检查
@@ -1255,19 +1469,25 @@ git diff --cached
 
 不得直接执行 pull、reset、clean、rebase、merge、restore 或其他 Git 写操作。
 
-### 第 3 阶段开始前的边界
+### 第 3 阶段完成后的边界
 
-1. 只开发 Click Step 数据与命令层，不同时开发放映控制器或编辑界面。
-2. 优先复用现有 `AnimationSequence`、Schema V2 和动画命令层。
-3. 旧项目继续保持默认 `slide-enter` 行为。
-4. 触发方式修改必须进入保存恢复、Undo 和 Redo。
-5. 先确定数据形态、迁移与无效引用清理规则，再修改 UI。
-6. 完成独立可测试阶段后停止，不自动进入第 4 阶段。
+1. 当前只完成 Click Step 数据与命令层，没有开发放映控制器或编辑界面。
+2. 已复用现有 `AnimationSequence`、Schema V2、`sequenceOrder` 和动画命令层。
+3. `AnimationClip.startMs` 的权威语义是相对所属 Sequence 局部 0ms；运行时触发时间不进入持久化 Clip 数据。
+4. Sequence 级筛选、局部开始、错峰、effective duration、repeat / playbackRate 和指定 Sequence 编译已集中到公共工具，供后续播放器、导出和 Timeline 复用。
+5. 旧项目继续保持默认 `slide-enter` 行为，原 `startMs` 数值无需迁移。
+6. 新命令保持不可变，后续 UI 必须通过现有项目事务接入 Undo 和 Redo。
+7. Clip 和对象删除路径已经建立无效引用清理规则。
+8. Marker 保持 Scene-level，归属方案留到 Timeline V2-C 前决定。
+9. 第 3 阶段已经用户验证完成；当前停止，不自动进入第 4 阶段。
+10. 第 4 阶段必须复用上述 Sequence-local time 和公共规则，不得重新设计另一套 Click Step 时间模型。
 
 ### Git 状态说明
 
-- 建议的 commit 文案由本轮对话提供，但当前没有 commit 授权，也没有执行 commit。
-- 只有用户明确允许后，才能暂存并提交当前源代码与维护文件。
-- commit 不等于 push；push 仍需单独授权。
+- 当前基线提交：`c7756b58c7aff13fc17dd832d807058a2555c775`。
+- 当前 `main` 与 `origin/main` 一致，ahead 0、behind 0。
+- 第 3 阶段工作区修改尚未暂存、commit 或 push。
+- 未提交文件：`PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/PropertyPanel.tsx`、`src/types/presentation.ts`、`src/utils/animationCommands.ts`、`src/utils/animationCompiler.ts`、`src/utils/animationSequence.ts`。
+- 后续 commit 和 push 仍需用户明确授权。
 
 未经用户允许，不得 commit 或 push。

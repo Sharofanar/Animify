@@ -198,11 +198,12 @@ function getPageAnimationItems(
     });
 
   /**
-   * Until relational scheduling is introduced, the animation pane follows the
-   * actual absolute playback time shown by the lower timeline.
+   * Until Sequence grouping UI is introduced, the animation pane temporarily
+   * flattens each Sequence-local start offset into one list. This display order
+   * must not be interpreted as a persisted page-global timestamp.
    *
    * JavaScript's stable sort preserves sequence order when Clips share the same
-   * start time.
+   * local start time.
    */
   return items.sort((left, right) => left.clip.startMs - right.clip.startMs);
 }

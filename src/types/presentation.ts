@@ -231,6 +231,13 @@ export type AnimationClip = {
   name: string;
   category: AnimationCategory;
   targets: AnimationTarget[];
+
+  /**
+   * Start offset from the owning AnimationSequence's local 0ms.
+   *
+   * Trigger wall-clock time is runtime state and must never be persisted here.
+   * A Clip keeps this local offset when it moves to another Sequence.
+   */
   startMs: number;
   durationMs: number;
   enabled: boolean;
@@ -258,6 +265,11 @@ export type AnimationClip = {
 export type AnimationSequence = {
   id: string;
   name: string;
+
+  /**
+   * A slide-enter Sequence runs automatically when its slide opens. A click
+   * Sequence is one persistent Click Step and may group one or more Clips.
+   */
   trigger: AnimationTrigger;
   clipIds: string[];
   durationMode: "auto" | "fixed";
@@ -296,6 +308,9 @@ export type AnimationScene = {
    */
   revision: number;
 
+  /**
+   * Persistent playback order for Sequences, including Click Steps.
+   */
   sequenceOrder: string[];
   sequences: Record<string, AnimationSequence>;
   clips: Record<string, AnimationClip>;

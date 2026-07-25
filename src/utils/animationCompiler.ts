@@ -6,6 +6,13 @@ import type {
   AnimationTrack,
   AnimationValue,
 } from "../types/presentation";
+import {
+  getAnimationClipDirection,
+  getAnimationClipIterations,
+  getAnimationClipLocalStartMs,
+  getAnimationClipPlaybackRate,
+  getAnimationClipStaggerDelayMs,
+} from "./animationSequence";
 
 /**
  * One browser-ready animation frame compiled from multiple V2 property tracks.
@@ -81,6 +88,21 @@ export function compileSlideAnimations(
 }
 
 /**
+ * Compile one Sequence against its own local 0ms. Choosing when that Sequence
+ * starts is runtime-controller state and intentionally remains outside the
+ * compiler.
+ */
+export function compileAnimationSequence(
+  scene: AnimationScene | undefined,
+  sequenceId: string,
+): CompiledSlideAnimations {
+  return compileSceneAnimations(scene, {
+    sequenceId,
+    includeNonSlideEnter: true,
+  });
+}
+
+/**
  * Compile one selected Clip for isolated editor preview.
  *
  * Explicit preview ignores the sequence trigger because the user is requesting
@@ -100,6 +122,7 @@ export function compileAnimationClipPreview(
 
 type CompileAnimationOptions = {
   clipId?: string;
+  sequenceId?: string;
   includeNonSlideEnter?: boolean;
   stopAfterFirstSequenceMatch?: boolean;
 };
@@ -127,6 +150,13 @@ function compileSceneAnimations(
         sequenceId,
         message: `找不到动画序列：${sequenceId}`,
       });
+      continue;
+    }
+
+    if (
+      options.sequenceId !== undefined &&
+      sequence.id !== options.sequenceId
+    ) {
       continue;
     }
 
@@ -191,13 +221,11 @@ function compileSceneAnimations(
           return;
         }
 
-        const staggerDelay = getStaggerDelay(
+        const staggerDelay = getAnimationClipStaggerDelayMs(
           clip,
           targetIndex,
           clip.targets.length,
         );
-
-        const sequenceRepeat = Math.max(1, sequence.playback.repeat || 1);
 
         const compiledAnimation: CompiledElementAnimation = {
           id: `${sequenceId}-${clipId}-${target.elementId}-${targetIndex}`,
@@ -206,26 +234,17 @@ function compileSceneAnimations(
           elementId: target.elementId,
           keyframes,
           timing: {
-            delay: Math.max(0, clip.startMs + staggerDelay),
+            delay: getAnimationClipLocalStartMs(clip) + staggerDelay,
             duration: Math.max(1, clip.durationMs),
             fill: clip.fill,
-            iterations: Math.max(1, clip.iterations * sequenceRepeat),
-            direction:
-              clip.direction === "normal"
-                ? sequence.playback.direction
-                : clip.direction,
+            iterations: getAnimationClipIterations(clip, sequence),
+            direction: getAnimationClipDirection(clip, sequence),
           },
           /**
            * Sequence speed controls the whole sequence, while Clip speed controls this
            * individual animation. Multiplying them keeps both layers composable.
            */
-          playbackRate:
-            (sequence.playback.playbackRate > 0
-              ? sequence.playback.playbackRate
-              : 1) *
-            (typeof clip.playbackRate === "number" && clip.playbackRate > 0
-              ? clip.playbackRate
-              : 1),
+          playbackRate: getAnimationClipPlaybackRate(clip, sequence),
         };
 
         const elementAnimations = compiled.byElementId[target.elementId] ?? [];
@@ -259,7 +278,9 @@ function compileSceneAnimations(
 }
 
 /**
- * Read the absolute editor Timeline window needed to render one Clip once.
+ * Read the owning Sequence-local window needed to render one Clip once. The
+ * current editor may place this range on its temporary shared Timeline ruler,
+ * but no page-global trigger timestamp is persisted in the Clip.
  */
 export function getAnimationClipPreviewWindow(
   scene: AnimationScene | undefined,
@@ -632,86 +653,4 @@ function formatNumber(value: number) {
 
 function clampOffset(value: number) {
   return Math.min(1, Math.max(0, value));
-}
-
-/**
- * Convert the configured target order into a deterministic stagger delay.
- */
-function getStaggerDelay(
-  clip: AnimationClip,
-  targetIndex: number,
-  targetCount: number,
-) {
-  const stagger = clip.stagger;
-
-  if (!stagger || targetCount <= 1) {
-    return 0;
-  }
-
-  const orderedIndices = createOrderedTargetIndices(
-    targetCount,
-    stagger.order,
-    stagger.seed,
-  );
-
-  const orderedPosition = orderedIndices.indexOf(targetIndex);
-
-  return Math.max(0, orderedPosition) * Math.max(0, stagger.eachMs);
-}
-
-function createOrderedTargetIndices(
-  targetCount: number,
-  order: NonNullable<AnimationClip["stagger"]>["order"],
-  seed = 1,
-) {
-  const indices = Array.from({ length: targetCount }, (_, index) => index);
-
-  switch (order) {
-    case "reverse":
-      return indices.reverse();
-
-    case "center": {
-      const center = (targetCount - 1) / 2;
-
-      return indices.sort(
-        (left, right) =>
-          Math.abs(left - center) - Math.abs(right - center) || left - right,
-      );
-    }
-
-    case "edges": {
-      const center = (targetCount - 1) / 2;
-
-      return indices.sort(
-        (left, right) =>
-          Math.abs(right - center) - Math.abs(left - center) || left - right,
-      );
-    }
-
-    case "random":
-      return shuffleIndices(indices, seed);
-
-    case "forward":
-    case "canvas-position":
-    case "layer-order":
-      return indices;
-  }
-}
-
-function shuffleIndices(indices: number[], seed: number) {
-  const shuffled = [...indices];
-  let state = Math.abs(Math.floor(seed)) || 1;
-
-  for (let index = shuffled.length - 1; index > 0; index -= 1) {
-    state = (state * 16807) % 2147483647;
-
-    const targetIndex = state % (index + 1);
-
-    [shuffled[index], shuffled[targetIndex]] = [
-      shuffled[targetIndex],
-      shuffled[index],
-    ];
-  }
-
-  return shuffled;
 }

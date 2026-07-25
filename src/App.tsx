@@ -42,6 +42,7 @@ import {
   cloneElementAnimationsToInsertedElements,
   deleteAnimationClipFromSlide,
   deleteAnimationKeyframeFromSlide,
+  deleteSlideElementsWithAnimations,
   duplicateAnimationClipInSlide,
   isAnimationClipLiveForElements,
   updateAnimationClipEasingInSlide,
@@ -1699,12 +1700,10 @@ function App() {
               return slide;
             }
 
-            return {
-              ...slide,
-              elements: slide.elements.filter(
-                (element) => !selectedElementIds.includes(element.id),
-              ),
-            };
+            return deleteSlideElementsWithAnimations(
+              slide,
+              selectedElementIds,
+            );
           }),
         }));
 
@@ -4346,12 +4345,7 @@ function App() {
           return slide;
         }
 
-        return {
-          ...slide,
-          elements: slide.elements.filter(
-            (element) => element.id !== elementId,
-          ),
-        };
+        return deleteSlideElementsWithAnimations(slide, [elementId]);
       }),
     }));
 

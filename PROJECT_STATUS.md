@@ -919,6 +919,14 @@ src/App.tsx
 
 状态：**计划开发，尚未开始**
 
+本阶段架构约束：
+
+- 第 5 阶段继续按原计划开发，不因 `App.tsx` 体量暂停或改变 HTML Click Step 同步范围。
+- 第 5 阶段新增逻辑不得继续大量堆入 `App.tsx`；具有明确独立职责的逻辑优先进入 util、Hook、controller、service / runtime helper 或独立组件。
+- 本阶段禁止为了减少 `App.tsx` 行数进行无关重构，也禁止在实现 HTML Click Step 同步时顺手大拆 `App.tsx`。
+- 不按文件长度机械拆函数；只有存在真实职责边界时才提取模块，避免产生大量单层转发文件。
+- 已有 `useTimelinePlaybackController`、`usePresentationPlaybackController`、`animationSequence` 和 `presentationPlayback` 等独立模块继续作为正确职责方向，不得重新塞回 `App.tsx`。
+
 目标：
 
 - 导出 HTML 使用与编辑器放映一致的步骤顺序。
@@ -942,6 +950,27 @@ src/types/presentation.ts
 - 编辑器放映中的 Click Step 行为先稳定。
 - 不允许编辑器与导出端分别设计两套不一致的规则。
 
+### 第 5.5 阶段：`App.tsx` 渐进式架构拆分维护
+
+状态：**计划开发，尚未开始**
+
+进入条件：
+
+- 第 5 阶段已经完成、通过用户验收，并完成独立 commit / push。
+- 本维护阶段必须在第 6 阶段 Click Step 编辑 UI 开始前完成至少一轮。
+
+目标：
+
+- 以保持产品行为不变为前提，渐进提取高内聚、低风险的真实职责。
+- 不追求一次性把 `App.tsx` 拆到很小，不为文件变短进行机械拆分。
+- 优先评估项目持久化 / 自动保存、slide operations、编辑器快捷键、selection / editor state、animation editor coordination、presentation / timeline controller glue、export coordination，以及独立 workspace / toolbar / panel 组装逻辑。
+- 每次提取都保持清晰状态所有权，避免只有一层转发的无意义模块，并使用独立回归验证行为未改变。
+
+阶段边界：
+
+- 不与第 5 阶段 HTML Click Step 同步混合开发。
+- 不提前实现第 6 阶段 Click Step 编辑 UI 或第 7 阶段 Timeline V2-C。
+
 ### 第 6 阶段：Click Step 编辑界面
 
 目标：
@@ -958,6 +987,7 @@ src/types/presentation.ts
 依赖：
 
 - 数据层、运行时和导出规则已经稳定。
+- 第 5.5 阶段至少完成一轮 `App.tsx` 渐进式职责拆分，避免 Click Step UI 状态继续集中膨胀。
 
 ### 第 7 阶段：Timeline V2-C
 
@@ -1045,6 +1075,7 @@ Step 3 及以后：保持未执行状态
 依赖：
 
 - Click Step 的步骤含义已经确定。
+- 第 5.5 阶段至少完成一轮 `App.tsx` 渐进式职责拆分。
 - TimelinePlaybackController 保持稳定。
 - 关键帧排序、边界、插值和最小间隔规则先统一到公共工具层。
 - 波形显示依赖第 11 阶段的媒体元数据与波形数据能力；其他 Timeline V2-C 能力不必等待媒体阶段。
@@ -1176,20 +1207,21 @@ Step 3 及以后：保持未执行状态
 
 现状：
 
-- `App.tsx` 已承担大量项目状态、历史、资源、动画和放映逻辑。
+- `App.tsx` 当前已经超过 6000 行，并承担大量项目状态、历史、资源、动画、放映和界面组装逻辑，已属于高优先级技术债。
+- 第 5 阶段期间只限制继续膨胀，不进行大规模重构，也不改变当前功能范围。
 
 优化目标：
 
-- 按真实职责拆分 Hook 或控制器。
+- 按真实职责拆分 util、Hook、controller、service / runtime helper 或独立组件。
 - 保持现有行为不变。
-- 每次只拆分当前功能直接相关的部分。
-- 不进行一次性大规模重构。
+- 优先提取项目持久化 / 自动保存、slide operations、编辑器快捷键、selection / editor state、animation editor coordination、presentation / timeline controller glue、export coordination，以及独立 workspace / toolbar / panel 组装逻辑。
+- 延续 `useTimelinePlaybackController`、`usePresentationPlaybackController`、`animationSequence` 和 `presentationPlayback` 已建立的独立职责方向。
+- 不进行一次性大规模重构，不机械拆函数，不创建大量只有一层转发的文件。
 
-适合插入阶段：
+正式安排：
 
-- Click Step
-- 放映控制器
-- 资源功能后续维护
+- 第 5 阶段完成、用户验收并 commit / push 后，单独执行第 5.5 阶段“`App.tsx` 渐进式架构拆分维护”。
+- 第 6 阶段 Click Step 编辑 UI 和第 7 阶段 AE 式 Timeline 开始前，必须至少完成一轮渐进式职责拆分，避免后续 UI 状态继续集中膨胀。
 
 ### 3. 关键帧公共规则统一
 
@@ -1635,6 +1667,7 @@ GitHub 状态：已 push
 - 第 4 阶段直接复用 Sequence-local time、`compileAnimationSequence` 和 Sequence 级公共计算规则，没有另建 Click Step 时间模型。
 - 滚轮强制步进仍接入同一个 Presentation Playback Controller；普通推进锁保持不变，Wheel Down / Up 均遵守一次手势只跨一个确定状态边界，并已通过用户人工验收。
 - 下一计划阶段为第 5 阶段“HTML 导出 Click Step 同步”，但尚未开始；不得提前开发第 6 阶段界面或其他后续功能。
+- 第 5 阶段期间限制 `App.tsx` 继续膨胀，但不进行无关大重构；第 5 阶段验收并 commit / push 后，必须先执行独立的第 5.5 阶段渐进式职责拆分，再进入第 6 阶段。
 - 原暂缓项目已经分配到第 7、9、10、11、12 阶段；不得提前并行开发。
 
 ### 下次第一步：安全检查

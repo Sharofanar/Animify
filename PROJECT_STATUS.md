@@ -1,9 +1,9 @@
 # Animify 项目状态
 
-> 最后更新：2026-07-26
+> 最后更新：2026-07-27
 > 仓库：`https://github.com/Sharofanar/Animify`  
 > 主分支：`main`  
-> GitHub 已知最新基线：`975f109 feat: add click step sequence-local timing`
+> GitHub 已知最新基线：`a9166c3 docs: plan App architecture cleanup`
 
 本文档是 Animify 当前开发状态的长期事实来源。
 
@@ -34,12 +34,14 @@
 当前已知 GitHub `origin/main` 最新提交：
 
 ```text
-975f109 feat: add click step sequence-local timing
+a9166c3 docs: plan App architecture cleanup
 ```
 
 该提交之前已知的连续功能提交包括：
 
 ```text
+5391f11 feat: add step-based presentation playback
+975f109 feat: add click step sequence-local timing
 c7756b5 feat: add isolated clip preview
 ba1cecc Add unified timeline playback controller
 7cd0747 Enhance Timeline V2 with sticky ruler and keyframes
@@ -149,21 +151,23 @@ Tailwind CSS、dnd-kit 以及其他依赖的当前实际版本和使用范围，
 
 ### 5. 当前 Git 同步状态
 
-复核日期：2026-07-26
+复核日期：2026-07-27
 
 - 当前分支：`main`
-- 当前 HEAD：`975f109f3b8ce6a8461c07dc4a33216dbc8a7f1e`
-- 本地 `origin/main`：`975f109f3b8ce6a8461c07dc4a33216dbc8a7f1e`
-- 最新提交：`975f109 feat: add click step sequence-local timing`
+- 当前 HEAD：`a9166c3ec7376d009a3d6f50e6cd982ee94e9996`
+- 本地 `origin/main`：`a9166c3ec7376d009a3d6f50e6cd982ee94e9996`
+- 最新提交：`a9166c3 docs: plan App architecture cleanup`
 - 本地与 `origin/main`：ahead 0、behind 0
 - 第 4 阶段开始前工作区和暂存区：干净
-- 当前未提交修改：`PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/SlideCanvas.tsx`、`src/hooks/usePresentationPlaybackController.ts`、`src/utils/presentationPlayback.ts`
+- 本次状态同步开始前工作区和暂存区：干净
+- 当前未提交修改：仅 `PROJECT_STATUS.md` 的本次 Git / 阶段状态事实同步
 - 暂存修改：无
 - 单 Clip 预览 V1：已 commit 并 push
 - 第 3 阶段 Click Step 数据与命令层：已验证完成（2026-07-26）
 - 第 3 阶段 GitHub 状态：已 commit 并 push，对应提交 `975f109`
 - 第 4 阶段 PPT 式放映控制器：已验证完成（2026-07-26）
-- GitHub 状态：第 4 阶段尚未 commit 或 push
+- 第 4 阶段 GitHub 状态：已 commit 并 push，对应提交 `5391f11`
+- `App.tsx` 渐进式架构拆分计划：已通过文档提交 `a9166c3` commit 并 push；第 5.5 阶段尚未开始
 
 ---
 
@@ -305,7 +309,7 @@ Tailwind CSS、dnd-kit 以及其他依赖的当前实际版本和使用范围，
 - 第 4 阶段正式放映控制器已经按步骤显式调用 `compileAnimationSequence` 接入页面级 Click Step。
 - Hover、指定对象 Click、Keyboard、Media Time 和 Manual 仍待第 9 阶段运行时接入。
 
-状态：**页面级 Click Step 运行时代码已实现，待用户验证；其他触发仍待开发**
+状态：**页面级 Click Step 运行时已用户验证完成；其他触发仍待开发**
 
 ### 3. 高级动画工作区
 
@@ -455,7 +459,7 @@ c6e8448 Add Timeline V2 and fix stale animation clip visibility
 - 滚轮向下严格只跨越一个演示状态边界：有活动 Sequence 时只把它按自身局部有效时长采样并标记到完成态，停留在该完成视觉；没有活动 Sequence 时才启动下一个 Click Step，稳定状态下本页步骤全部完成时才进入下一页。
 - Wheel Up / Down 形成对称语义：活动 Sequence 上滚只取消并回到开始前确定态，下滚只完成并停在结束确定态；开始前态、播放中和完成态之间不会在一次手势中连续跨越两层。
 - 滚轮向上会取消正在播放的 Sequence 并恢复到此前确定的已完成 Sequence 状态；活动 `slide-enter` 被取消时保持未完成并恢复页面起始态，活动 Click Step 被取消时保留它之前的完成态；没有活动 Sequence 时继续沿用既有逐步回退和上一页末态规则。
-- 滚轮强制步进首轮复测发现：取消活动 `slide-enter` 后状态机虽未把它标记完成，但空 Sequence sample 会让 Canvas 显示静态设计终态，视觉上错误地像已完成。当前已用显式 `slide-enter` 初始帧采样修正；Wheel、`ArrowLeft` 和 `PageUp` 共用的回退路径同时受益，等待用户复测。
+- 滚轮强制步进首轮复测发现：取消活动 `slide-enter` 后状态机虽未把它标记完成，但空 Sequence sample 会让 Canvas 显示静态设计终态，视觉上错误地像已完成。当前已用显式 `slide-enter` 初始帧采样修正；Wheel、`ArrowLeft` 和 `PageUp` 共用的回退路径同时受益，后续核心人工验收已确认回退语义正常。
 - 后续人工验收发现尚未执行的 future Click Sequence 未进入正式放映 Canvas 采样，目标元素会 fallback 到设计终态并提前显示。当前 runtime sample 已明确区分 `pending`、`completed`、`active`：未被历史 Sequence 建立状态的元素使用最早 pending Sequence 的真实 local 0ms Track / Keyframe；同一元素已有 completed / active 状态时，future pending 不参与渲染并不得覆盖历史确定态。
 - pending 或 active Sequence 的目标元素即使最早 Clip 使用正 `startMs`，也会复用 `applyInitialFrameBeforeDelay` 在实际开始前保持该元素最早动画的真实初始帧；同一 Sequence 的后续 Clip 不会提前覆盖前一 Clip。
 - 滚轮手势先归一化像素 / 行 / 页 delta，再累计到阈值；首次触发后保持手势锁，直到连续 wheel event 静默 `240ms`，一次鼠标滚轮或触控板惯性事件串最多移动一步。
@@ -543,8 +547,9 @@ PROJECT_STATUS.md
 
 下一步边界：
 
-- 先等待用户完成第 4 阶段人工验收。
-- 未经用户明确要求，不进入第 5 阶段，不 commit，不 push。
+- 第 4 阶段已经完成用户人工验收，并通过提交 `5391f11` commit / push。
+- 下一计划阶段为第 5 阶段“HTML 导出 Click Step 同步”，计划开发但尚未开始。
+- 未经用户明确要求，不开始第 5 阶段产品功能开发。
 
 # 已完成前置：第 3 阶段 Click Step 数据与命令层
 
@@ -926,6 +931,10 @@ src/App.tsx
 - 本阶段禁止为了减少 `App.tsx` 行数进行无关重构，也禁止在实现 HTML Click Step 同步时顺手大拆 `App.tsx`。
 - 不按文件长度机械拆函数；只有存在真实职责边界时才提取模块，避免产生大量单层转发文件。
 - 已有 `useTimelinePlaybackController`、`usePresentationPlaybackController`、`animationSequence` 和 `presentationPlayback` 等独立模块继续作为正确职责方向，不得重新塞回 `App.tsx`。
+- `src/utils/exportHtml.ts` 当前约 1199 行，已经同时承担 portable project / asset packaging、HTML / CSS template、player runtime、DOM / media construction，以及 navigation / keyboard / fullscreen 等职责。
+- 第 5 阶段新增 Click Step playback plan / player runtime 时必须立即控制职责边界，不得继续把所有新逻辑堆入 `exportHtml.ts`。
+- 新增职责优先考虑独立的 `exportPlaybackPlan.ts`、`exportPlayerRuntime.ts`，或依据真实依赖确定的等价模块。
+- 本阶段不借机全面重构现有 `exportHtml.ts`；既有资源打包和 template 的全面整理留到后续独立维护。
 
 目标：
 
@@ -950,28 +959,198 @@ src/types/presentation.ts
 - 编辑器放映中的 Click Step 行为先稳定。
 - 不允许编辑器与导出端分别设计两套不一致的规则。
 
-### 第 5.5 阶段：`App.tsx` 渐进式架构拆分维护
+### 第 5.5 阶段：渐进式架构拆分维护
 
 状态：**计划开发，尚未开始**
 
-进入条件：
+#### 1. 阶段位置与总体原则
 
-- 第 5 阶段已经完成、通过用户验收，并完成独立 commit / push。
-- 本维护阶段必须在第 6 阶段 Click Step 编辑 UI 开始前完成至少一轮。
+- 第 5.5 阶段只能在第 5 阶段完成、通过用户人工验收并完成独立 commit / push 后开始。
+- 第 5.5 阶段位于第 6 阶段 Click Step 编辑 UI 之前；第 6 阶段开始前必须至少完成必要的一轮职责拆分。
+- 目标不是为了减少行数机械拆文件，而是按真实职责边界渐进拆分，减少 God Component / God Module，明确状态所有权，并降低第 6、7 阶段继续开发时的耦合风险。
+- 判断优先级依次是：职责混杂、状态所有权不清、修改一个功能牵连无关功能、难以独立测试或复用，最后才是文件体量。
+- 不创建大量只有一层转发的无意义文件，不把已经独立的职责重新塞回 `App.tsx`。
+- 每个 Batch 必须独立完成：开发 → lint → build → `git diff --check` → 对应人工回归 → 独立 commit → 独立 push。
+- 禁止一次完成全部第 5.5 阶段重构；每个 Batch 验收并完成 Git 闭环后，才能进入下一 Batch。
+- 本节记录的是已经确认的架构事实和未来计划拆分内容，不表示第 5.5 阶段已经开始或任何拆分已经实现。
+
+#### 2. 已确认架构事实与治理优先级
+
+##### A. 必须优先治理
+
+1. `src/App.tsx`
+
+   - 审计时约 6279 行，是第 5.5 阶段最高优先级技术债。
+   - 问题不只是文件较长，而是同时承担项目文档与状态所有权、Undo / Redo 与历史事务、项目持久化 / 自动保存、资源生命周期、slide operations、selection / clipboard / shortcuts、动画编辑协调、Timeline / Clip preview / Presentation glue、HTML export coordination、页面和 Panel 组装，以及 `SlideNavigator` / `SortableSlideCard`。
+   - 必须按真实状态和职责所有权渐进提取，禁止一次性大拆或只为缩短文件进行机械搬运。
+
+2. `src/utils/animationCommands.ts`
+
+   - 审计时约 2918 行，已经形成 Sequence / Click Step、Clip、Keyframe、Timing / Easing、Scene cleanup 和 Legacy sync 等真实 Command Domain。
+   - 需要按 Command Domain 渐进拆分，但原 `animationCommands.ts` 必须先保留为兼容 barrel / re-export，避免一次修改所有消费者。
+   - 拆分时必须保护 Clip 唯一 Sequence 归属、Sequence-local time、旧项目兼容、引用清理和 Undo / Redo 命令入口。
+
+##### B. 建议第 5.5 阶段拆分
+
+3. `src/components/editor/PropertyPanel.tsx`
+
+   - Basic、Font、Animation、Layer 已形成天然 UI 边界，属于低风险早期拆分候选。
+   - 根 `PropertyPanel` 继续负责现有 Tab 和目标对象协调，不在 UI 拆分时改变属性状态语义。
+
+4. `src/components/editor/AnimationTrackInspector.tsx`
+
+   - 第 7 阶段前至少完成一轮合理的 UI 职责拆分。
+   - 优先候选为 `AnimationClipCard`、`AnimationTrackCard`、Keyframe editor、Easing editor 和数值输入组件。
+   - 根 Inspector 暂时继续持有现有选择、展开和输入草稿状态；本阶段不借机重新设计动画模型。
+
+##### C. 观察但首轮不要移动核心
+
+5. `src/components/editor/SlideCanvas.tsx`
+
+   - 文件已经超过 2000 行并混合多种职责，但第 4 阶段刚稳定的播放和确定性采样核心不作为第 5.5 阶段首轮移动目标。
+   - 首轮禁止优先移动 Sequence 编译选择、completed / active / pending 过滤、确定性 WAAPI 采样、active playback 实例管理，以及 initial frame / 防闪规则。
+   - 如果本阶段处理 `SlideCanvas`，只优先考虑几何纯函数、selection overlay、transform handles、静态元素 renderer 和资源缺失占位等外围低风险职责。
+   - 播放 / 采样核心继续作为编辑器、正式放映和未来 Timeline V2-C 的稳定基础。
+
+##### D. 明确暂不拆或推迟
+
+6. `src/components/editor/AnimationTimeline.tsx`
+
+   - 结构性拆分推迟到第 7 阶段 Timeline V2-C。
+   - 现有页面级扁平 Timeline 将被 `AnimationSequence → Object / Clip → AnimationTrack → Keyframe` 架构替代，不先重构旧结构再在第 7 阶段返工。
+
+7. `src/utils/animationCompiler.ts`
+
+   - 审计时约 656 行，但当前仍是单一高内聚编译管线，暂时不按文件长度机械拆分。
+
+8. `src/utils/presentationPlayback.ts`
+
+   - 继续保持纯放映状态机，不拆分，也不把运行时状态塞回 `App.tsx`。
+
+9. `src/utils/animationSequence.ts`
+
+   - 继续保持 Sequence-local 公共规则，不拆分，不建立第二套 Sequence 时间计算。
+
+10. `src/types/presentation.ts`
+
+    - 当前 fan-in 很高，但仍是统一持久化 Schema；暂时不为文件大小拆散类型。
+
+#### 3. 正式推荐 Batch
+
+##### Batch 1：App 低风险外围边界
 
 目标：
 
-- 以保持产品行为不变为前提，渐进提取高内聚、低风险的真实职责。
-- 不追求一次性把 `App.tsx` 拆到很小，不为文件变短进行机械拆分。
-- 优先评估项目持久化 / 自动保存、slide operations、编辑器快捷键、selection / editor state、animation editor coordination、presentation / timeline controller glue、export coordination，以及独立 workspace / toolbar / panel 组装逻辑。
-- 每次提取都保持清晰状态所有权，避免只有一层转发的无意义模块，并使用独立回归验证行为未改变。
+- 从 `App.tsx` 提取 `SlideNavigator` 和 `SortableSlideCard`。
+- 提取纯 slide operations，以及标题规范化、复制等纯辅助。
+- 统一重复的 editor contract types，包括 `ActiveAnimationContext`、`AnimationWorkspaceDisplayMode`、`ElementUpdates`、`ElementBatchUpdate` 和 `TimelinePlaybackStatus`。
+- 先减少边界最明确、风险最低的 `App.tsx` 职责。
+
+本 Batch 不得移动：
+
+- project / history 核心状态所有权。
+- Presentation playback。
+- Timeline playback。
+- `SlideCanvas` animation sampling。
+
+回归重点：
+
+- 页面新增、删除、复制、排序和选择。
+- 缩略图。
+- 动画引用和资源引用。
+- Undo / Redo。
+
+##### Batch 2：项目文档、历史与持久化
+
+目标：
+
+- 根据真实代码建立 `useProjectDocument`、`projectPersistence` 或等价职责边界。
+- 集中 `project`、`latestProjectRef`、`commitProjectChange`、Undo、Redo、history grouping、项目加载、自动保存和刷新恢复。
+- 这是高价值但高风险 Batch，必须单独开发和回归，不与其他大拆分混合。
+
+回归重点：
+
+- 所有项目修改。
+- Undo / Redo。
+- 连续拖动历史分组和属性连续输入。
+- 动画编辑历史。
+- 自动保存、刷新恢复和重置项目。
+
+##### Batch 3：Animation Command Domains
+
+目标：
+
+- 按 Sequence / Click Step → Clip → Keyframe → Scene cleanup → Legacy sync 的顺序渐进拆分 `animationCommands.ts`。
+- 保留 `animationCommands.ts` 作为兼容 barrel / re-export，避免消费者一次全部迁移。
+- 同时评估提取 `animationKeyframeRules.ts`，统一命令层和 Inspector 当前重复的 Keyframe 边界规则。
+
+回归重点：
+
+- Click Step 创建、修改和排序。
+- Clip 唯一 Sequence 归属，以及 Clip 新增、复制和删除。
+- Keyframe 编辑。
+- 元素删除后的引用清理。
+- Legacy 项目兼容。
+- Sequence-local time。
+- Undo / Redo 和保存恢复。
+
+##### Batch 4：面板 UI 边界
+
+目标：
+
+- 将 `PropertyPanel` 的 Basic、Font、Animation、Layer 按现有职责拆分。
+- 将 `AnimationTrackInspector` 的 Clip Card、Track Card、Keyframe、Easing 和 Input UI 按现有职责拆分。
+- 只拆 UI 职责，不同时改变动画模型、命令语义或状态所有权。
+
+回归重点：
+
+- 单选、多选和 mixed value。
+- 字体、动画列表和图层操作。
+- Clip 选择、Keyframe 和 Easing。
+- 输入 blur / Enter 提交。
+- Undo / Redo 历史分组。
+
+##### Batch 5：App 动画编辑协调
+
+目标：
+
+- 最后再处理 animation workspace selection、Clip preview coordination、Timeline coordination 和 animation editor glue。
+- 继续复用 `useTimelinePlaybackController` 和 `usePresentationPlaybackController`，不得重新建立播放状态或把已有独立模块塞回 `App.tsx`。
+- 不移动 `SlideCanvas` 的正式放映确定性采样核心。
+
+回归重点：
+
+- Clip 选择同步和 Timeline 选择。
+- 单 Clip 预览和整页预览。
+- 播放、暂停和停止。
+- 切页和正式放映。
+- 动画模式、Timeline 和 Presentation 模式互斥。
+
+#### 4. 后续阶段依赖
+
+第 6 阶段开始条件：
+
+- 第 5 阶段完成、通过人工验收并完成独立 commit / push。
+- 第 5.5 阶段至少完成必要的一轮职责拆分。
+- `App.tsx` 不再继续以当前模式吸收全部 Click Step UI 状态。
+- `animationCommands` 至少为 Sequence / Click Step UI 提供清晰 Command Domain。
+
+第 7 阶段开始前：
+
+- `AnimationTrackInspector` 至少完成一轮合理 UI 拆分。
+- `App.tsx` 的动画编辑协调边界进一步明确。
+- `AnimationTimeline` 的结构性重构留到第 7 阶段本身完成。
+- `SlideCanvas` 的 completed / active / pending 模型必须作为稳定基础复用，不得重写第二套编辑采样语义。
 
 阶段边界：
 
 - 不与第 5 阶段 HTML Click Step 同步混合开发。
 - 不提前实现第 6 阶段 Click Step 编辑 UI 或第 7 阶段 Timeline V2-C。
+- 本规划只固化未来拆分顺序；第 5.5 阶段仍为计划开发，尚未开始。
 
 ### 第 6 阶段：Click Step 编辑界面
+
+状态：**计划开发，尚未开始**
 
 目标：
 
@@ -1649,7 +1828,9 @@ GitHub 状态：已 push
 2026-07-26：用户确认普通推进锁和滚轮向下强制完成能力正常；滚轮向上取消活动 slide-enter 时发现页面起始视觉采样错误，修正代码和 18 项回退断言完成
 2026-07-26：用户要求滚轮向下一次只跨一个状态边界；状态机已改为活动 Sequence 只完成不连播，22 项专项断言完成，等待复测
 2026-07-26：用户完成第 4 阶段正式放映核心人工验收，PPT 式放映控制器正式标记为已验证完成
-当前状态：第 4 阶段已验证完成，但尚未 commit 或 push
+2026-07-26：第 4 阶段已通过提交 5391f11 commit 并 push，main 与 origin/main 同步
+2026-07-27：App.tsx 渐进式架构拆分计划已通过文档提交 a9166c3 commit 并 push
+当前状态：第 4 阶段已验证完成并已 push；第 5 阶段和第 5.5 阶段均尚未开始
 下一计划阶段：第 5 阶段“HTML 导出 Click Step 同步”，计划开发但尚未开始
 ```
 
@@ -1663,7 +1844,8 @@ GitHub 状态：已 push
 - 第 3 阶段“Click Step 数据与命令层”已经用户验收，并通过提交 `975f109` push。
 - 第 4 阶段“PPT 式放映控制器”核心功能已经用户人工验收并标记为已验证完成。
 - Lint、Build、Diff、状态机专项断言和 pending / completed / active 采样优先级断言通过；项目没有自动化 `test` 脚本。
-- 当前第 4 阶段改动尚未 commit 或 push。
+- 第 4 阶段代码已通过提交 `5391f11` commit 并 push。
+- `App.tsx` 渐进式架构拆分计划已通过文档提交 `a9166c3` commit 并 push；第 5.5 阶段已规划但尚未开始。
 - 第 4 阶段直接复用 Sequence-local time、`compileAnimationSequence` 和 Sequence 级公共计算规则，没有另建 Click Step 时间模型。
 - 滚轮强制步进仍接入同一个 Presentation Playback Controller；普通推进锁保持不变，Wheel Down / Up 均遵守一次手势只跨一个确定状态边界，并已通过用户人工验收。
 - 下一计划阶段为第 5 阶段“HTML 导出 Click Step 同步”，但尚未开始；不得提前开发第 6 阶段界面或其他后续功能。
@@ -1698,11 +1880,14 @@ git diff --cached
 
 ### Git 状态说明
 
-- 当前基线提交：`975f109f3b8ce6a8461c07dc4a33216dbc8a7f1e`。
+- 当前基线提交：`a9166c3ec7376d009a3d6f50e6cd982ee94e9996`。
 - 当前 `main` 与 `origin/main` 一致，ahead 0、behind 0。
 - 第 3 阶段已经 commit 并 push。
-- 第 4 阶段工作区修改尚未暂存、commit 或 push。
-- 未提交文件：`PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/SlideCanvas.tsx`、`src/hooks/usePresentationPlaybackController.ts`、`src/utils/presentationPlayback.ts`。
+- 第 4 阶段已经通过提交 `5391f11` commit 并 push。
+- `App.tsx` 渐进式架构拆分计划已经通过文档提交 `a9166c3` commit 并 push。
+- 本次状态同步开始前工作区和暂存区干净。
+- 当前未提交文件：仅 `PROJECT_STATUS.md`。
+- 暂存修改：无。
 - 后续 commit 和 push 仍需用户明确授权。
 
 未经用户允许，不得 commit 或 push。

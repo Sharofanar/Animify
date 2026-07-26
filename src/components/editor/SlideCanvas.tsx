@@ -16,9 +16,15 @@ import type {
 } from "../../types/presentation";
 import {
   compileAnimationClipPreview,
+  compileAnimationSequence,
   compileSlideAnimations,
   type CompiledElementAnimation,
+  type CompiledSlideAnimations,
 } from "../../utils/animationCompiler";
+import {
+  getPresentationRenderableSequenceIds,
+  type PresentationSequenceSample,
+} from "../../utils/presentationPlayback";
 
 const SLIDE_WIDTH = 1280;
 const SLIDE_HEIGHT = 720;
@@ -196,6 +202,14 @@ type SlideCanvasProps = {
    */
   animationClipPreviewId?: string;
 
+  /**
+   * Runtime-only local time samples for formal presentation playback.
+   *
+   * The controller supplies completed, active, and pending Sequence-local
+   * samples; an empty array means no Sequence contributes a visual.
+   */
+  animationSequenceSamples?: PresentationSequenceSample[];
+
   chrome?: boolean;
   clipOverflow?: boolean;
   readOnly?: boolean;
@@ -229,6 +243,7 @@ export function SlideCanvas({
   animationPreviewKey = 0,
   animationTimelineTimeMs,
   animationClipPreviewId,
+  animationSequenceSamples,
 
   readOnly = false,
 
@@ -252,15 +267,74 @@ export function SlideCanvas({
    * Selection, movement, and other editor-only rerenders reuse the same compiler
    * result instead of rebuilding every animation.
    */
-  const compiledSlideAnimations = useMemo(
+  const animationSequenceIdsKey =
+    animationSequenceSamples === undefined
+      ? undefined
+      : JSON.stringify(
+          animationSequenceSamples.map((sample) => sample.sequenceId),
+        );
+
+  const compiledSlideAnimations = useMemo(() => {
+    if (animationSequenceIdsKey !== undefined) {
+      const sequenceIds = JSON.parse(animationSequenceIdsKey) as string[];
+      const compiled: CompiledSlideAnimations = {
+        revision: slide.animationScene?.revision ?? 0,
+        byElementId: {},
+        diagnostics: [],
+      };
+
+      /**
+       * Compile every displayed step independently. The runtime supplies a
+       * separate local time for each Sequence instead of flattening them onto a
+       * page-global clock.
+       */
+      for (const sequenceId of sequenceIds) {
+        const compiledSequence = compileAnimationSequence(
+          slide.animationScene,
+          sequenceId,
+        );
+
+        compiled.diagnostics.push(...compiledSequence.diagnostics);
+
+        for (const [elementId, animations] of Object.entries(
+          compiledSequence.byElementId,
+        )) {
+          compiled.byElementId[elementId] = [
+            ...(compiled.byElementId[elementId] ?? []),
+            ...animations,
+          ];
+        }
+      }
+
+      return compiled;
+    }
+
+    return animationClipPreviewId
+      ? compileAnimationClipPreview(
+          slide.animationScene,
+          animationClipPreviewId,
+        )
+      : compileSlideAnimations(slide.animationScene);
+  }, [
+    animationClipPreviewId,
+    animationSequenceIdsKey,
+    slide.animationScene,
+  ]);
+
+  const animationSequenceSamplesById = useMemo(
     () =>
-      animationClipPreviewId
-        ? compileAnimationClipPreview(
-            slide.animationScene,
-            animationClipPreviewId,
-          )
-        : compileSlideAnimations(slide.animationScene),
-    [animationClipPreviewId, slide.animationScene],
+      animationSequenceSamples === undefined
+        ? undefined
+        : Object.fromEntries(
+            animationSequenceSamples.map((sample) => [
+              sample.sequenceId,
+              {
+                ...sample,
+                localTimeMs: Math.max(0, sample.localTimeMs),
+              },
+            ]),
+          ),
+    [animationSequenceSamples],
   );
 
   /**
@@ -687,6 +761,8 @@ export function SlideCanvas({
             scale={scale}
             compiledAnimations={compiledAnimations}
             animationTimelineTimeMs={animationTimelineTimeMs}
+            animationSequenceSamples={animationSequenceSamples}
+            animationSequenceSamplesById={animationSequenceSamplesById}
             legacyAnimationFallback={legacyAnimationFallback}
             selected={
               element.id === selectedElementId ||
@@ -882,6 +958,8 @@ function SlideElementView({
   scale,
   compiledAnimations,
   animationTimelineTimeMs,
+  animationSequenceSamples,
+  animationSequenceSamplesById,
   legacyAnimationFallback,
   selected,
   selectionNumber,
@@ -909,6 +987,8 @@ function SlideElementView({
   scale: number;
   compiledAnimations: CompiledElementAnimation[];
   animationTimelineTimeMs?: number;
+  animationSequenceSamples?: PresentationSequenceSample[];
+  animationSequenceSamplesById?: Record<string, PresentationSequenceSample>;
   legacyAnimationFallback: boolean;
   selected: boolean;
   selectionNumber?: number;
@@ -935,6 +1015,23 @@ function SlideElementView({
   ) => void;
 }) {
   const style = element.style;
+
+  const renderableCompiledAnimations = useMemo(() => {
+    if (animationSequenceSamples === undefined) {
+      return compiledAnimations;
+    }
+
+    const renderableSequenceIds = new Set(
+      getPresentationRenderableSequenceIds(
+        animationSequenceSamples,
+        compiledAnimations.map((animation) => animation.sequenceId),
+      ),
+    );
+
+    return compiledAnimations.filter((animation) =>
+      renderableSequenceIds.has(animation.sequenceId),
+    );
+  }, [animationSequenceSamples, compiledAnimations]);
 
   const legacyAnimation = element.animations[0];
 
@@ -1076,7 +1173,13 @@ function SlideElementView({
 
     const managedAnimations = timelineAnimationsRef.current;
 
-    if (animationTimelineTimeMs === undefined || !animationNode || isEditing) {
+    const sequenceControlled = animationSequenceSamplesById !== undefined;
+
+    if (
+      (!sequenceControlled && animationTimelineTimeMs === undefined) ||
+      !animationNode ||
+      isEditing
+    ) {
       managedAnimations.forEach((animation) => animation.cancel());
 
       managedAnimations.clear();
@@ -1084,24 +1187,58 @@ function SlideElementView({
       return;
     }
 
-    const currentTimeMs = Math.max(0, animationTimelineTimeMs);
-
     const visibleAnimationIds = new Set<string>();
+    const firstAnimationStartMsBySequenceId = new Map<string, number>();
 
-    for (const compiledAnimation of compiledAnimations) {
+    for (const compiledAnimation of renderableCompiledAnimations) {
+      const startTimeMs = Math.max(0, compiledAnimation.timing.delay);
+      const firstStartTimeMs = firstAnimationStartMsBySequenceId.get(
+        compiledAnimation.sequenceId,
+      );
+
+      if (firstStartTimeMs === undefined || startTimeMs < firstStartTimeMs) {
+        firstAnimationStartMsBySequenceId.set(
+          compiledAnimation.sequenceId,
+          startTimeMs,
+        );
+      }
+    }
+
+    for (const compiledAnimation of renderableCompiledAnimations) {
+      const sequenceSample = sequenceControlled
+        ? animationSequenceSamplesById[compiledAnimation.sequenceId]
+        : undefined;
+      const sampledTimeMs = sequenceControlled
+        ? sequenceSample?.localTimeMs
+        : animationTimelineTimeMs;
+
+      if (sampledTimeMs === undefined) {
+        const existingAnimation = managedAnimations.get(compiledAnimation.id);
+
+        existingAnimation?.cancel();
+        managedAnimations.delete(compiledAnimation.id);
+        continue;
+      }
+
+      const currentTimeMs = Math.max(0, sampledTimeMs);
       const startTimeMs = Math.max(0, compiledAnimation.timing.delay);
 
       const playbackRate =
         compiledAnimation.playbackRate > 0 ? compiledAnimation.playbackRate : 1;
 
       const elapsedTimelineMs = currentTimeMs - startTimeMs;
+      const appliesInitialFrameBeforeDelay =
+        sequenceSample?.applyInitialFrameBeforeDelay === true &&
+        startTimeMs ===
+          firstAnimationStartMsBySequenceId.get(compiledAnimation.sequenceId);
 
       /**
-       * Future Clips must not exist yet. This preserves Animify's established
-       * behavior where a later fill:"both" Clip cannot cover an earlier Clip
-       * before its actual start time.
+       * Future Clips normally do not exist yet, so a later fill:"both" Clip
+       * cannot cover an earlier Clip. An explicit pending or active initial
+       * sample is the exception: its earliest animation for this element
+       * establishes the pre-start visual even when startMs is positive.
        */
-      if (elapsedTimelineMs < 0) {
+      if (elapsedTimelineMs < 0 && !appliesInitialFrameBeforeDelay) {
         const existingAnimation = managedAnimations.get(compiledAnimation.id);
 
         existingAnimation?.cancel();
@@ -1114,7 +1251,8 @@ function SlideElementView({
       const totalAnimationTimeMs =
         compiledAnimation.timing.duration * compiledAnimation.timing.iterations;
 
-      const sampledAnimationTimeMs = elapsedTimelineMs * playbackRate;
+      const sampledAnimationTimeMs =
+        Math.max(0, elapsedTimelineMs) * playbackRate;
 
       const reachedEnd = sampledAnimationTimeMs >= totalAnimationTimeMs;
 
@@ -1178,7 +1316,12 @@ function SlideElementView({
 
       managedAnimations.delete(animationId);
     });
-  }, [animationTimelineTimeMs, compiledAnimations, isEditing]);
+  }, [
+    animationSequenceSamplesById,
+    animationTimelineTimeMs,
+    isEditing,
+    renderableCompiledAnimations,
+  ]);
 
   /**
    * A Clip edit may keep the same ID while changing its keyframes or timing.
@@ -1194,7 +1337,7 @@ function SlideElementView({
 
       managedAnimations.clear();
     };
-  }, [compiledAnimations]);
+  }, [renderableCompiledAnimations]);
 
   /**
    * Play compiled Animation Schema V2 Clips through the Web Animations API.
@@ -1203,19 +1346,21 @@ function SlideElementView({
    * fill: "both" would otherwise apply its first frame during the delay period
    * and visually cover an earlier Clip on the same element.
    *
-   * Each Clip is created only when its absolute start time arrives. This allows
-   * several Clips targeting the same element to play in timeline order.
+   * Each Clip is created only when its compiled start delay arrives. In formal
+   * presentation mode that delay is always relative to the owning Sequence.
    */
   useEffect(() => {
     const animationNode = animationNodeRef.current;
 
-    const timelineControlled = animationTimelineTimeMs !== undefined;
+    const playbackControlled =
+      animationTimelineTimeMs !== undefined ||
+      animationSequenceSamplesById !== undefined;
 
     if (
-      timelineControlled ||
+      playbackControlled ||
       !animationNode ||
       isEditing ||
-      compiledAnimations.length === 0
+      renderableCompiledAnimations.length === 0
     ) {
       return;
     }
@@ -1224,7 +1369,7 @@ function SlideElementView({
     const startTimers: number[] = [];
     let disposed = false;
 
-    compiledAnimations.forEach((compiledAnimation) => {
+    renderableCompiledAnimations.forEach((compiledAnimation) => {
       const startDelay = Math.max(0, compiledAnimation.timing.delay);
 
       const timerId = window.setTimeout(() => {
@@ -1239,7 +1384,7 @@ function SlideElementView({
         }
 
         /**
-         * The timer already handles the Clip's absolute start time, so the
+         * The timer already handles the Clip's compiled local start delay, so the
          * Web Animation itself must start without another delay.
          */
         const runningAnimation = animationNode.animate(keyframes, {
@@ -1274,14 +1419,19 @@ function SlideElementView({
         runningAnimation.cancel();
       });
     };
-  }, [animationTimelineTimeMs, compiledAnimations, isEditing]);
+  }, [
+    animationSequenceSamplesById,
+    animationTimelineTimeMs,
+    isEditing,
+    renderableCompiledAnimations,
+  ]);
 
   /**
    * Only a Clip using backwards fill should affect the element before its start
    * time. Select the earliest matching Clip for the initial no-flash frame.
    */
   const initialCompiledAnimation = !isEditing
-    ? compiledAnimations.find(
+    ? renderableCompiledAnimations.find(
         (compiledAnimation) =>
           compiledAnimation.timing.fill === "backwards" ||
           compiledAnimation.timing.fill === "both",

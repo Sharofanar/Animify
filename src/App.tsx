@@ -9,9 +9,11 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ChangeEvent,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
 import { ComponentLibrary } from "./components/editor/ComponentLibrary";
 import { AnimationFloatingPanel } from "./components/editor/AnimationFloatingPanel";
@@ -70,6 +72,11 @@ import type {
   SlideElementType,
 } from "./types/presentation";
 import { useTimelinePlaybackController } from "./hooks/useTimelinePlaybackController";
+import { usePresentationPlaybackController } from "./hooks/usePresentationPlaybackController";
+import {
+  createPresentationSlidePlaybackPlan,
+  getPresentationSequenceSamples,
+} from "./utils/presentationPlayback";
 
 const STORAGE_KEY = "animify-project";
 
@@ -140,6 +147,98 @@ function migratePendingLegacyAssets() {
 }
 
 type EditorMode = "edit" | "animation" | "present";
+
+function isPresentationInteractionTarget(target: EventTarget | null) {
+  return (
+    target instanceof Element &&
+    Boolean(
+      target.closest(
+        "audio, video, button, a, input, select, textarea, [contenteditable='true'], [role='button']",
+      ),
+    )
+  );
+}
+
+function hasFullscreenMediaElement() {
+  const fullscreenElement = document.fullscreenElement;
+
+  return Boolean(
+    fullscreenElement &&
+      (fullscreenElement instanceof HTMLMediaElement ||
+        fullscreenElement.querySelector("audio, video")),
+  );
+}
+
+const PRESENTATION_WHEEL_TRIGGER_PX = 24;
+const PRESENTATION_WHEEL_GESTURE_END_MS = 240;
+
+type PresentationWheelDirection = 1 | -1;
+
+type PresentationWheelGestureState = {
+  accumulatedDeltaY: number;
+  direction?: PresentationWheelDirection;
+  locked: boolean;
+};
+
+function normalizePresentationWheelDeltaY(event: WheelEvent) {
+  if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+    return event.deltaY * 16;
+  }
+
+  if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+    return event.deltaY * Math.max(1, window.innerHeight);
+  }
+
+  return event.deltaY;
+}
+
+/**
+ * Wheel input over media, authored controls, or a genuinely scrollable region
+ * stays with that interaction instead of becoming a presentation command.
+ */
+function isPresentationWheelInteractionTarget(target: EventTarget | null) {
+  if (isPresentationInteractionTarget(target)) {
+    return true;
+  }
+
+  if (!(target instanceof Element)) {
+    return false;
+  }
+
+  if (
+    target.closest(
+      "[data-presentation-wheel-owner], [role='slider'], [role='scrollbar'], [role='listbox'], [role='spinbutton']",
+    )
+  ) {
+    return true;
+  }
+
+  let currentElement: Element | null = target;
+
+  while (
+    currentElement &&
+    currentElement !== document.body &&
+    currentElement !== document.documentElement
+  ) {
+    if (currentElement instanceof HTMLElement) {
+      const style = window.getComputedStyle(currentElement);
+      const scrollsVertically =
+        /^(auto|scroll|overlay)$/.test(style.overflowY) &&
+        currentElement.scrollHeight > currentElement.clientHeight + 1;
+      const scrollsHorizontally =
+        /^(auto|scroll|overlay)$/.test(style.overflowX) &&
+        currentElement.scrollWidth > currentElement.clientWidth + 1;
+
+      if (scrollsVertically || scrollsHorizontally) {
+        return true;
+      }
+    }
+
+    currentElement = currentElement.parentElement;
+  }
+
+  return false;
+}
 
 type LeftPanelMode = "components" | "assets";
 
@@ -783,6 +882,11 @@ function App() {
     useState<AnimationClipPreviewState | null>(null);
 
   const [presentToolbarOpen, setPresentToolbarOpen] = useState(false);
+  const presentationWheelGestureRef = useRef<PresentationWheelGestureState>({
+    accumulatedDeltaY: 0,
+    locked: false,
+  });
+  const presentationWheelGestureTimerRef = useRef<number | null>(null);
   const [propertyPanelOpen, setPropertyPanelOpen] = useState(true);
 
   /**
@@ -955,6 +1059,31 @@ function App() {
     slideId: project.activeSlideId,
     durationMs: animationPlaybackDurationMs,
   });
+  const {
+    state: presentationPlaybackState,
+    enterSlide: enterPresentationSlidePlayback,
+    advance: advancePresentationPlayback,
+    forceAdvance: forceAdvancePresentationPlayback,
+    retreat: retreatPresentationPlayback,
+    reset: resetPresentationPlayback,
+  } = usePresentationPlaybackController();
+  const activePresentationPlan = useMemo(
+    () =>
+      activeSlide
+        ? createPresentationSlidePlaybackPlan(activeSlide)
+        : null,
+    [activeSlide],
+  );
+  const presentationSequenceSamples = useMemo(
+    () =>
+      activePresentationPlan
+        ? getPresentationSequenceSamples(
+            presentationPlaybackState,
+            activePresentationPlan,
+          )
+        : [],
+    [activePresentationPlan, presentationPlaybackState],
+  );
 
   const animationTimelineCurrentTimeMs = timelinePlayback.currentTimeMs;
   const clearTimelinePlaybackRange = timelinePlayback.clearPlaybackRange;
@@ -1350,34 +1479,115 @@ function App() {
     };
   }, [mode, redoProject, undoProject]);
 
-  const handlePresentSlideStep = useCallback(
-    (direction: 1 | -1) => {
-      setProject((currentProject) => {
-        const currentIndex = currentProject.slides.findIndex(
-          (slide) => slide.id === currentProject.activeSlideId,
-        );
+  const navigatePresentationSlide = useCallback(
+    (direction: 1 | -1, position: "start" | "end") => {
+      const currentProject = latestProjectRef.current;
+      const currentIndex = currentProject.slides.findIndex(
+        (slide) => slide.id === currentProject.activeSlideId,
+      );
+      const nextSlide = currentProject.slides[currentIndex + direction];
 
-        if (currentIndex === -1) {
-          return currentProject;
-        }
+      if (currentIndex < 0 || !nextSlide) {
+        return false;
+      }
 
-        const nextSlide = currentProject.slides[currentIndex + direction];
+      const nextProject = {
+        ...currentProject,
+        activeSlideId: nextSlide.id,
+        updatedAt: new Date().toISOString(),
+      };
 
-        if (!nextSlide) {
-          return currentProject;
-        }
+      /**
+       * Update the imperative snapshot before React renders. A rapid second input
+       * then observes the destination page and cannot navigate the source twice.
+       */
+      latestProjectRef.current = nextProject;
+      enterPresentationSlidePlayback(
+        createPresentationSlidePlaybackPlan(nextSlide),
+        position,
+      );
+      setSelectedElementId(nextSlide.elements[0]?.id ?? "");
+      setActiveAnimationContext(null);
+      setAnimationPreviewKey((key) => key + 1);
+      setProject(nextProject);
 
-        setSelectedElementId(nextSlide.elements[0]?.id ?? "");
-        setAnimationPreviewKey((key) => key + 1);
-
-        return {
-          ...currentProject,
-          activeSlideId: nextSlide.id,
-          updatedAt: new Date().toISOString(),
-        };
-      });
+      return true;
     },
-    [setSelectedElementId],
+    [enterPresentationSlidePlayback],
+  );
+
+  const handlePresentAdvance = useCallback(() => {
+    const currentProject = latestProjectRef.current;
+    const currentSlide = currentProject.slides.find(
+      (slide) => slide.id === currentProject.activeSlideId,
+    );
+
+    if (!currentSlide) {
+      return;
+    }
+
+    const navigation = advancePresentationPlayback(
+      createPresentationSlidePlaybackPlan(currentSlide),
+    );
+
+    if (navigation === "next-slide") {
+      navigatePresentationSlide(1, "start");
+    }
+  }, [advancePresentationPlayback, navigatePresentationSlide]);
+
+  const handlePresentForceAdvance = useCallback(() => {
+    const currentProject = latestProjectRef.current;
+    const currentSlide = currentProject.slides.find(
+      (slide) => slide.id === currentProject.activeSlideId,
+    );
+
+    if (!currentSlide) {
+      return;
+    }
+
+    const navigation = forceAdvancePresentationPlayback(
+      createPresentationSlidePlaybackPlan(currentSlide),
+    );
+
+    if (navigation === "next-slide") {
+      navigatePresentationSlide(1, "start");
+    }
+  }, [forceAdvancePresentationPlayback, navigatePresentationSlide]);
+
+  const handlePresentRetreat = useCallback(() => {
+    const currentProject = latestProjectRef.current;
+    const currentSlide = currentProject.slides.find(
+      (slide) => slide.id === currentProject.activeSlideId,
+    );
+
+    if (!currentSlide) {
+      return;
+    }
+
+    const navigation = retreatPresentationPlayback(
+      createPresentationSlidePlaybackPlan(currentSlide),
+    );
+
+    if (navigation === "previous-slide") {
+      navigatePresentationSlide(-1, "end");
+    }
+  }, [navigatePresentationSlide, retreatPresentationPlayback]);
+
+  const handleExitPresentationMode = useCallback(() => {
+    resetPresentationPlayback();
+    setPresentToolbarOpen(false);
+    setMode("edit");
+  }, [resetPresentationPlayback]);
+
+  const handlePresentSurfaceClick = useCallback(
+    (event: ReactMouseEvent<HTMLElement>) => {
+      if (isPresentationInteractionTarget(event.target)) {
+        return;
+      }
+
+      handlePresentAdvance();
+    },
+    [handlePresentAdvance],
   );
 
   useEffect(() => {
@@ -1386,45 +1596,147 @@ function App() {
     }
 
     function handlePresentKeyDown(event: KeyboardEvent) {
-      const target = event.target;
-
       /**
-       * Media controls keep their native keyboard behavior. Pressing Space while a
-       * video or audio control is focused must not advance the presentation.
+       * A fullscreen media element owns keyboard input until the browser leaves
+       * fullscreen. In particular, Escape must first exit native fullscreen.
        */
-      if (target instanceof HTMLMediaElement) {
-        return;
-      }
-
-      if (
-        event.key === "ArrowRight" ||
-        event.key === " " ||
-        event.key === "Enter" ||
-        event.key === "PageDown"
-      ) {
-        event.preventDefault();
-        handlePresentSlideStep(1);
-        return;
-      }
-
-      if (event.key === "ArrowLeft" || event.key === "PageUp") {
-        event.preventDefault();
-        handlePresentSlideStep(-1);
+      if (hasFullscreenMediaElement()) {
         return;
       }
 
       if (event.key === "Escape") {
         event.preventDefault();
-        setMode("edit");
+        handleExitPresentationMode();
+        return;
+      }
+
+      /**
+       * Native and authored controls keep keyboard ownership. This includes Space
+       * on focused video/audio controls and buttons in the presentation toolbar.
+       */
+      if (
+        isPresentationInteractionTarget(event.target) ||
+        isPresentationInteractionTarget(document.activeElement)
+      ) {
+        return;
+      }
+
+      const advances =
+        event.key === "ArrowRight" ||
+        event.key === " " ||
+        event.key === "Enter" ||
+        event.key === "PageDown";
+      const retreats = event.key === "ArrowLeft" || event.key === "PageUp";
+
+      if (!advances && !retreats) {
+        return;
+      }
+
+      event.preventDefault();
+
+      if (event.repeat) {
+        return;
+      }
+
+      if (advances) {
+        handlePresentAdvance();
+        return;
+      }
+
+      handlePresentRetreat();
+    }
+
+    function resetPresentationWheelGesture() {
+      presentationWheelGestureRef.current = {
+        accumulatedDeltaY: 0,
+        locked: false,
+      };
+
+      if (presentationWheelGestureTimerRef.current !== null) {
+        window.clearTimeout(presentationWheelGestureTimerRef.current);
+        presentationWheelGestureTimerRef.current = null;
       }
     }
 
+    function schedulePresentationWheelGestureEnd() {
+      if (presentationWheelGestureTimerRef.current !== null) {
+        window.clearTimeout(presentationWheelGestureTimerRef.current);
+      }
+
+      presentationWheelGestureTimerRef.current = window.setTimeout(() => {
+        presentationWheelGestureRef.current = {
+          accumulatedDeltaY: 0,
+          locked: false,
+        };
+        presentationWheelGestureTimerRef.current = null;
+      }, PRESENTATION_WHEEL_GESTURE_END_MS);
+    }
+
+    function handlePresentWheel(event: WheelEvent) {
+      if (
+        hasFullscreenMediaElement() ||
+        event.ctrlKey ||
+        event.metaKey ||
+        isPresentationWheelInteractionTarget(event.target)
+      ) {
+        return;
+      }
+
+      const deltaY = normalizePresentationWheelDeltaY(event);
+
+      if (!Number.isFinite(deltaY) || Math.abs(deltaY) < 0.01) {
+        return;
+      }
+
+      event.preventDefault();
+
+      const direction: PresentationWheelDirection = deltaY > 0 ? 1 : -1;
+      const gesture = presentationWheelGestureRef.current;
+
+      if (!gesture.locked) {
+        if (gesture.direction && gesture.direction !== direction) {
+          gesture.accumulatedDeltaY = 0;
+        }
+
+        gesture.direction = direction;
+        gesture.accumulatedDeltaY += deltaY;
+
+        if (
+          Math.abs(gesture.accumulatedDeltaY) >=
+          PRESENTATION_WHEEL_TRIGGER_PX
+        ) {
+          gesture.locked = true;
+
+          if (direction === 1) {
+            handlePresentForceAdvance();
+          } else {
+            handlePresentRetreat();
+          }
+        }
+      }
+
+      /**
+       * Trackpads emit a burst of inertia events for one physical gesture. Keep
+       * the lock until that burst has been quiet long enough to be a new gesture.
+       */
+      schedulePresentationWheelGestureEnd();
+    }
+
     window.addEventListener("keydown", handlePresentKeyDown);
+    window.addEventListener("wheel", handlePresentWheel, { passive: false });
 
     return () => {
       window.removeEventListener("keydown", handlePresentKeyDown);
+      window.removeEventListener("wheel", handlePresentWheel);
+      resetPresentationWheelGesture();
     };
-  }, [handlePresentSlideStep, mode]);
+  }, [
+    handleExitPresentationMode,
+    handlePresentAdvance,
+    handlePresentForceAdvance,
+    handlePresentRetreat,
+    mode,
+  ]);
 
   useEffect(() => {
     function updateCanvasAreaSize() {
@@ -1778,11 +2090,40 @@ function App() {
     };
   }, [commitProjectChange, mode, selectedElementId, selectedElementIds]);
 
+  function handleEnterPresentationMode() {
+    const currentProject = latestProjectRef.current;
+    const currentSlide = currentProject.slides.find(
+      (slide) => slide.id === currentProject.activeSlideId,
+    );
+
+    if (!currentSlide) {
+      return;
+    }
+
+    clearAnimationClipPreview();
+    stopTimelinePlayback();
+    enterPresentationSlidePlayback(
+      createPresentationSlidePlaybackPlan(currentSlide),
+    );
+    setPresentToolbarOpen(false);
+    setAnimationPreviewKey((key) => key + 1);
+    setMode("present");
+  }
+
+  function handleReplayPresentationSlide() {
+    if (!activePresentationPlan) {
+      return;
+    }
+
+    enterPresentationSlidePlayback(activePresentationPlan);
+    setAnimationPreviewKey((key) => key + 1);
+  }
+
   if (!activeSlide) {
     return (
       <main
         className="flex min-h-screen items-center justify-center bg-slate-100 text-slate-950"
-        onClick={() => handlePresentSlideStep(1)}
+        onClick={handlePresentAdvance}
       >
         <div className="rounded-3xl border border-slate-200 bg-white p-8 shadow-sm">
           <h1 className="text-2xl font-bold">没有找到当前演示页面</h1>
@@ -1814,7 +2155,7 @@ function App() {
     return (
       <main
         className="relative h-screen w-screen overflow-hidden bg-slate-950 text-white"
-        onClick={() => handlePresentSlideStep(1)}
+        onClick={handlePresentSurfaceClick}
       >
         <section className="absolute inset-0 flex items-center justify-center">
           {/* Present mode reuses SlideCanvas without editor chrome.
@@ -1828,6 +2169,7 @@ function App() {
             missingAssetIds={missingAssetIds}
             scale={presentScale}
             animationPreviewKey={animationPreviewKey}
+            animationSequenceSamples={presentationSequenceSamples}
             chrome={false}
             clipOverflow={true}
             bare={true}
@@ -1863,7 +2205,7 @@ function App() {
               <button
                 type="button"
                 className="rounded-full bg-white px-3 py-2 text-xs font-semibold text-slate-900 shadow-sm transition hover:bg-slate-100"
-                onClick={() => setMode("edit")}
+                onClick={handleExitPresentationMode}
               >
                 退出放映
               </button>
@@ -1871,7 +2213,7 @@ function App() {
               <button
                 type="button"
                 className="rounded-full bg-violet-500 px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-violet-600"
-                onClick={() => setAnimationPreviewKey((key) => key + 1)}
+                onClick={handleReplayPresentationSlide}
               >
                 重新播放
               </button>
@@ -5106,10 +5448,7 @@ function App() {
                 <button
                   type="button"
                   className="rounded-full px-4 py-2 text-sm font-semibold text-slate-500 transition hover:text-slate-900"
-                  onClick={() => {
-                    clearAnimationClipPreview();
-                    setMode("present");
-                  }}
+                  onClick={handleEnterPresentationMode}
                 >
                   放映
                 </button>

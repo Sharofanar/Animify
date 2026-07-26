@@ -3,7 +3,7 @@
 > 最后更新：2026-07-26
 > 仓库：`https://github.com/Sharofanar/Animify`  
 > 主分支：`main`  
-> GitHub 已知最新基线：`c7756b5 feat: add isolated clip preview`
+> GitHub 已知最新基线：`975f109 feat: add click step sequence-local timing`
 
 本文档是 Animify 当前开发状态的长期事实来源。
 
@@ -34,12 +34,13 @@
 当前已知 GitHub `origin/main` 最新提交：
 
 ```text
-c7756b5 feat: add isolated clip preview
+975f109 feat: add click step sequence-local timing
 ```
 
 该提交之前已知的连续功能提交包括：
 
 ```text
+c7756b5 feat: add isolated clip preview
 ba1cecc Add unified timeline playback controller
 7cd0747 Enhance Timeline V2 with sticky ruler and keyframes
 c6e8448 Add Timeline V2 and fix stale animation clip visibility
@@ -148,19 +149,21 @@ Tailwind CSS、dnd-kit 以及其他依赖的当前实际版本和使用范围，
 
 ### 5. 当前 Git 同步状态
 
-复核日期：2026-07-25
+复核日期：2026-07-26
 
 - 当前分支：`main`
-- 当前 HEAD：`c7756b58c7aff13fc17dd832d807058a2555c775`
-- 本地 `origin/main`：`c7756b58c7aff13fc17dd832d807058a2555c775`
-- 最新提交：`c7756b5 feat: add isolated clip preview`
+- 当前 HEAD：`975f109f3b8ce6a8461c07dc4a33216dbc8a7f1e`
+- 本地 `origin/main`：`975f109f3b8ce6a8461c07dc4a33216dbc8a7f1e`
+- 最新提交：`975f109 feat: add click step sequence-local timing`
 - 本地与 `origin/main`：ahead 0、behind 0
-- 第 3 阶段开始前工作区：仅有已授权的 `PROJECT_STATUS.md` 状态同步修改
-- 当前未提交修改：`PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/PropertyPanel.tsx`、`src/types/presentation.ts`、`src/utils/animationCommands.ts`、`src/utils/animationCompiler.ts`、`src/utils/animationSequence.ts`
+- 第 4 阶段开始前工作区和暂存区：干净
+- 当前未提交修改：`PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/SlideCanvas.tsx`、`src/hooks/usePresentationPlaybackController.ts`、`src/utils/presentationPlayback.ts`
 - 暂存修改：无
 - 单 Clip 预览 V1：已 commit 并 push
 - 第 3 阶段 Click Step 数据与命令层：已验证完成（2026-07-26）
-- GitHub 状态：第 3 阶段尚未 commit 或 push
+- 第 3 阶段 GitHub 状态：已 commit 并 push，对应提交 `975f109`
+- 第 4 阶段 PPT 式放映控制器：已验证完成（2026-07-26）
+- GitHub 状态：第 4 阶段尚未 commit 或 push
 
 ---
 
@@ -298,10 +301,11 @@ Tailwind CSS、dnd-kit 以及其他依赖的当前实际版本和使用范围，
 
 当前已知限制：
 
-- 编译器目前主要自动处理 `slide-enter` Sequence。
-- Click、Hover、Keyboard、Media Time 等触发方式尚未完整接入运行时。
+- 通用 `compileSlideAnimations` 仍只自动选择 `slide-enter` Sequence。
+- 第 4 阶段正式放映控制器已经按步骤显式调用 `compileAnimationSequence` 接入页面级 Click Step。
+- Hover、指定对象 Click、Keyboard、Media Time 和 Manual 仍待第 9 阶段运行时接入。
 
-状态：**代码已实现，非 `slide-enter` 触发仍待开发**
+状态：**页面级 Click Step 运行时代码已实现，待用户验证；其他触发仍待开发**
 
 ### 3. 高级动画工作区
 
@@ -434,7 +438,115 @@ c6e8448 Add Timeline V2 and fix stale animation clip visibility
 
 ## 五、当前开发状态
 
-# 第 3 阶段：Click Step 数据与命令层
+# 第 4 阶段：PPT 式放映控制器
+
+状态：**已验证完成（2026-07-26）**
+
+本阶段实现：
+
+- 新增纯 `PresentationPlaybackState` 状态机，运行时状态不写入项目数据、Undo / Redo 或 `AnimationClip.startMs`。
+- 放映计划直接读取现有 `AnimationSequence`、`sequenceOrder` 和 Sequence 级公共有效时长。
+- 页面级 Click Step 只消费无 `targetElementId` 的 `click` Sequence；指定对象点击仍留在第 9 阶段。
+- 真正进入页面时自动从 `slide-enter` Sequence 的局部 0ms 开始播放，`slide-enter` 不占 Click Step 编号。
+- 每次前进只启动一个尚未执行的 Click Step；Step 1、2、3 分别从各自 Sequence 的局部 0ms 开始。
+- `Space`、`Enter`、`ArrowRight`、`PageDown` 和放映空白区域点击共用同一个普通推进入口。
+- 当前 Sequence 播放时忽略普通重复前进；键盘自动重复事件也不会推进，因此不会创建重叠播放实例。
+- 第 4 阶段首轮人工验收确认上述保护锁生效，同时发现缺少可主动跳过长动画的强制步进 UX；随后增加的放映模式滚轮专用强制步进已通过用户核心人工验收。
+- 滚轮向下严格只跨越一个演示状态边界：有活动 Sequence 时只把它按自身局部有效时长采样并标记到完成态，停留在该完成视觉；没有活动 Sequence 时才启动下一个 Click Step，稳定状态下本页步骤全部完成时才进入下一页。
+- Wheel Up / Down 形成对称语义：活动 Sequence 上滚只取消并回到开始前确定态，下滚只完成并停在结束确定态；开始前态、播放中和完成态之间不会在一次手势中连续跨越两层。
+- 滚轮向上会取消正在播放的 Sequence 并恢复到此前确定的已完成 Sequence 状态；活动 `slide-enter` 被取消时保持未完成并恢复页面起始态，活动 Click Step 被取消时保留它之前的完成态；没有活动 Sequence 时继续沿用既有逐步回退和上一页末态规则。
+- 滚轮强制步进首轮复测发现：取消活动 `slide-enter` 后状态机虽未把它标记完成，但空 Sequence sample 会让 Canvas 显示静态设计终态，视觉上错误地像已完成。当前已用显式 `slide-enter` 初始帧采样修正；Wheel、`ArrowLeft` 和 `PageUp` 共用的回退路径同时受益，等待用户复测。
+- 后续人工验收发现尚未执行的 future Click Sequence 未进入正式放映 Canvas 采样，目标元素会 fallback 到设计终态并提前显示。当前 runtime sample 已明确区分 `pending`、`completed`、`active`：未被历史 Sequence 建立状态的元素使用最早 pending Sequence 的真实 local 0ms Track / Keyframe；同一元素已有 completed / active 状态时，future pending 不参与渲染并不得覆盖历史确定态。
+- pending 或 active Sequence 的目标元素即使最早 Clip 使用正 `startMs`，也会复用 `applyInitialFrameBeforeDelay` 在实际开始前保持该元素最早动画的真实初始帧；同一 Sequence 的后续 Clip 不会提前覆盖前一 Clip。
+- 滚轮手势先归一化像素 / 行 / 页 delta，再累计到阈值；首次触发后保持手势锁，直到连续 wheel event 静默 `240ms`，一次鼠标滚轮或触控板惯性事件串最多移动一步。
+- 正式放映的非交互区域 wheel 使用非 passive 监听并阻止页面滚动；媒体、原生 / authored 控件、显式 wheel owner、ARIA 滚轮控件、真实可滚动区域、浏览器缩放手势和全屏媒体继续保留输入所有权。
+- 当前页面 Click Step 全部处于稳定完成态后，下一次普通推进或独立的强制向下滚轮才进入下一页；如果最后一个 Step 正在播放，本次向下滚只完成它而不切页。
+- `ArrowLeft` 和 `PageUp` 使用确定性 Sequence 结束采样逐步回退：依次撤回已完成 Click Step、撤回 `slide-enter`、回到页面起始状态，再次回退才进入上一页。
+- 进入上一页时恢复该页全部 Sequence 的结束采样，形成连续的 PPT 式回退体验。
+- 新增正式放映专用 Hook，只有一个 `requestAnimationFrame` 循环推进当前 Sequence 的局部时间。
+- 进入正式放映前停止编辑器 Timeline / 单 Clip 预览；正式放映、整页 Timeline 和单 Clip 预览不会并发控制 Canvas。
+- `SlideCanvas` 在正式放映中对每个已显示 Sequence 分别调用 `compileAnimationSequence(scene, sequenceId)`。
+- 已完成 Sequence 按各自有效局部结束时间采样，当前 Sequence 按自己的局部播放时间采样；没有把 Click Step 拼接成页面绝对时间。
+- Sequence 受控采样启用时，`SlideCanvas` 不再启动原有自主 Web Animation 定时器，避免双播放器。
+- 视频 / 音频、按钮、链接、输入控件和其他真实交互控件继续保留点击与键盘所有权。
+- 全屏媒体期间暂停放映导航；第一次 Escape 由浏览器退出媒体全屏，非媒体全屏状态下 Escape 退出 Animify 放映模式。
+- 旧项目如果只有 `slide-enter`，该 Sequence 完成后的第一次推进直接进入下一页。
+
+修改文件：
+
+```text
+src/App.tsx
+src/components/editor/SlideCanvas.tsx
+src/hooks/usePresentationPlaybackController.ts
+src/utils/presentationPlayback.ts
+PROJECT_STATUS.md
+```
+
+代码检查：
+
+- `npm.cmd run lint`：通过，0 error、0 warning。
+- `npm.cmd run build`：通过。
+- 自动化测试：`package.json` 未定义 `test` 脚本，本轮未新增虚假 test 命令或大型测试框架。
+- 状态机不落盘直接断言：首轮 20 项、滚轮首版强制步进 15 项、回退采样 18 项均通过；本次单边界强制前进新增 22 项断言通过，覆盖活动 `slide-enter` / Step 1 / Step 2 各自只完成不连播、稳定完成态下一手势才启动后续 Step、活动末 Step 不翻页及其后独立手势才请求下一页。
+- pending / completed / active 采样优先级不落盘直接断言：15 项通过；覆盖 future Click local 0ms、正 `startMs` 初始帧标记、不同元素 pending 初始态、同一元素 completed / active 优先、多个 pending 只选择最早 Sequence，以及取消 `slide-enter` 后页面起始态。
+- `git diff --check`：通过，仅有工作区 LF / CRLF 转换提示。
+
+用户人工验收（2026-07-26）：
+
+1. 页面进入自动执行 `slide-enter`，行为正常。
+2. Click Step 按 Sequence 顺序逐步执行。
+3. 每次普通推进只执行一步；动画播放中普通推进保护锁正常。
+4. Wheel Down 在播放中只跳到当前 Sequence 完成态，下一次独立 Wheel Down 才开始下一个 Step。
+5. Wheel Up 在播放中退回当前 Sequence 开始前的确定状态。
+6. `ArrowLeft` / `PageUp` 与逐步回退状态机语义一致。
+7. 最后一个 Step 完成后的下一次操作才翻页。
+8. 返回上一页会恢复上一页全部步骤完成后的末态。
+9. future / pending Click Sequence 的进入元素不会提前显示。
+10. completed / active 确定状态不会被 future Sequence 覆盖。
+11. `AnimationSequence`、`AnimationClip.startMs` 和播放采样继续保持 Sequence-local time。
+12. 正式放映核心流程人工测试正常。
+
+本阶段验收边界：
+
+- 当前 Timeline V2-B 和编辑动画幕布尚未完整接入 Click Step Sequence 上下文，仍会把不同 Sequence 临时扁平显示；该限制属于第 7 阶段 Timeline V2-C，不是第 4 阶段阻塞项。
+- 当前动画编辑区“整页播放”仍主要沿用 Timeline V2-B 行为，只执行 `slide-enter`；Click Step 的正式编辑器预览语义留到 Timeline V2-C，本阶段不继续修改。
+
+当前未实现且保持边界：
+
+- 第 5 阶段 HTML 导出 Click Step 同步。
+- 第 6 阶段 Click Step 编辑 UI。
+- 第 7 阶段 AE 式 Timeline V2-C 和 Sequence 分组 UI。
+- Marker 重构。
+- Hover、指定对象点击、Keyboard Trigger、Media Time Trigger。
+
+当前结论：**已验证完成（2026-07-26）**
+
+后续回归清单：
+
+1. 使用已有第 3 阶段 QA 数据进入放映，确认只自动播放 `slide-enter`。
+2. 在 Sequence 播放期间快速点击空白区域并连续按 `Space` / `Enter` / `ArrowRight` / `PageDown`，确认普通推进仍被保护锁忽略。
+3. 在 `slide-enter` 播放期间向下滚一次，确认只到达 `slide-enter` 完成态且不启动 Step 1；等待手势锁释放后再次向下滚，才从 Step 1 的局部 0ms 启动。
+4. 在 Step 1 / Step 2 播放期间分别向下滚一次，确认每次只完成当前 Step 并停在其完成态；下一次独立向下滚才启动后续 Step。
+5. 在最后一个 Click Step 播放期间向下滚一次，确认只完成该 Step、不切页；等待一个新手势后再次向下滚，才进入下一页并自动从新页 `slide-enter` 局部 0ms 开始。
+6. 使用带正 `startMs` 延迟的 `slide-enter`，在它播放期间向上滚一次，确认活动动画被取消、元素恢复进入前初始视觉且 `slide-enter` 未完成；等待一个新滚轮手势后再次向上滚，确认此时才进入上一页末态。
+7. 在 Step 1 播放期间向上滚，确认恢复 `slide-enter` 完成态；在 Step 2 播放期间向上滚，确认恢复 Step 1 完成态。
+8. 在没有活动 Sequence 时继续逐次向上滚，确认完整层级为：最后 Click Step 完成态 → 前一步完成态 → `slide-enter` 完成态 → 页面起始态 → 上一页末态。
+9. 使用 `ArrowLeft` / `PageUp` 重复第 6 至 8 项，确认它们与滚轮共用相同确定性采样语义。
+10. 分别用普通鼠标滚轮和触控板长滑 / 惯性滚动测试，确认一组连续 wheel event 最多前进或回退一个状态边界；停止约 `240ms` 后的新手势可以再移动一步。
+11. 在视频 / 音频控件、放映工具栏按钮、真实可滚动区域和需要滚轮的控件上滚动，确认不误推进；全屏视频期间也不推进。
+12. 在放映空白区域滚动时确认浏览器页面本身不滚动；`Ctrl` / `Meta` 加滚轮不触发步骤。
+13. 验证只有 `slide-enter` 的旧页面、普通前进保护锁、Escape、重新播放，以及退出并重新进入放映没有回归。
+14. 使用三个不同元素分别承载 `slide-enter`、Step 1、Step 2，确认页面进入和 Step 1 播放期间 Step 2 元素均保持自身 local 0ms 初始视觉，不再显示设计终态。
+15. 分别把 Step 1 / Step 2 Clip 设置为淡入、放大进入和上滑进入，确认 pending 状态直接来自真实 Track / Keyframe：透明、透明且缩放至 0.92、透明且下移 28px。
+16. 给 future Step 的最早 Clip 设置正 `startMs`，确认步骤尚未执行以及刚启动后的延迟期间都保持进入前初始视觉，直到局部开始时间到达。
+17. 让同一元素先在 Step 1 完成动画、再在 Step 2 配置动画；Step 2 尚未开始时确认 Step 1 完成态不被 Step 2 local 0ms 覆盖，Step 2 启动时才由其 local 0ms 接管。
+
+下一步边界：
+
+- 先等待用户完成第 4 阶段人工验收。
+- 未经用户明确要求，不进入第 5 阶段，不 commit，不 push。
+
+# 已完成前置：第 3 阶段 Click Step 数据与命令层
 
 状态：**已验证完成（2026-07-26）**
 
@@ -533,9 +645,9 @@ HTML 本地打开兼容性观察：
 
 下一步边界：
 
-- 第 3 阶段已经结束。
-- 下一计划阶段是第 4 阶段“PPT 式放映控制器”，但尚未开始，必须等待用户明确要求。
-- 第 4 阶段必须直接复用本阶段的 Sequence-local time、`compileAnimationSequence` 和公共时长规则，禁止重新建立另一套 Click Step 时间模型。
+- 第 3 阶段已经结束并通过用户验收，对应代码已通过提交 `975f109` push。
+- 第 4 阶段已经直接复用 Sequence-local time、`compileAnimationSequence` 和公共时长规则完成代码实现，并通过用户核心人工验收。
+- 下一计划阶段为第 5 阶段“HTML 导出 Click Step 同步”，尚未开始。
 
 ## 已完成前置：单 Clip 预览 V1
 
@@ -584,8 +696,8 @@ src/utils/animationCompiler.ts
 
 阶段衔接：
 
-- 第 3 阶段“Click Step 数据与命令层”已经用户验收通过。
-- 当前不自动进入第 4 阶段。
+- 第 3 阶段“Click Step 数据与命令层”已经用户验收，并通过提交 `975f109` push。
+- 第 4 阶段核心功能已经用户人工验收；第 5 阶段尚未开始。
 
 ---
 
@@ -778,7 +890,7 @@ src/App.tsx
 
 ### 第 4 阶段：PPT 式放映控制器
 
-状态：**计划开发，尚未开始**
+状态：**已验证完成（2026-07-26）**
 
 目标行为：
 
@@ -804,6 +916,8 @@ src/App.tsx
 - 必须等待用户明确要求后才能开始。
 
 ### 第 5 阶段：HTML 导出 Click Step 同步
+
+状态：**计划开发，尚未开始**
 
 目标：
 
@@ -846,6 +960,8 @@ src/types/presentation.ts
 - 数据层、运行时和导出规则已经稳定。
 
 ### 第 7 阶段：Timeline V2-C
+
+状态：**计划开发，尚未开始**
 
 正式产品设计：
 
@@ -899,6 +1015,24 @@ AnimationSequence
 10. Timeline 应能从简洁折叠状态逐级展开到专业轨道编辑状态。
 11. Clip 开始时间拖动、Clip 持续时间边缘拖动、单关键帧拖动、多关键帧框选和移动、多属性轨道、Marker、区域循环、音频波形、吸附和冲突提示，都必须建立在这一纵向层级结构中。
 12. 不允许第 7 阶段重新退回“整张幻灯片一个页面绝对时间轴”的 Click Step 时间模型。
+
+编辑器确定性视觉状态原则：
+
+- 当 Timeline 正在编辑某个 `AnimationSequence` 时，所有更早 Sequence 视为 completed，并按各自 Sequence-local 结束状态采样。
+- 当前正在编辑的 Sequence 视为 active，由该 Sequence 自己的局部 Playhead 时间采样。
+- 所有更晚 Sequence 视为 pending，保持尚未执行状态，且不得覆盖 completed / active 的确定视觉。
+- 不再使用一条页面级绝对 Timeline 控制所有 Click Step。
+- 编辑器 Timeline 和正式放映必须复用 completed / active / pending 的确定性视觉状态模型。
+- 正式放映的 active time 来自 Presentation Playback Controller。
+- Timeline 编辑的 active time 来自用户拖动当前 Sequence 的局部 Playhead。
+
+因此展开 Step 2 时，画布应确定性表现为：
+
+```text
+页面进入和 Step 1：已完成
+Step 2：随自身局部 Playhead 变化
+Step 3 及以后：保持未执行状态
+```
 
 其他实现要求：
 
@@ -1022,7 +1156,9 @@ AnimationSequence
 现状：
 
 - Timeline 已经有统一播放控制器。
-- 单 Clip 预览和 Click Step 将继续增加播放状态。
+- 单 Clip 预览复用 Timeline 控制器的受控区间。
+- 正式放映使用独立 `usePresentationPlaybackController`，只在放映模式运行一个 Sequence-local rAF 调度循环。
+- 三种播放意图互斥，不同时控制 Canvas。
 
 优化目标：
 
@@ -1259,16 +1395,40 @@ AnimationSequence
 
 ### 4. 放映按键直接翻页
 
+历史现象：
+
+- 第 4 阶段前，放映模式中的空格、Enter、右方向键和 PageDown 直接切换页面。
+
+处理结果：
+
+- 第 4 阶段代码已改为统一“推进一个 Sequence / Step”。
+- 当前页 Click Step 全部完成后，下一次推进才翻页。
+- 首轮人工验收确认播放期间普通推进保护锁符合预期，但用户需要能够主动跳过长动画；该反馈分类为第 4 阶段 UX 缺陷。
+- 已增加滚轮向下 / 向上的强制步进，不改变普通点击和键盘前进的保护行为。
+- 后续复测发现活动 `slide-enter` 取消后错误显示静态终态；根因是空 Sequence sample 没有表达页面起始视觉，而不是 `completedSequenceIds` 错误加入了 `slide-enter`。
+- 当前已让未执行的 `slide-enter` 输出显式初始采样，并让 Canvas 在正延迟前应用该 Sequence 最早动画的初始帧；Click Step 和后续 Clip 仍不会提前覆盖前态。
+- 随后人工测试确认滚轮向下能够强制完成动画，但发现首版会在同一 transition 中继续调用普通 advance，从而同时跨过“当前播放中 → 当前完成态 → 下一 Step 播放中”两个边界；该行为已改为一次手势严格只完成当前活动 Sequence，稳定态的下一次独立手势才继续推进。
+- 状态：**已验证完成（2026-07-26）**。
+
+### 5. Clip 选择上下文中的 Delete 误删元素
+
 现象：
 
-- 当前放映模式中的空格、Enter、右方向键和 PageDown 主要用于切换页面。
+- Timeline 或右侧“当前页面动画”已有明确 Clip 选择 / 高亮上下文时，按 Delete 仍会删除整个画布元素。
+
+预期：
+
+- 有明确 Clip 选择上下文时，Delete 只删除当前 Clip。
+- 只有不存在 Clip 选择上下文、画布元素处于选择状态时，Delete 才删除元素。
 
 分类：
 
-- 在 Click Step 尚未实现前属于现有正常行为。
-- 完成 Click Step 后必须改为“先推进动画步骤，步骤结束后再翻页”。
+- 已确认 UX / 键盘命令路由 Bug。
+- 本轮仅记录，不修改删除逻辑；需在后续独立任务中统一 Clip 与元素选择上下文的 Delete 优先级，并验证 Undo / Redo。
 
-### 5. 非 `slide-enter` Trigger 不自动播放
+状态：**待开发**
+
+### 6. 非 `slide-enter` Trigger 不自动播放
 
 现象：
 
@@ -1277,12 +1437,11 @@ AnimationSequence
 
 分类：
 
-- 明确的阶段性限制。
-- 不是 Bug。
-- Click Step 将在当前 V1 主线接入。
-- Hover、指定对象点击、指定键盘按键、媒体时间和手动 API 已归入第 9 阶段“扩展动画触发系统 V2”。
+- 页面级 Click Step 已在第 4 阶段接入正式放映运行时，并通过用户核心人工验收。
+- Hover、指定对象点击、指定键盘按键、媒体时间和手动 API 仍属于阶段性限制，不是当前 Bug。
+- 这些扩展触发已归入第 9 阶段“扩展动画触发系统 V2”。
 
-### 6. Timeline 不能直接拖动编辑 Clip
+### 7. Timeline 不能直接拖动编辑 Clip
 
 现象：
 
@@ -1293,7 +1452,7 @@ AnimationSequence
 - Timeline V2-B 的正常边界。
 - 拖动 Clip 和调整持续时间属于 Timeline V2-C。
 
-### 7. 每条基础轨道至少保留两个关键帧
+### 8. 每条基础轨道至少保留两个关键帧
 
 现象：
 
@@ -1306,7 +1465,7 @@ AnimationSequence
 - 基础模式的正确保护行为。
 - 不是 Bug。
 
-### 8. 媒体控件阻止放映快捷键
+### 9. 媒体控件阻止放映快捷键
 
 现象：
 
@@ -1318,7 +1477,7 @@ AnimationSequence
 - 正确行为。
 - 用于避免媒体播放操作误触发页面切换。
 
-### 9. FLV 资源不能直接在画布播放
+### 10. FLV 资源不能直接在画布播放
 
 分类：
 
@@ -1326,7 +1485,7 @@ AnimationSequence
 - 已归入第 11 阶段“媒体编辑、波形与兼容性 V2”。
 - 不是当前 Bug。
 
-### 10. 历史本地提交不能直接 push
+### 11. 历史本地提交不能直接 push
 
 现象：
 
@@ -1338,7 +1497,7 @@ AnimationSequence
 - 不是产品功能 Bug。
 - 必须在新本地环境中安全处理。
 
-### 11. 独立 HTML 通过 `file://` 打开时的 Console 兼容性观察
+### 12. 独立 HTML 通过 `file://` 打开时的 Console 兼容性观察
 
 现象：
 
@@ -1395,7 +1554,7 @@ GitHub 状态：已 push
 - Undo / Redo：用户验证通过
 - 资源中心：当前测试浏览器中基础回归通过
 - 音视频：当前测试浏览器中基础回归通过，跨浏览器仍待确认
-- 多页面 Click Step：尚未实现
+- 多页面 Click Step：第 4 阶段正式放映核心流程已通过用户人工验证
 
 ### 单 Clip 预览 V1 代码检查
 
@@ -1421,6 +1580,21 @@ GitHub 状态：已 push
 - `file://` 直接打开独立 HTML 时曾出现一次浏览器安全来源相关错误，但播放正常且无证据表明由第 3 阶段引起，已列为非阻塞兼容性观察项。
 - 状态：**已验证完成（2026-07-26）**。
 
+### 第 4 阶段 PPT 式放映控制器代码检查
+
+- 基线：`main`、HEAD 和 `origin/main` 均为 `975f109f3b8ce6a8461c07dc4a33216dbc8a7f1e`，阶段开始前工作区和暂存区干净。
+- Lint：`npm.cmd run lint` 通过，0 error、0 warning。
+- Build：`npm.cmd run build` 通过。
+- 自动化测试：项目未定义 `test` 脚本。
+- 状态机不落盘直接断言：首轮 20 项、滚轮首版强制步进 15 项、回退初始采样 18 项均通过；本次单边界强制前进专项断言 22 项通过。
+- pending / completed / active 采样优先级不落盘直接断言：15 项通过。
+- 断言覆盖 `slide-enter` 自动进入、Click Step 局部 0ms、普通播放中重复推进抑制、活动 Sequence 下滚只完成不连播、稳定完成态下一手势才启动后续 Step、活动末 Step 不翻页而后续独立手势才请求下一页、活动 `slide-enter` 取消后的页面起始采样、活动 Step 1 / 2 取消后的前一完成态和上一页末态。
+- Canvas 正式放映路径逐 Sequence 调用 `compileAnimationSequence`，并以独立 local time 采样。
+- `git diff --check`：通过，仅有 LF / CRLF 转换提示。
+- 人工功能测试：用户确认页面进入、顺序推进、普通推进锁、Wheel Down / Up 单边界语义、`ArrowLeft` / `PageUp` 回退、最后一步后翻页、上一页末态恢复、future pending 初始视觉、completed / active 优先级和 Sequence-local time 均正常。
+- 当前 Timeline V2-B / 编辑动画幕布尚未完整接入 Click Step Sequence 上下文；“整页播放”仍主要只执行 `slide-enter`。该限制已归入第 7 阶段 Timeline V2-C，不阻塞第 4 阶段完成。
+- 状态：**已验证完成（2026-07-26）**。
+
 ### 阶段转换记录
 
 ```text
@@ -1437,8 +1611,14 @@ GitHub 状态：已 push
 2026-07-25：补齐 Sequence-local time 正式语义、公共时长规则、指定 Sequence 编译和命令层隔离计算
 2026-07-26：用户完成人工回归和 Sequence-local 专项 QA，确认全部测试正常
 2026-07-26：第 3 阶段“Click Step 数据与命令层”正式标记为已验证完成
-当前状态：第 3 阶段已验证完成
-下一计划阶段：第 4 阶段“PPT 式放映控制器”，尚未开始，等待用户明确要求
+2026-07-26：第 3 阶段已通过提交 975f109 commit 并 push，main 与 origin/main 同步
+2026-07-26：第 4 阶段“PPT 式放映控制器”代码实现、状态机直接断言、Lint、Build 和 Diff 检查完成
+2026-07-26：第 4 阶段首轮人工验收确认普通推进保护锁生效，同时反馈需要滚轮强制步进；UX 修正代码与专项断言完成
+2026-07-26：用户确认普通推进锁和滚轮向下强制完成能力正常；滚轮向上取消活动 slide-enter 时发现页面起始视觉采样错误，修正代码和 18 项回退断言完成
+2026-07-26：用户要求滚轮向下一次只跨一个状态边界；状态机已改为活动 Sequence 只完成不连播，22 项专项断言完成，等待复测
+2026-07-26：用户完成第 4 阶段正式放映核心人工验收，PPT 式放映控制器正式标记为已验证完成
+当前状态：第 4 阶段已验证完成，但尚未 commit 或 push
+下一计划阶段：第 5 阶段“HTML 导出 Click Step 同步”，计划开发但尚未开始
 ```
 
 ---
@@ -1448,12 +1628,13 @@ GitHub 状态：已 push
 当前入口：
 
 - 第 2 阶段“单 Clip 预览 V1”已经由用户验证通过，并通过提交 `c7756b5` push。
-- 第 3 阶段“Click Step 数据与命令层”已经用户验收并标记为已验证完成。
-- Build、Lint、Diff、原 15 项命令级断言及本轮 Sequence-local 专项检查通过；项目没有自动化 `test` 脚本。
-- 当前改动尚未 commit 或 push。
-- 下一计划阶段是第 4 阶段“PPT 式放映控制器”，但尚未开始，必须等待用户明确要求。
-- 第 4 阶段开始后必须复用 Sequence-local time、`compileAnimationSequence` 和 Sequence 级公共计算规则，禁止另建 Click Step 时间模型。
-- 不得提前开发第 5 阶段导出、第 6 阶段界面或其他后续功能。
+- 第 3 阶段“Click Step 数据与命令层”已经用户验收，并通过提交 `975f109` push。
+- 第 4 阶段“PPT 式放映控制器”核心功能已经用户人工验收并标记为已验证完成。
+- Lint、Build、Diff、状态机专项断言和 pending / completed / active 采样优先级断言通过；项目没有自动化 `test` 脚本。
+- 当前第 4 阶段改动尚未 commit 或 push。
+- 第 4 阶段直接复用 Sequence-local time、`compileAnimationSequence` 和 Sequence 级公共计算规则，没有另建 Click Step 时间模型。
+- 滚轮强制步进仍接入同一个 Presentation Playback Controller；普通推进锁保持不变，Wheel Down / Up 均遵守一次手势只跨一个确定状态边界，并已通过用户人工验收。
+- 下一计划阶段为第 5 阶段“HTML 导出 Click Step 同步”，但尚未开始；不得提前开发第 6 阶段界面或其他后续功能。
 - 原暂缓项目已经分配到第 7、9、10、11、12 阶段；不得提前并行开发。
 
 ### 下次第一步：安全检查
@@ -1469,25 +1650,26 @@ git diff --cached
 
 不得直接执行 pull、reset、clean、rebase、merge、restore 或其他 Git 写操作。
 
-### 第 3 阶段完成后的边界
+### 第 4 阶段完成后的边界
 
-1. 当前只完成 Click Step 数据与命令层，没有开发放映控制器或编辑界面。
-2. 已复用现有 `AnimationSequence`、Schema V2、`sequenceOrder` 和动画命令层。
-3. `AnimationClip.startMs` 的权威语义是相对所属 Sequence 局部 0ms；运行时触发时间不进入持久化 Clip 数据。
-4. Sequence 级筛选、局部开始、错峰、effective duration、repeat / playbackRate 和指定 Sequence 编译已集中到公共工具，供后续播放器、导出和 Timeline 复用。
-5. 旧项目继续保持默认 `slide-enter` 行为，原 `startMs` 数值无需迁移。
-6. 新命令保持不可变，后续 UI 必须通过现有项目事务接入 Undo 和 Redo。
-7. Clip 和对象删除路径已经建立无效引用清理规则。
-8. Marker 保持 Scene-level，归属方案留到 Timeline V2-C 前决定。
-9. 第 3 阶段已经用户验证完成；当前停止，不自动进入第 4 阶段。
-10. 第 4 阶段必须复用上述 Sequence-local time 和公共规则，不得重新设计另一套 Click Step 时间模型。
+1. 第 3 阶段数据与命令层已经用户验证，并通过提交 `975f109` push。
+2. 第 4 阶段已实现 PPT 式放映控制器，但尚未开发 Click Step 编辑 UI、HTML 导出同步或 Timeline V2-C。
+3. `AnimationClip.startMs` 继续只表示相对所属 Sequence 局部 0ms；运行时触发时间不进入持久化数据。
+4. 放映控制器直接使用 `AnimationSequence`、`sequenceOrder`、Sequence 级有效时长和 `compileAnimationSequence`。
+5. 已完成 Sequence 和当前 Sequence 都以各自的局部时间采样，不存在 Click Step 页面绝对时间模型。
+6. 正式放映只运行一个 rAF 调度循环，并与编辑器 Timeline、单 Clip 预览互斥。
+7. 普通前进保护、滚轮强制前进 / 回退、切页恢复和媒体 / 可滚动控件保护已形成独立可测试阶段。
+8. 旧项目继续保持默认 `slide-enter` 行为，原 `startMs` 数值无需迁移。
+9. Marker 保持 Scene-level，归属方案留到 Timeline V2-C 前决定。
+10. 第 4 阶段正式放映核心功能已通过用户人工验收；当前停止，第 5 阶段尚未开始。
 
 ### Git 状态说明
 
-- 当前基线提交：`c7756b58c7aff13fc17dd832d807058a2555c775`。
+- 当前基线提交：`975f109f3b8ce6a8461c07dc4a33216dbc8a7f1e`。
 - 当前 `main` 与 `origin/main` 一致，ahead 0、behind 0。
-- 第 3 阶段工作区修改尚未暂存、commit 或 push。
-- 未提交文件：`PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/PropertyPanel.tsx`、`src/types/presentation.ts`、`src/utils/animationCommands.ts`、`src/utils/animationCompiler.ts`、`src/utils/animationSequence.ts`。
+- 第 3 阶段已经 commit 并 push。
+- 第 4 阶段工作区修改尚未暂存、commit 或 push。
+- 未提交文件：`PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/SlideCanvas.tsx`、`src/hooks/usePresentationPlaybackController.ts`、`src/utils/presentationPlayback.ts`。
 - 后续 commit 和 push 仍需用户明确授权。
 
 未经用户允许，不得 commit 或 push。

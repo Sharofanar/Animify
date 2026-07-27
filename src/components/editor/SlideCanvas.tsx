@@ -22,7 +22,7 @@ import {
   type CompiledSlideAnimations,
 } from "../../utils/animationCompiler";
 import {
-  getPresentationRenderableSequenceIds,
+  getPresentationRenderableAnimationSamples,
   type PresentationSequenceSample,
 } from "../../utils/presentationPlayback";
 
@@ -1016,22 +1016,37 @@ function SlideElementView({
 }) {
   const style = element.style;
 
-  const renderableCompiledAnimations = useMemo(() => {
+  const presentationAnimationSamples = useMemo(() => {
     if (animationSequenceSamples === undefined) {
-      return compiledAnimations;
+      return undefined;
     }
 
-    const renderableSequenceIds = new Set(
-      getPresentationRenderableSequenceIds(
-        animationSequenceSamples,
-        compiledAnimations.map((animation) => animation.sequenceId),
-      ),
-    );
-
-    return compiledAnimations.filter((animation) =>
-      renderableSequenceIds.has(animation.sequenceId),
+    return getPresentationRenderableAnimationSamples(
+      animationSequenceSamples,
+      compiledAnimations,
     );
   }, [animationSequenceSamples, compiledAnimations]);
+
+  const renderableCompiledAnimations = useMemo(
+    () =>
+      presentationAnimationSamples?.map(
+        (sample) => sample.compiledAnimation,
+      ) ?? compiledAnimations,
+    [compiledAnimations, presentationAnimationSamples],
+  );
+
+  const presentationAnimationSamplesById = useMemo(
+    () =>
+      presentationAnimationSamples === undefined
+        ? undefined
+        : new Map(
+            presentationAnimationSamples.map((sample) => [
+              sample.compiledAnimation.id,
+              sample,
+            ]),
+          ),
+    [presentationAnimationSamples],
+  );
 
   const legacyAnimation = element.animations[0];
 
@@ -1188,28 +1203,17 @@ function SlideElementView({
     }
 
     const visibleAnimationIds = new Set<string>();
-    const firstAnimationStartMsBySequenceId = new Map<string, number>();
 
     for (const compiledAnimation of renderableCompiledAnimations) {
-      const startTimeMs = Math.max(0, compiledAnimation.timing.delay);
-      const firstStartTimeMs = firstAnimationStartMsBySequenceId.get(
-        compiledAnimation.sequenceId,
-      );
-
-      if (firstStartTimeMs === undefined || startTimeMs < firstStartTimeMs) {
-        firstAnimationStartMsBySequenceId.set(
-          compiledAnimation.sequenceId,
-          startTimeMs,
-        );
-      }
-    }
-
-    for (const compiledAnimation of renderableCompiledAnimations) {
-      const sequenceSample = sequenceControlled
-        ? animationSequenceSamplesById[compiledAnimation.sequenceId]
+      const presentationAnimationSample = sequenceControlled
+        ? presentationAnimationSamplesById?.get(compiledAnimation.id)
         : undefined;
+      const sequenceSample = presentationAnimationSample?.sequenceSample;
+      const startTimeMs = Math.max(0, compiledAnimation.timing.delay);
       const sampledTimeMs = sequenceControlled
-        ? sequenceSample?.localTimeMs
+        ? presentationAnimationSample?.pendingBaseline
+          ? startTimeMs
+          : sequenceSample?.localTimeMs
         : animationTimelineTimeMs;
 
       if (sampledTimeMs === undefined) {
@@ -1221,24 +1225,19 @@ function SlideElementView({
       }
 
       const currentTimeMs = Math.max(0, sampledTimeMs);
-      const startTimeMs = Math.max(0, compiledAnimation.timing.delay);
 
       const playbackRate =
         compiledAnimation.playbackRate > 0 ? compiledAnimation.playbackRate : 1;
 
       const elapsedTimelineMs = currentTimeMs - startTimeMs;
-      const appliesInitialFrameBeforeDelay =
-        sequenceSample?.applyInitialFrameBeforeDelay === true &&
-        startTimeMs ===
-          firstAnimationStartMsBySequenceId.get(compiledAnimation.sequenceId);
 
       /**
-       * Future Clips normally do not exist yet, so a later fill:"both" Clip
-       * cannot cover an earlier Clip. An explicit pending or active initial
-       * sample is the exception: its earliest animation for this element
-       * establishes the pre-start visual even when startMs is positive.
+       * Presentation sampling excludes delayed active Clips before this effect.
+       * A retained pending baseline arrives with sampledTimeMs=startTimeMs, so
+       * it can establish an untouched element's initial visual without giving a
+       * delayed active Clip control over earlier completed history.
        */
-      if (elapsedTimelineMs < 0 && !appliesInitialFrameBeforeDelay) {
+      if (elapsedTimelineMs < 0) {
         const existingAnimation = managedAnimations.get(compiledAnimation.id);
 
         existingAnimation?.cancel();
@@ -1320,6 +1319,7 @@ function SlideElementView({
     animationSequenceSamplesById,
     animationTimelineTimeMs,
     isEditing,
+    presentationAnimationSamplesById,
     renderableCompiledAnimations,
   ]);
 

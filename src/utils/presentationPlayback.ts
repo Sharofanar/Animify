@@ -23,7 +23,21 @@ export type PresentationSequenceSample = {
   sequenceId: string;
   localTimeMs: number;
   phase: "pending" | "completed" | "active";
-  applyInitialFrameBeforeDelay?: boolean;
+};
+
+export type PresentationAnimationTiming = {
+  delay: number;
+};
+
+export type PresentationSampledAnimation<
+  TAnimation extends {
+    sequenceId: string;
+    timing: PresentationAnimationTiming;
+  },
+> = {
+  compiledAnimation: TAnimation;
+  sequenceSample: PresentationSequenceSample;
+  pendingBaseline: boolean;
 };
 
 export type PresentationPlaybackTransition = {
@@ -292,7 +306,6 @@ export function getPresentationSequenceSamples(
       sequenceId: state.activeSequenceId,
       localTimeMs: state.activeSequenceTimeMs,
       phase: "active",
-      applyInitialFrameBeforeDelay: true,
     });
   }
 
@@ -315,7 +328,6 @@ export function getPresentationSequenceSamples(
       sequenceId,
       localTimeMs: 0,
       phase: "pending",
-      applyInitialFrameBeforeDelay: true,
     });
   });
 
@@ -323,37 +335,92 @@ export function getPresentationSequenceSamples(
 }
 
 /**
- * Resolve which Sequence layers may control one rendered element.
+ * Resolve the exact compiled animations that may control one rendered element.
  *
- * Completed and active history is authoritative. Only when an element has no
- * such history may its earliest pending Sequence establish an initial frame.
- * This keeps future entry keyframes available for untouched elements without
- * letting them overwrite a previous Step's settled visual state.
+ * A Sequence becoming active does not make its delayed Clips participate.
+ * Earlier completed or already-started active animations remain authoritative
+ * until the Sequence-local clock reaches each animation's delay.
+ *
+ * If an element has no participating history, the earliest active-or-pending
+ * Sequence may retain its earliest animation frame as a pending baseline. That
+ * baseline prevents the element's design-final state from leaking, but it is
+ * deliberately distinct from active Clip participation before startMs.
  */
-export function getPresentationRenderableSequenceIds(
+export function getPresentationRenderableAnimationSamples<
+  TAnimation extends {
+    sequenceId: string;
+    timing: PresentationAnimationTiming;
+  },
+>(
   samples: readonly PresentationSequenceSample[],
-  elementSequenceIds: readonly string[],
-) {
-  const elementSequenceIdSet = new Set(elementSequenceIds);
-  const establishedSequenceIds = samples
-    .filter(
-      (sample) =>
-        sample.phase !== "pending" &&
-        elementSequenceIdSet.has(sample.sequenceId),
-    )
-    .map((sample) => sample.sequenceId);
+  elementAnimations: readonly TAnimation[],
+): PresentationSampledAnimation<TAnimation>[] {
+  const samplesBySequenceId = new Map(
+    samples.map((sample) => [sample.sequenceId, sample]),
+  );
+  const participatingAnimations = elementAnimations.flatMap(
+    (compiledAnimation) => {
+      const sequenceSample = samplesBySequenceId.get(
+        compiledAnimation.sequenceId,
+      );
+      const startTimeMs = Math.max(
+        0,
+        Number(compiledAnimation.timing.delay),
+      );
 
-  if (establishedSequenceIds.length > 0) {
-    return [...new Set(establishedSequenceIds)];
-  }
+      if (
+        !sequenceSample ||
+        sequenceSample.phase === "pending" ||
+        sequenceSample.localTimeMs < startTimeMs
+      ) {
+        return [];
+      }
 
-  const earliestPendingSample = samples.find(
-    (sample) =>
-      sample.phase === "pending" &&
-      elementSequenceIdSet.has(sample.sequenceId),
+      return [
+        {
+          compiledAnimation,
+          sequenceSample,
+          pendingBaseline: false,
+        },
+      ];
+    },
   );
 
-  return earliestPendingSample ? [earliestPendingSample.sequenceId] : [];
+  if (participatingAnimations.length > 0) {
+    return participatingAnimations;
+  }
+
+  const baselineSample = samples.find(
+    (sample) =>
+      (sample.phase === "active" || sample.phase === "pending") &&
+      elementAnimations.some(
+        (animation) => animation.sequenceId === sample.sequenceId,
+      ),
+  );
+
+  if (!baselineSample) {
+    return [];
+  }
+
+  const baselineAnimations = elementAnimations.filter(
+    (animation) => animation.sequenceId === baselineSample.sequenceId,
+  );
+  const earliestStartMs = Math.min(
+    ...baselineAnimations.map((animation) =>
+      Math.max(0, Number(animation.timing.delay)),
+    ),
+  );
+
+  return baselineAnimations
+    .filter(
+      (animation) =>
+        Math.max(0, Number(animation.timing.delay)) === earliestStartMs,
+    )
+    .map((compiledAnimation) => ({
+      compiledAnimation,
+      sequenceSample: baselineSample,
+      pendingBaseline: true,
+    }));
 }
 
 function startPresentationSequence(

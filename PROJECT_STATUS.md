@@ -1,9 +1,9 @@
 # Animify 项目状态
 
-> 最后更新：2026-07-27
+> 最后更新：2026-07-28
 > 仓库：`https://github.com/Sharofanar/Animify`  
 > 主分支：`main`  
-> GitHub 已知最新基线：`a9166c3 docs: plan App architecture cleanup`
+> 第 5 阶段开始基线：`3f73e7d docs: add architecture cleanup roadmap`
 
 本文档是 Animify 当前开发状态的长期事实来源。
 
@@ -151,23 +151,24 @@ Tailwind CSS、dnd-kit 以及其他依赖的当前实际版本和使用范围，
 
 ### 5. 当前 Git 同步状态
 
-复核日期：2026-07-27
+复核日期：2026-07-28
 
-- 当前分支：`main`
-- 当前 HEAD：`a9166c3ec7376d009a3d6f50e6cd982ee94e9996`
-- 本地 `origin/main`：`a9166c3ec7376d009a3d6f50e6cd982ee94e9996`
-- 最新提交：`a9166c3 docs: plan App architecture cleanup`
-- 本地与 `origin/main`：ahead 0、behind 0
+- 第 5 阶段最终提交前分支：`main`
+- 第 5 阶段最终提交前 HEAD：`3f73e7dd207d6d08c3c807995f5de3c07949bfb9`
+- 第 5 阶段最终提交前本地 `origin/main`：`3f73e7dd207d6d08c3c807995f5de3c07949bfb9`
+- 第 5 阶段最终提交前最新提交：`3f73e7d docs: add architecture cleanup roadmap`
+- 第 5 阶段最终提交前本地与 `origin/main`：ahead 0、behind 0
 - 第 4 阶段开始前工作区和暂存区：干净
-- 本次状态同步开始前工作区和暂存区：干净
-- 当前未提交修改：仅 `PROJECT_STATUS.md` 的本次 Git / 阶段状态事实同步
-- 暂存修改：无
+- 第 5 阶段开始前工作区和暂存区：干净
+- 第 5 阶段最终提交前修改：`PROJECT_STATUS.md`、`src/components/editor/SlideCanvas.tsx`、`src/utils/presentationPlayback.ts`、`src/utils/exportHtml.ts`，以及未跟踪的 `src/utils/exportPlaybackPlan.ts`、`src/utils/exportPlayerRuntime.ts`
+- 第 5 阶段最终提交前暂存修改：无
 - 单 Clip 预览 V1：已 commit 并 push
 - 第 3 阶段 Click Step 数据与命令层：已验证完成（2026-07-26）
 - 第 3 阶段 GitHub 状态：已 commit 并 push，对应提交 `975f109`
 - 第 4 阶段 PPT 式放映控制器：已验证完成（2026-07-26）
 - 第 4 阶段 GitHub 状态：已 commit 并 push，对应提交 `5391f11`
 - `App.tsx` 渐进式架构拆分计划：已通过文档提交 `a9166c3` commit 并 push；第 5.5 阶段尚未开始
+- 第 5 阶段 HTML 导出 Click Step 同步：**已验证完成（2026-07-28）**
 
 ---
 
@@ -461,7 +462,8 @@ c6e8448 Add Timeline V2 and fix stale animation clip visibility
 - 滚轮向上会取消正在播放的 Sequence 并恢复到此前确定的已完成 Sequence 状态；活动 `slide-enter` 被取消时保持未完成并恢复页面起始态，活动 Click Step 被取消时保留它之前的完成态；没有活动 Sequence 时继续沿用既有逐步回退和上一页末态规则。
 - 滚轮强制步进首轮复测发现：取消活动 `slide-enter` 后状态机虽未把它标记完成，但空 Sequence sample 会让 Canvas 显示静态设计终态，视觉上错误地像已完成。当前已用显式 `slide-enter` 初始帧采样修正；Wheel、`ArrowLeft` 和 `PageUp` 共用的回退路径同时受益，后续核心人工验收已确认回退语义正常。
 - 后续人工验收发现尚未执行的 future Click Sequence 未进入正式放映 Canvas 采样，目标元素会 fallback 到设计终态并提前显示。当前 runtime sample 已明确区分 `pending`、`completed`、`active`：未被历史 Sequence 建立状态的元素使用最早 pending Sequence 的真实 local 0ms Track / Keyframe；同一元素已有 completed / active 状态时，future pending 不参与渲染并不得覆盖历史确定态。
-- pending 或 active Sequence 的目标元素即使最早 Clip 使用正 `startMs`，也会复用 `applyInitialFrameBeforeDelay` 在实际开始前保持该元素最早动画的真实初始帧；同一 Sequence 的后续 Clip 不会提前覆盖前一 Clip。
+- 第 5 阶段人工验收进一步确认：pending 初始基线与 active Clip 参与合成必须分开解释。正式规则已改为 active Clip 在 `localTime < startMs` 时不参与合成；此前没有历史状态的元素可继续保留其 pending 初始基线。
+- 导出 Runtime 修正后，用户继续验收发现编辑器正式放映仍按整个 active Sequence 提前应用 delayed Clip 首帧。当前已把 `presentationPlayback.ts` 的资格判断下沉到逐编译 Animation，并让 `SlideCanvas.tsx` 的正式 Presentation sampling 消费相同的 participating / pending baseline 结果；Timeline V2-B 的 `animationTimelineTimeMs` 预览分支未修改。
 - 滚轮手势先归一化像素 / 行 / 页 delta，再累计到阈值；首次触发后保持手势锁，直到连续 wheel event 静默 `240ms`，一次鼠标滚轮或触控板惯性事件串最多移动一步。
 - 正式放映的非交互区域 wheel 使用非 passive 监听并阻止页面滚动；媒体、原生 / authored 控件、显式 wheel owner、ARIA 滚轮控件、真实可滚动区域、浏览器缩放手势和全屏媒体继续保留输入所有权。
 - 当前页面 Click Step 全部处于稳定完成态后，下一次普通推进或独立的强制向下滚轮才进入下一页；如果最后一个 Step 正在播放，本次向下滚只完成它而不切页。
@@ -517,7 +519,6 @@ PROJECT_STATUS.md
 
 当前未实现且保持边界：
 
-- 第 5 阶段 HTML 导出 Click Step 同步。
 - 第 6 阶段 Click Step 编辑 UI。
 - 第 7 阶段 AE 式 Timeline V2-C 和 Sequence 分组 UI。
 - Marker 重构。
@@ -543,13 +544,13 @@ PROJECT_STATUS.md
 14. 使用三个不同元素分别承载 `slide-enter`、Step 1、Step 2，确认页面进入和 Step 1 播放期间 Step 2 元素均保持自身 local 0ms 初始视觉，不再显示设计终态。
 15. 分别把 Step 1 / Step 2 Clip 设置为淡入、放大进入和上滑进入，确认 pending 状态直接来自真实 Track / Keyframe：透明、透明且缩放至 0.92、透明且下移 28px。
 16. 给 future Step 的最早 Clip 设置正 `startMs`，确认步骤尚未执行以及刚启动后的延迟期间都保持进入前初始视觉，直到局部开始时间到达。
-17. 让同一元素先在 Step 1 完成动画、再在 Step 2 配置动画；Step 2 尚未开始时确认 Step 1 完成态不被 Step 2 local 0ms 覆盖，Step 2 启动时才由其 local 0ms 接管。
+17. 让同一元素先在 Step 1 完成动画、再在 Step 2 配置正 `startMs` 动画；Step 2 尚未开始以及 active local time 尚未到 `startMs` 时确认 Step 1 完成态不被覆盖，到达 `startMs` 后 Step 2 才从首 Keyframe 接管。
 
 下一步边界：
 
 - 第 4 阶段已经完成用户人工验收，并通过提交 `5391f11` commit / push。
-- 下一计划阶段为第 5 阶段“HTML 导出 Click Step 同步”，计划开发但尚未开始。
-- 未经用户明确要求，不开始第 5 阶段产品功能开发。
+- 第 5 阶段“HTML 导出 Click Step 同步”已通过用户人工验收。
+- 下一计划阶段为第 5.5 阶段“渐进式架构拆分维护”，尚未开始。
 
 # 已完成前置：第 3 阶段 Click Step 数据与命令层
 
@@ -562,6 +563,10 @@ PROJECT_STATUS.md
 - 一个 Click Step 直接通过现有 `clipIds` 保存一个或多个 Clip。
 - Click Step 顺序继续以现有 `animationScene.sequenceOrder` 为唯一持久化顺序来源。
 - `AnimationSequence` 正式作为独立动画步骤的局部时间上下文；`AnimationClip.startMs` 正式定义为相对所属 Sequence 局部 0ms 的开始偏移。
+- 正式合成语义：当 Sequence `localTime < clip.startMs` 时，该 Clip 不参与视觉合成、不应用首 Keyframe，也不取得对应元素 / 属性的视觉控制权；只有 `localTime >= clip.startMs` 后，Clip 才从自己的首 Keyframe 开始接管并播放。
+- earlier completed / active 历史确定状态优先于当前 active Sequence 中尚未到 `startMs` 的 Clip；延迟 Clip 在开始前不得覆盖历史视觉。
+- 对此前没有任何历史状态的元素，最早 pending Sequence 仍可用真实 Track / Keyframe 建立并保留“尚未执行”的初始基线，避免设计终态泄漏；该 pending 基线不等于 active Clip 在 `startMs` 前参与合成。
+- 上述规则完全由持久化 Track / Keyframe 和 Sequence-local 时间判断，不得根据 preset ID 或“进入 / 强调 / 退出”等动画类别硬编码。
 - Sequence 的触发时刻属于后续运行时状态，不写回 Clip；用户在页面进入多久后点击都不会改变已保存的 `startMs`。
 - 一个 Clip 只能归属一个 Sequence；Clip 跨 Sequence 移动时保留原有局部 `startMs` 数值，不计算或保存页面绝对时间。
 - 新增创建、修改、触发切换、步骤移动和按稳定顺序读取 Click Step 的不可变命令。
@@ -652,7 +657,7 @@ HTML 本地打开兼容性观察：
 
 - 第 3 阶段已经结束并通过用户验收，对应代码已通过提交 `975f109` push。
 - 第 4 阶段已经直接复用 Sequence-local time、`compileAnimationSequence` 和公共时长规则完成代码实现，并通过用户核心人工验收。
-- 下一计划阶段为第 5 阶段“HTML 导出 Click Step 同步”，尚未开始。
+- 第 5 阶段“HTML 导出 Click Step 同步”已验证完成（2026-07-28）。
 
 ## 已完成前置：单 Clip 预览 V1
 
@@ -702,7 +707,7 @@ src/utils/animationCompiler.ts
 阶段衔接：
 
 - 第 3 阶段“Click Step 数据与命令层”已经用户验收，并通过提交 `975f109` push。
-- 第 4 阶段核心功能已经用户人工验收；第 5 阶段尚未开始。
+- 第 4 阶段核心功能已经用户人工验收；第 5 阶段也已验证完成。
 
 ---
 
@@ -918,11 +923,11 @@ src/App.tsx
 - Click Step 数据与命令层已验证完成。
 - 单 Clip 播放能力稳定。
 - 必须直接使用第 3 阶段已经建立的 Sequence-local time、`compileAnimationSequence` 和 Sequence 级公共计算规则，禁止建立第二套 Click Step 时间模型。
-- 必须等待用户明确要求后才能开始。
+- 用户已于 2026-07-27 明确要求开始第 5 阶段。
 
 ### 第 5 阶段：HTML 导出 Click Step 同步
 
-状态：**计划开发，尚未开始**
+状态：**已验证完成（2026-07-28）**
 
 本阶段架构约束：
 
@@ -931,7 +936,7 @@ src/App.tsx
 - 本阶段禁止为了减少 `App.tsx` 行数进行无关重构，也禁止在实现 HTML Click Step 同步时顺手大拆 `App.tsx`。
 - 不按文件长度机械拆函数；只有存在真实职责边界时才提取模块，避免产生大量单层转发文件。
 - 已有 `useTimelinePlaybackController`、`usePresentationPlaybackController`、`animationSequence` 和 `presentationPlayback` 等独立模块继续作为正确职责方向，不得重新塞回 `App.tsx`。
-- `src/utils/exportHtml.ts` 当前约 1199 行，已经同时承担 portable project / asset packaging、HTML / CSS template、player runtime、DOM / media construction，以及 navigation / keyboard / fullscreen 等职责。
+- `src/utils/exportHtml.ts` 在阶段开始前约 1199 行，同时承担 portable project / asset packaging、HTML / CSS template、player runtime、DOM / media construction，以及 navigation / keyboard / fullscreen 等职责；提取新增运行时并加入最小启动层后当前约 1130 行。
 - 第 5 阶段新增 Click Step playback plan / player runtime 时必须立即控制职责边界，不得继续把所有新逻辑堆入 `exportHtml.ts`。
 - 新增职责优先考虑独立的 `exportPlaybackPlan.ts`、`exportPlayerRuntime.ts`，或依据真实依赖确定的等价模块。
 - 本阶段不借机全面重构现有 `exportHtml.ts`；既有资源打包和 template 的全面整理留到后续独立维护。
@@ -946,13 +951,55 @@ src/App.tsx
 - 导出文件不依赖 Animify 编辑器运行环境。
 - 导出后的资源可以正常读取。
 
-需要检查的文件：
+本轮实现：
+
+- 新增 `src/utils/exportPlaybackPlan.ts`，直接复用 `createPresentationSlidePlaybackPlan`、Sequence 级局部时长和 `compileAnimationSequence(scene, sequenceId)`，为每张页面生成可序列化的 `slide-enter` / Click Step 播放计划与逐 Sequence 编译结果。
+- 新增 `src/utils/exportPlayerRuntime.ts`，只承担当独立 HTML 无法 import 编辑器模块时所需的 standalone DOM / rAF 调度、确定性 WAAPI 采样和输入路由；没有修改持久化动画数据模型。
+- `src/utils/exportHtml.ts` 只保留 portable project / 资源打包、HTML / CSS 模板、DOM / media construction 和新 Runtime 接线；旧的 `slide-enter`-only 动画计时器已移除，文件没有因本阶段继续大量膨胀。
+- 人工验收确认 standalone HTML 首次直接打开时，有声 autoplay media 会受浏览器 user activation 策略限制；此前页面在加载时立即 `renderSlide()`，媒体 `play()` 又被推迟到下一帧，因此首次进入含自动播放音频的页面可能被拒绝。
+- 导出 HTML 现统一显示最小“开始放映”启动层。启动前 `exportPresentationStarted = false`，不 mount 播放计划、不创建 completed / active / pending 状态、不执行第一页 `slide-enter`、不播放媒体，也不响应页面推进、回退、Wheel 或 resize 重挂载。
+- “开始放映”按钮在一次真实 click 内通过 `startExportPresentation()` 只打开一次 Runtime 门闩，随后同步挂载第一页并沿用现有 `enterExportSlide` 正常启动第一页 `slide-enter`；门闩本身不 advance、不消费 Click Step，也不是第二套播放状态机。
+- 启动按钮位于 `app` 放映点击区域之外，同时显式 `preventDefault()` / `stopPropagation()`；重复点击由一次性门闩拒绝，不会额外推进 Step 或翻页。
+- 页面进入媒体仍读取原 `startBehavior`、muted、loop、volume 和 controls 数据；`playSlideMedia()` 改为在启动或导航手势的同步调用栈内调用一次 `play()`。拒绝时继续保留原 warning 和原生 controls，不重试、不强制静音、不使用浏览器 hack。
+- 页面进入时自动从 `slide-enter` Sequence 的局部 0ms 开始；普通推进在活动 Sequence 播放期间保持锁定，稳定态每次只启动一个 Click Step，最后 Step 完成后的下一次推进才进入下一页。
+- Wheel Down / Up 使用与编辑器一致的 `24px` 阈值和 `240ms` 静默手势锁；活动 Sequence 下滚只完成当前 Sequence，活动 Sequence 上滚只取消并恢复前一确定状态。
+- 导出端逐元素、逐编译 Animation 执行 completed / active / pending 确定性采样：历史 completed / 已开始 active 状态优先；只有尚未被历史状态建立视觉的元素才由最早 pending Sequence 的真实 Track / Keyframe 建立初始基线。
+- 第 5 阶段首轮人工验收发现 active Sequence 会把正 `startMs` Clip 的首 Keyframe 提前用于合成，导致 earlier completed 元素在延迟期消失；根因是 Runtime 先按 Sequence 选中 active，再通过 before-delay 标记提前采样该 Sequence 最早 Clip。
+- 当前已把参与资格下沉到每个编译 Animation：`localTime < timing.delay` 时 active Clip 完全不参与；到达 delay 后才从首 Keyframe 接管。此前没有历史状态的元素继续保留既有 pending baseline，避免静态设计终态闪现。
+- future / delayed Clip 不按 preset ID 或动画类别硬编码；判断只使用 Sequence-local time 和真实编译 Track / Keyframe。
+- 编辑器正式放映随后发现同一边界仍由 Sequence 级筛选和 `applyInitialFrameBeforeDelay` 提前接管；现已由 `getPresentationRenderableAnimationSamples` 按逐 Animation 的 Sequence-local delay 判断参与资格，并显式返回独立的 pending baseline 标志。
+- `SlideCanvas` 仅在正式 Presentation 受控采样分支消费该结果：有历史状态时 delayed active Clip 在 `startMs` 前不存在；无历史状态时才保留最早 active / pending Sequence 的真实首帧基线。旧 Timeline V2-B 编辑预览分支保持不变。
+- 返回上一页时直接恢复该页所有 Sequence 完成后的末态；切页和重新挂载时取消上一页 rAF 与 WAAPI 实例。
+- 点击空白区域、Space、Enter、ArrowRight、PageDown 进入统一普通推进；ArrowLeft / PageUp 进入统一回退，并处理 `event.repeat`。
+- 视频、音频、原生 / authored controls、全屏媒体、可滚动区域和 Ctrl / Meta + Wheel 保留输入所有权；非交互放映区域的 wheel 会阻止页面滚动。
+- 只有 `slide-enter` 的旧页面继续自动播放进入动画，完成后下一次推进直接进入下一页。
+- 本轮没有修改 `App.tsx`、Timeline 编辑器预览、动画预设、AnimationClip 数据结构、第 5.5 / 6 / 7 阶段功能或已记录的 Delete Clip UX Bug；`SlideCanvas.tsx` 只修改正式 Presentation sampling 的最小分支。
+
+实际修改文件：
 
 ```text
+PROJECT_STATUS.md
+src/components/editor/SlideCanvas.tsx
+src/utils/presentationPlayback.ts
 src/utils/exportHtml.ts
-src/utils/animationCompiler.ts
-src/types/presentation.ts
+src/utils/exportPlaybackPlan.ts
+src/utils/exportPlayerRuntime.ts
 ```
+
+代码检查：
+
+- `npm.cmd run lint`：通过，0 error、0 warning。
+- `npm.cmd run build`：通过。
+- 项目未定义正式 `test` 脚本，本轮没有新增假的测试命令。
+- 导出播放计划直接断言：7 项通过，覆盖 Sequence 顺序、各 Sequence 局部时长、Step 1 `[0, 1000]` delay、Step 2 局部 0ms 和跨 Sequence 编译隔离。
+- standalone runtime 状态机直接断言：13 项通过，覆盖自动 `slide-enter`、普通播放锁、Wheel Down 单边界、Wheel Up / 稳定态回退、页面起始态和上一页末态。
+- completed / active / pending 确定性采样首轮直接断言：5 项通过，覆盖正 `startMs` pending 初始帧、最早 pending 唯一性、历史状态优先和 active Sequence 正式接管。
+- `startMs` 合成边界与导出播放回归纯逻辑断言 14 项、WAAPI 确定性采样断言 3 项，合计 17 项通过；确认有 earlier completed 状态时 active delayed Clip 在 0ms / 999ms 不参与、1000ms 才接管。
+- 编辑器正式 Presentation sampling 与状态机新增 19 项直接断言通过；覆盖 0ms / 999ms 保持 earlier completed、1000ms 接管、`startMs = 0`、无历史 active / pending baseline、延迟 `slide-enter` 初始态、普通推进锁、Wheel Down / Up 和上一页末态。
+- standalone 启动层新增 29 项直接断言通过：Runtime 16 项覆盖 pre-start 无状态、mount / advance / wheel 禁止、首次开始只开门闩、重复开始无效、首次 mount 只启动第一页 `slide-enter`；生成 HTML 13 项覆盖启动层、隐藏导航、事件不冒泡、同步媒体调用、完整 `file://` 单文档结构和生成脚本语法。
+- `git diff --check`：通过，仅有工作区 LF / CRLF 转换提示。
+- 用户人工测试：已全部通过。用户确认页面进入自动播放、Click Step 顺序与单步推进、最后一步后翻页、completed / active / pending、同一元素跨 Sequence 的历史完成态、普通推进锁、键盘推进、Wheel Down / Up、上一页末态、旧 `slide-enter` 页面兼容、正 `startMs` 合成语义、编辑器正式放映与导出 HTML 一致性、standalone 启动层、有声媒体 autoplay、`file://` 打开及页面导航均正常。
+- QA 测试数据已恢复为测试前原项目，没有保留在项目数据或源码中。
 
 依赖：
 
@@ -1512,6 +1559,23 @@ Step 3 及以后：保持未执行状态
 
 - 对应 UI 功能开发时同步处理。
 
+### 9. 导出 Presentation 品牌启动体验
+
+当前状态：
+
+- 第 5 阶段只实现朴素、稳定的“开始放映”遮罩和按钮，其真实点击同时承担浏览器 user activation 的技术职责。
+
+未来视觉优化：
+
+- 可将普通启动入口升级为 Animify 品牌启动动画。
+- 设想以类似手写路径描绘的方式逐步绘制 “Animify” 字样，完成后短暂停顿，再过渡进入第一页 Presentation。
+- 品牌动画必须继续建立在同一个一次性启动门闩和真实用户点击上，不得另建播放状态机或绕过媒体 autoplay 策略。
+
+阶段边界：
+
+- 这是未来视觉 / 品牌启动体验优化，本轮禁止实现复杂路径动画或 Apple hello 风格效果。
+- 应在 Stage 5 功能完成后另行排期，不阻塞当前朴素启动入口验收。
+
 ---
 
 ## 八、已归入后续阶段的远期需求
@@ -1806,6 +1870,20 @@ GitHub 状态：已 push
 - 当前 Timeline V2-B / 编辑动画幕布尚未完整接入 Click Step Sequence 上下文；“整页播放”仍主要只执行 `slide-enter`。该限制已归入第 7 阶段 Timeline V2-C，不阻塞第 4 阶段完成。
 - 状态：**已验证完成（2026-07-26）**。
 
+### 第 5 阶段 HTML 导出 Click Step 同步代码检查
+
+- 阶段开始基线：`main`、HEAD 和 `origin/main` 均为 `3f73e7dd207d6d08c3c807995f5de3c07949bfb9`，ahead 0、behind 0，工作区和暂存区干净。
+- Lint：`npm.cmd run lint` 通过，0 error、0 warning。
+- Build：`npm.cmd run build` 通过。
+- 自动化测试：项目未定义 `test` 脚本，没有新增假的测试命令。
+- 首轮导出播放计划 7 项、standalone runtime 状态机 13 项、completed / active / pending 采样 5 项，合计 25 项直接断言通过；本次另有 `startMs` 合成边界与播放回归纯逻辑 14 项、WAAPI 采样 3 项，合计 17 项直接断言通过。
+- 新增导出边界断言明确覆盖：有 earlier completed 状态时 active delayed Clip 在 `localTime < startMs` 不参与，到达 `startMs` 才接管；无历史元素保留 pending baseline；`startMs = 0`、普通推进、Wheel、回退和上一页末态保持正常。
+- 新增编辑器正式 Presentation sampling 与状态机直接断言 19 项通过，覆盖同一 startMs 边界、pending baseline、延迟 `slide-enter`、普通推进锁、Wheel Down / Up 和上一页末态。
+- 新增 standalone 启动层直接断言 29 项通过：Runtime 16 项、生成 HTML 13 项；覆盖 pre-start 无状态、一次性 `startExportPresentation()`、首次 mount 只进入第一页 `slide-enter`、启动点击不冒泡、不额外 advance、媒体调用不再脱离启动 / 导航手势，以及生成脚本语法有效。
+- `git diff --check`：通过，仅有 LF / CRLF 转换提示。
+- 实际产品人工测试：全部通过。用户确认 `slide-enter` 自动播放、Click Step 独立单步推进与最后一步后翻页、future pending 隐藏、跨 Sequence 历史完成态、普通推进锁、键盘与 Wheel 导航、逐步回退和上一页末态、旧页面兼容、正 `startMs` 合成语义、编辑器与导出一致性、standalone 启动层、有声媒体 autoplay、`file://` 打开及按钮导航均正常。
+- 状态：**已验证完成（2026-07-28）**。
+
 ### 阶段转换记录
 
 ```text
@@ -1830,8 +1908,12 @@ GitHub 状态：已 push
 2026-07-26：用户完成第 4 阶段正式放映核心人工验收，PPT 式放映控制器正式标记为已验证完成
 2026-07-26：第 4 阶段已通过提交 5391f11 commit 并 push，main 与 origin/main 同步
 2026-07-27：App.tsx 渐进式架构拆分计划已通过文档提交 a9166c3 commit 并 push
-当前状态：第 4 阶段已验证完成并已 push；第 5 阶段和第 5.5 阶段均尚未开始
-下一计划阶段：第 5 阶段“HTML 导出 Click Step 同步”，计划开发但尚未开始
+2026-07-27：第 5 阶段“HTML 导出 Click Step 同步”完成代码实现、Lint、Build、Diff 检查和 25 项直接断言
+2026-07-27：第 5 阶段人工验收发现 active delayed Clip 提前应用首 Keyframe；export Runtime 已改为 localTime >= startMs 才参与合成，并完成 17 项边界与播放回归断言
+2026-07-27：继续验收发现编辑器正式放映仍有同一边界；Presentation sampling 已改为逐 Animation 参与资格并完成 19 项直接断言，等待用户复测
+2026-07-27：继续验收发现 standalone 有声媒体首次 autoplay 受浏览器 user activation 限制；已增加一次性“开始放映”入口并完成 29 项启动层直接断言
+2026-07-28：用户确认第 5 阶段全部人工验收通过，QA 数据已恢复为测试前原项目
+当前状态：第 5 阶段已验证完成；下一计划阶段为第 5.5 阶段，尚未开始
 ```
 
 ---
@@ -1848,8 +1930,10 @@ GitHub 状态：已 push
 - `App.tsx` 渐进式架构拆分计划已通过文档提交 `a9166c3` commit 并 push；第 5.5 阶段已规划但尚未开始。
 - 第 4 阶段直接复用 Sequence-local time、`compileAnimationSequence` 和 Sequence 级公共计算规则，没有另建 Click Step 时间模型。
 - 滚轮强制步进仍接入同一个 Presentation Playback Controller；普通推进锁保持不变，Wheel Down / Up 均遵守一次手势只跨一个确定状态边界，并已通过用户人工验收。
-- 下一计划阶段为第 5 阶段“HTML 导出 Click Step 同步”，但尚未开始；不得提前开发第 6 阶段界面或其他后续功能。
-- 第 5 阶段期间限制 `App.tsx` 继续膨胀，但不进行无关大重构；第 5 阶段验收并 commit / push 后，必须先执行独立的第 5.5 阶段渐进式职责拆分，再进入第 6 阶段。
+- 第 5 阶段“HTML 导出 Click Step 同步”已经完成代码实现、代码级检查和用户人工验收，正式标记为已验证完成。
+- 第 5 阶段新增职责已进入 `exportPlaybackPlan.ts` 和 `exportPlayerRuntime.ts`，没有修改 `App.tsx` 或开始无关大重构。
+- standalone HTML 必须先由用户点击“开始放映”；启动前没有播放状态或媒体 autoplay，启动点击只进入第一页并为后续有声媒体提供浏览器 user activation，该行为已经用户人工验收。
+- 下一计划阶段是独立的第 5.5 阶段渐进式职责拆分；完成必要的一轮拆分后才进入第 6 阶段。
 - 原暂缓项目已经分配到第 7、9、10、11、12 阶段；不得提前并行开发。
 
 ### 下次第一步：安全检查
@@ -1865,29 +1949,31 @@ git diff --cached
 
 不得直接执行 pull、reset、clean、rebase、merge、restore 或其他 Git 写操作。
 
-### 第 4 阶段完成后的边界
+### 第 5 阶段代码实现后的边界
 
 1. 第 3 阶段数据与命令层已经用户验证，并通过提交 `975f109` push。
-2. 第 4 阶段已实现 PPT 式放映控制器，但尚未开发 Click Step 编辑 UI、HTML 导出同步或 Timeline V2-C。
-3. `AnimationClip.startMs` 继续只表示相对所属 Sequence 局部 0ms；运行时触发时间不进入持久化数据。
+2. 第 5 阶段已实现独立 HTML 的 Click Step 同步；Click Step 编辑 UI 和 Timeline V2-C 仍未开发。
+3. `AnimationClip.startMs` 继续只表示相对所属 Sequence 局部 0ms；运行时触发时间不进入持久化数据。`localTime < startMs` 时 Clip 不参与视觉合成，到达 `startMs` 后才从首 Keyframe 接管；该规则不依赖 preset ID 或动画类别。
 4. 放映控制器直接使用 `AnimationSequence`、`sequenceOrder`、Sequence 级有效时长和 `compileAnimationSequence`。
 5. 已完成 Sequence 和当前 Sequence 都以各自的局部时间采样，不存在 Click Step 页面绝对时间模型。
 6. 正式放映只运行一个 rAF 调度循环，并与编辑器 Timeline、单 Clip 预览互斥。
 7. 普通前进保护、滚轮强制前进 / 回退、切页恢复和媒体 / 可滚动控件保护已形成独立可测试阶段。
 8. 旧项目继续保持默认 `slide-enter` 行为，原 `startMs` 数值无需迁移。
 9. Marker 保持 Scene-level，归属方案留到 Timeline V2-C 前决定。
-10. 第 4 阶段正式放映核心功能已通过用户人工验收；当前停止，第 5 阶段尚未开始。
+10. standalone HTML 在启动前不创建播放状态；一次真实“开始放映”点击只打开门闩并正常进入第一页，媒体 autoplay 不采用重试、强制静音或浏览器 hack。
+11. 第 5 阶段代码实现、代码级检查和人工验收均已完成；下一计划阶段为第 5.5 阶段，尚未开始。
 
 ### Git 状态说明
 
-- 当前基线提交：`a9166c3ec7376d009a3d6f50e6cd982ee94e9996`。
-- 当前 `main` 与 `origin/main` 一致，ahead 0、behind 0。
+- 第 5 阶段开始基线提交：`3f73e7dd207d6d08c3c807995f5de3c07949bfb9`。
+- 第 5 阶段最终提交前 `main` 与 `origin/main` 一致，ahead 0、behind 0。
 - 第 3 阶段已经 commit 并 push。
 - 第 4 阶段已经通过提交 `5391f11` commit 并 push。
 - `App.tsx` 渐进式架构拆分计划已经通过文档提交 `a9166c3` commit 并 push。
-- 本次状态同步开始前工作区和暂存区干净。
-- 当前未提交文件：仅 `PROJECT_STATUS.md`。
-- 暂存修改：无。
-- 后续 commit 和 push 仍需用户明确授权。
+- 第 5 阶段收尾提交范围固定为本文件与 5 个 Stage 5 产品文件；用户已明确授权使用提交信息 `feat: sync click steps in html export` 完成提交和推送。
+- 第 5 阶段开始前工作区和暂存区干净；最终提交前暂存区同样为空。
+- 第 5 阶段最终提交前未提交范围：`PROJECT_STATUS.md`、`src/components/editor/SlideCanvas.tsx`、`src/utils/presentationPlayback.ts`、`src/utils/exportHtml.ts`、`src/utils/exportPlaybackPlan.ts`、`src/utils/exportPlayerRuntime.ts`。
+- 第 5 阶段最终提交前暂存修改：无。
+- 第 5.5 阶段不得随本次提交开始，必须等待用户后续明确要求。
 
 未经用户允许，不得 commit 或 push。

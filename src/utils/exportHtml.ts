@@ -3,7 +3,8 @@ import type {
   PresentationProject,
 } from "../types/presentation";
 import { blobToDataUrl, getAssetBlob } from "./assetStore";
-import { compileSlideAnimations } from "./animationCompiler";
+import { createExportPlaybackPlans } from "./exportPlaybackPlan";
+import { getExportPlayerRuntimeScript } from "./exportPlayerRuntime";
 
 type PortablePresentationAsset = PresentationAsset & {
   source?: string;
@@ -143,24 +144,10 @@ async function createPortableProject(
  */
 function createHtmlDocument(project: PortablePresentationProject) {
   const serializedProject = escapeScriptJson(project);
-
-  /**
-   * Compile every slide before export.
-   *
-   * The exported player receives the same browser-ready animation data used by
-   * SlideCanvas, so canvas preview, presentation mode, and HTML export share one
-   * animation compiler.
-   */
-  const compiledAnimationsBySlide = Object.fromEntries(
-    project.slides.map((slide) => [
-      slide.id,
-      compileSlideAnimations(slide.animationScene),
-    ]),
+  const serializedPlaybackPlans = escapeScriptJson(
+    createExportPlaybackPlans(project.slides),
   );
-
-  const serializedCompiledAnimations = escapeScriptJson(
-    compiledAnimationsBySlide,
-  );
+  const exportPlayerRuntimeScript = getExportPlayerRuntimeScript();
 
   return `<!doctype html>
 <html lang="zh-CN">
@@ -182,6 +169,10 @@ function createHtmlDocument(project: PortablePresentationProject) {
       box-sizing: border-box;
     }
 
+    [hidden] {
+      display: none !important;
+    }
+
     body {
       margin: 0;
       min-height: 100vh;
@@ -197,6 +188,63 @@ function createHtmlDocument(project: PortablePresentationProject) {
       display: flex;
       align-items: center;
       justify-content: center;
+    }
+
+    .presentation-start-layer {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(2, 6, 23, 0.94);
+    }
+
+    .presentation-start-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 18px;
+      width: min(420px, 100%);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 24px;
+      padding: 36px;
+      background: rgba(15, 23, 42, 0.88);
+      box-shadow: 0 28px 90px rgba(0, 0, 0, 0.45);
+      text-align: center;
+    }
+
+    .presentation-start-card p {
+      margin: 0;
+      color: rgba(226, 232, 240, 0.76);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .presentation-start-button {
+      min-width: 168px;
+      border: 0;
+      border-radius: 999px;
+      padding: 14px 24px;
+      background: #8b5cf6;
+      color: #ffffff;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: 800;
+      transition:
+        transform 160ms ease,
+        background 160ms ease;
+    }
+
+    .presentation-start-button:hover {
+      transform: translateY(-1px);
+      background: #7c3aed;
+    }
+
+    .presentation-start-button:focus-visible {
+      outline: 3px solid rgba(196, 181, 253, 0.88);
+      outline-offset: 4px;
     }
 
     .slide {
@@ -353,27 +401,45 @@ function createHtmlDocument(project: PortablePresentationProject) {
 <body>
   <div id="app"></div>
 
-  <div class="controls" aria-label="放映控制">
+  <div
+    class="presentation-start-layer"
+    id="presentationStartLayer"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="presentationStartTitle"
+  >
+    <div class="presentation-start-card">
+      <p id="presentationStartTitle">演示已准备好</p>
+      <button
+        class="presentation-start-button"
+        type="button"
+        id="startPresentationButton"
+      >
+        开始放映
+      </button>
+    </div>
+  </div>
+
+  <div
+    class="controls"
+    id="presentationControls"
+    aria-label="放映控制"
+    hidden
+  >
     <button type="button" id="prevButton">上一页</button>
     <span class="counter" id="slideCounter"></span>
     <button type="button" id="nextButton">下一页</button>
   </div>
 
-  <div class="hint">方向键 / 空格翻页，Esc 可退出全屏</div>
+  <div class="hint" id="presentationHint" hidden>点击空白 / 方向键 / 空格逐步播放，滚轮可强制步进</div>
 
   <script>
     const project = ${serializedProject};
-    const compiledAnimationsBySlide = ${serializedCompiledAnimations};
+    const playbackPlansBySlide = ${serializedPlaybackPlans};
 
     // Exported presentations should always start from the first slide,
     // no matter which slide was active when the user clicked export.
     let activeSlideIndex = 0;
-
-    /**
-     * Keep delayed Clip timers so slide switching and window resizing can cancel
-     * work scheduled for the previous rendered slide.
-     */
-    let pendingAnimationTimers = [];
 
     /**
      * Fullscreen changes also trigger browser resize events.
@@ -418,9 +484,21 @@ function createHtmlDocument(project: PortablePresentationProject) {
     );
 
     const app = document.getElementById("app");
+    const presentationStartLayer = document.getElementById(
+      "presentationStartLayer",
+    );
+    const startPresentationButton = document.getElementById(
+      "startPresentationButton",
+    );
+    const presentationControls = document.getElementById(
+      "presentationControls",
+    );
+    const presentationHint = document.getElementById("presentationHint");
     const prevButton = document.getElementById("prevButton");
     const nextButton = document.getElementById("nextButton");
     const slideCounter = document.getElementById("slideCounter");
+
+${exportPlayerRuntimeScript}
 
     function escapeHtml(value) {
       return String(value ?? "")
@@ -477,177 +555,11 @@ function createHtmlDocument(project: PortablePresentationProject) {
       };
     }
 
-    /**
-     * Play Animation Schema V2 compiler output on the exported slide.
-     *
-     * Animation data is already compiled before export, so this player only needs
-     * to create Web Animations API instances from the serialized keyframes.
-     */
-    function playSlideAnimations(
-      slideNode,
-      compiledSlideAnimations,
-    ) {
-      /**
-       * Cancel delayed Clips belonging to the previous render before scheduling
-       * the current slide.
-       */
-      pendingAnimationTimers.forEach(
-        (timerId) => {
-          window.clearTimeout(timerId);
-        },
-      );
-
-      pendingAnimationTimers = [];
-
-      const animationNodes =
-        slideNode.querySelectorAll(
-          "[data-element-id]",
-        );
-
-      animationNodes.forEach((node) => {
-        node
-          .getAnimations()
-          .forEach((animation) => {
-            animation.cancel();
-          });
-
-        const elementId =
-          node.dataset.elementId;
-
-        const elementAnimations =
-          compiledSlideAnimations
-            ?.byElementId?.[elementId] || [];
-
-        elementAnimations.forEach(
-          (compiledAnimation) => {
-            const timing =
-              compiledAnimation.timing || {};
-
-            const startDelay = Math.max(
-              0,
-              Number(timing.delay ?? 0),
-            );
-
-            /**
-             * Create a Clip only when its start time arrives. Creating all Clips
-             * immediately would let a later fill: "both" animation cover earlier
-             * animations while it is still waiting inside its delay period.
-             */
-            const timerId = window.setTimeout(
-              () => {
-                if (!node.isConnected) {
-                  return;
-                }
-
-                const keyframes = (
-                  compiledAnimation.keyframes ||
-                  []
-                ).map((frame) => {
-                  const keyframe = {
-                    offset: Number(
-                      frame.offset ?? 0,
-                    ),
-                  };
-
-                  if (
-                    typeof frame.opacity ===
-                    "number"
-                  ) {
-                    keyframe.opacity =
-                      frame.opacity;
-                  }
-
-                  if (
-                    typeof frame.transform ===
-                    "string"
-                  ) {
-                    keyframe.transform =
-                      frame.transform;
-                  }
-
-                  if (
-                    typeof frame.easing ===
-                    "string"
-                  ) {
-                    keyframe.easing =
-                      frame.easing;
-                  }
-
-                  return keyframe;
-                });
-
-                if (
-                  keyframes.length === 0
-                ) {
-                  return;
-                }
-
-                const runningAnimation =
-                  node.animate(keyframes, {
-                    delay: 0,
-                    duration: Math.max(
-                      1,
-                      Number(
-                        timing.duration ?? 1,
-                      ),
-                    ),
-                    fill:
-                      timing.fill || "both",
-                    iterations: Math.max(
-                      1,
-                      Number(
-                        timing.iterations ?? 1,
-                      ),
-                    ),
-                    direction:
-                      timing.direction ||
-                      "normal",
-
-                    // Compiled keyframes contain their own segment easing.
-                    easing: "linear",
-                  });
-
-                runningAnimation.playbackRate =
-                  Number(
-                    compiledAnimation.playbackRate,
-                  ) > 0
-                    ? Number(
-                        compiledAnimation.playbackRate,
-                      )
-                    : 1;
-              },
-              startDelay,
-            );
-
-            pendingAnimationTimers.push(
-              timerId,
-            );
-          },
-        );
-      });
-    }
-
-    function createElementNode(element, compiledSlideAnimations) {
+    function createElementNode(element) {
       const style = element.style || {};
       const asset = getAsset(element.assetId);
 
       const mediaSettings =getMediaSettings(element,);
-
-      const elementAnimations =
-        compiledSlideAnimations?.byElementId?.[element.id] || [];
-
-      /**
-       * Only backward-filling animations need their first frame applied before
-       * element.animate() starts. This prevents entrance animations from briefly
-       * flashing their final state during the first rendered frame.
-       */
-      const initialAnimation = elementAnimations.find((animation) => {
-        const fill = animation.timing?.fill;
-
-        return fill === "backwards" || fill === "both";
-      });
-
-      const initialFrame = initialAnimation?.keyframes?.[0];
 
       const node = document.createElement("div");
       const contentNode = document.createElement("div");
@@ -674,15 +586,6 @@ function createHtmlDocument(project: PortablePresentationProject) {
       contentNode.style.fontSize = String(style.fontSize ?? 16) + "px";
       contentNode.style.fontWeight = String(style.fontWeight ?? 400);
       contentNode.style.borderRadius = String(style.borderRadius ?? 0) + "px";
-
-      if (typeof initialFrame?.opacity === "number") {
-        contentNode.style.opacity = String(initialFrame.opacity);
-      }
-
-      if (typeof initialFrame?.transform === "string") {
-        contentNode.style.transform = initialFrame.transform;
-      }
-
 
       // Image elements only store assetId on the slide. Resolve the real image
       // data from project.assets so exported presentations show the image
@@ -900,8 +803,9 @@ function createHtmlDocument(project: PortablePresentationProject) {
     }
 
     /**
-     * Start every media element configured for slide-entry playback  after the slide
-     * has entered the document.
+     * Start every media element configured for slide-entry playback after the
+     * slide has entered the document. Calls stay inside the navigation gesture;
+     * rejected playback remains a single handled browser-policy failure.
      */
     function playSlideMedia(
       slideNode,
@@ -938,7 +842,7 @@ function createHtmlDocument(project: PortablePresentationProject) {
       );
     }
 
-    function renderSlide() {
+    function renderSlide(position = "start", preservePlaybackState = false) {
       const slide = project.slides[activeSlideIndex];
 
       if (!slide) {
@@ -946,12 +850,12 @@ function createHtmlDocument(project: PortablePresentationProject) {
         return;
       }
 
-      const compiledSlideAnimations =
-        compiledAnimationsBySlide[slide.id] || {
-          revision: 0,
-          byElementId: {},
-          diagnostics: [],
-        };
+      const playbackPlan = playbackPlansBySlide[slide.id];
+
+      if (!playbackPlan) {
+        app.innerHTML = "<p>当前页面缺少动画播放计划。</p>";
+        return;
+      }
 
       const viewportWidth = window.innerWidth;
       const viewportHeight = window.innerHeight;
@@ -970,51 +874,63 @@ function createHtmlDocument(project: PortablePresentationProject) {
 
       for (const element of slide.elements || []) {
         slideNode.appendChild(
-          createElementNode(element, compiledSlideAnimations),
+          createElementNode(element),
         );
       }
 
       app.replaceChildren(slideNode);
 
-      // Play exported animations after the slide has been mounted into the DOM.
-      // requestAnimationFrame makes page switching more reliable, especially
-      // when the browser needs one frame to apply the newly inserted elements.
-      requestAnimationFrame(() => {
-        playSlideAnimations(
-          slideNode,
-          compiledSlideAnimations,
-        );
+      /**
+       * Apply deterministic Sequence samples synchronously so pending entrance
+       * frames are in place before the newly mounted slide can paint.
+       */
+      mountExportPlayback(
+        slideNode,
+        playbackPlan,
+        position,
+        preservePlaybackState,
+      );
 
-        playSlideMedia(
-          slideNode,
-        );
-      });
+      if (!preservePlaybackState) {
+        playSlideMedia(slideNode);
+      }
 
       slideCounter.textContent = \`\${activeSlideIndex + 1} / \${project.slides.length}\`;
       prevButton.disabled = activeSlideIndex <= 0;
       nextButton.disabled = activeSlideIndex >= project.slides.length - 1;
     }
 
-    function goToSlide(nextIndex) {
-      if (nextIndex < 0 || nextIndex >= project.slides.length) {
+    function goToSlide(nextIndex, position = "start") {
+      if (
+        !isExportPresentationStarted() ||
+        nextIndex < 0 ||
+        nextIndex >= project.slides.length
+      ) {
         return;
       }
 
       activeSlideIndex = nextIndex;
-      renderSlide();
+      renderSlide(position, false);
     }
 
     prevButton.addEventListener("click", () => {
-      goToSlide(activeSlideIndex - 1);
+      goToSlide(activeSlideIndex - 1, "end");
     });
 
     nextButton.addEventListener("click", () => {
-      goToSlide(activeSlideIndex + 1);
+      goToSlide(activeSlideIndex + 1, "start");
     });
+
+    app.addEventListener("click", handleExportPresentationClick);
+    window.addEventListener("wheel", handleExportWheel, { passive: false });
 
     window.addEventListener(
       "keydown",
       (event) => {
+        if (!isExportPresentationStarted()) {
+          return;
+        }
+
         const fullscreenElement =
           document.fullscreenElement;
 
@@ -1078,48 +994,39 @@ function createHtmlDocument(project: PortablePresentationProject) {
           }
         }
 
-        const target =
-          event.target;
-
         /**
-         * Media elements outside fullscreen keep their own native keyboard controls.
+         * Native media and authored controls retain keyboard ownership outside
+         * fullscreen as well. Focus is checked because browser media controls may
+         * retarget keyboard events through their internal shadow DOM.
          */
         if (
-          target instanceof
-          HTMLMediaElement
+          isExportPresentationInteractionTarget(event.target) ||
+          isExportPresentationInteractionTarget(document.activeElement)
         ) {
           return;
         }
 
-        if (
-          event.key ===
-            "ArrowRight" ||
+        const advances =
+          event.key === "ArrowRight" ||
           event.key === " " ||
-          event.key ===
-            "Enter" ||
-          event.key ===
-            "PageDown"
-        ) {
+          event.key === "Enter" ||
+          event.key === "PageDown";
+        const retreats =
+          event.key === "ArrowLeft" ||
+          event.key === "PageUp";
+
+        if (advances || retreats) {
           event.preventDefault();
 
-          goToSlide(
-            activeSlideIndex + 1,
-          );
+          if (event.repeat) {
+            return;
+          }
 
-          return;
-        }
-
-        if (
-          event.key ===
-            "ArrowLeft" ||
-          event.key ===
-            "PageUp"
-        ) {
-          event.preventDefault();
-
-          goToSlide(
-            activeSlideIndex - 1,
-          );
+          if (advances) {
+            handleExportAdvance();
+          } else {
+            handleExportRetreat();
+          }
 
           return;
         }
@@ -1153,6 +1060,7 @@ function createHtmlDocument(project: PortablePresentationProject) {
         window.setTimeout(
           () => {
             if (
+              !isExportPresentationStarted() ||
               document.fullscreenElement ||
               performance.now() <
                 fullscreenTransitionUntil
@@ -1160,7 +1068,7 @@ function createHtmlDocument(project: PortablePresentationProject) {
               return;
             }
 
-            renderSlide();
+            renderSlide("start", true);
           },
           160,
         );
@@ -1171,7 +1079,30 @@ function createHtmlDocument(project: PortablePresentationProject) {
       handleViewportResize,
     );
 
-    renderSlide();
+    /**
+     * Start exactly once from a trusted click. The gate itself never advances
+     * playback; rendering page one performs the normal slide-entry transition
+     * and media play calls synchronously inside this gesture.
+     */
+    function startPresentation() {
+      if (!startExportPresentation()) {
+        return false;
+      }
+
+      presentationStartLayer.hidden = true;
+      presentationControls.hidden = false;
+      presentationHint.hidden = false;
+      renderSlide("start", false);
+      return true;
+    }
+
+    startPresentationButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      startPresentation();
+    });
+
+    startPresentationButton.focus({ preventScroll: true });
   </script>
 </body>
 </html>`;

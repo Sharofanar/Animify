@@ -1,5 +1,10 @@
 import { useState } from "react";
 import type {
+  ActiveAnimationContext,
+  AnimationWorkspaceDisplayMode,
+  ElementBatchUpdate,
+} from "../../types/editor";
+import type {
   AnimationClip,
   AnimationScene,
   SlideElement,
@@ -17,20 +22,8 @@ type LayerAction =
 
 type PropertyTab = "basic" | "font" | "animation" | "layer";
 
-type AnimationWorkspaceDisplayMode = "on-demand" | "always";
-
-type ElementUpdates = Partial<Omit<SlideElement, "style">> & {
-  style?: Partial<SlideElement["style"]>;
-};
-
 type PropertyUpdateOptions = {
   recordHistory?: boolean;
-};
-
-type ActiveAnimationContext = {
-  elementId: string;
-  clipId: string;
-  requestId: number;
 };
 
 type PageAnimationItem = {
@@ -38,11 +31,6 @@ type PageAnimationItem = {
   elementId: string;
   elementName: string;
   sequenceName: string;
-};
-
-type ElementBatchUpdate = {
-  elementId: string;
-  updates: ElementUpdates;
 };
 
 type PropertyPanelProps = {

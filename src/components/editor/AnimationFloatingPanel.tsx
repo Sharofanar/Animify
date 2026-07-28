@@ -4,6 +4,10 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import type {
+  ActiveAnimationContext,
+  TimelinePlaybackStatus,
+} from "../../types/editor";
 import type { AnimationScene, SlideElement } from "../../types/presentation";
 import type {
   AddAnimationClipCommand,
@@ -27,12 +31,6 @@ type AnimationEditOptions = {
   recordHistory?: boolean;
 };
 
-type ActiveAnimationContext = {
-  elementId: string;
-  clipId: string;
-  requestId: number;
-};
-
 type AnimationFloatingPanelProps = {
   visible: boolean;
   persistent?: boolean;
@@ -42,7 +40,7 @@ type AnimationFloatingPanelProps = {
   onSelectClip?: (elementId: string, clipId: string) => void;
   onClose?: () => void;
   onReplayAnimation?: () => void;
-  clipPreviewStatus?: "idle" | "playing" | "paused";
+  clipPreviewStatus?: TimelinePlaybackStatus;
   clipPreviewAvailable?: boolean;
   onToggleClipPreview?: () => void;
   onReplayClipPreview?: () => void;

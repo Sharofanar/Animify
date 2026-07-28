@@ -5,15 +5,11 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import type {
+  ActiveAnimationContext,
+  TimelinePlaybackStatus,
+} from "../../types/editor";
 import type { AnimationClip, SlideElement } from "../../types/presentation";
-
-type ActiveAnimationContext = {
-  elementId: string;
-  clipId: string;
-  requestId: number;
-};
-
-type TimelinePlaybackStatus = "idle" | "playing" | "paused";
 
 type AnimationTimelineProps = {
   elements: SlideElement[];

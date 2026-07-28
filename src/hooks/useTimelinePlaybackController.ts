@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { TimelinePlaybackStatus } from "../types/editor";
 
-export type TimelinePlaybackStatus = "idle" | "playing" | "paused";
+export type { TimelinePlaybackStatus } from "../types/editor";
 
 type TimelinePlaybackSnapshot = {
   slideId: string;

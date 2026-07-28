@@ -3,7 +3,7 @@
 > 最后更新：2026-07-28
 > 仓库：`https://github.com/Sharofanar/Animify`  
 > 主分支：`main`  
-> 第 5.5 阶段 Batch 1 开始基线：`f29b255 feat: sync click steps in html export`
+> 当前稳定基线：`23e4901 refactor: extract low risk editor boundaries`
 
 本文档是 Animify 当前开发状态的长期事实来源。
 
@@ -34,12 +34,13 @@
 当前已知 GitHub `origin/main` 最新提交：
 
 ```text
-f29b255 feat: sync click steps in html export
+23e4901 refactor: extract low risk editor boundaries
 ```
 
 该提交之前已知的连续功能提交包括：
 
 ```text
+f29b255 feat: sync click steps in html export
 3f73e7d docs: add architecture cleanup roadmap
 a9166c3 docs: plan App architecture cleanup
 5391f11 feat: add step-based presentation playback
@@ -151,22 +152,24 @@ Tailwind CSS、dnd-kit 以及其他依赖的当前实际版本和使用范围，
 - 两个维护文件仍未被 Git 跟踪，存在被误删或未随仓库传递的维护风险，但不影响本地运行和人工回归；未经用户允许不得执行 `git add`。
 - 结论：**第 0 阶段可以正式结束，可以进入第 1 阶段“最新基线回归测试”。**
 
-### 5. 第 5.5 阶段 Batch 1 收尾前 Git 状态
+### 5. 当前权威 Git 基线与第 5.5 阶段状态
 
 复核日期：2026-07-28
 
 - 当前分支：`main`
-- 当前 HEAD：`f29b25546009a8b375f2ae61c825418a3325be88`
-- 本地 `origin/main`：`f29b25546009a8b375f2ae61c825418a3325be88`
-- 最新提交：`f29b255 feat: sync click steps in html export`
+- 当前 HEAD：`23e49015384380b48231e9e65d2f42adce57fc6c`
+- 本地 `origin/main`：`23e49015384380b48231e9e65d2f42adce57fc6c`
+- 最新提交：`23e4901 refactor: extract low risk editor boundaries`
 - 本地与 `origin/main`：ahead 0、behind 0
-- 第 5.5 阶段 Batch 1 开始前工作区和暂存区：干净
-- 当前未提交修改：`PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/AnimationFloatingPanel.tsx`、`src/components/editor/AnimationTimeline.tsx`、`src/components/editor/PropertyPanel.tsx`、`src/hooks/useTimelinePlaybackController.ts`，以及未跟踪的 `src/components/editor/SlideNavigator.tsx`、`src/types/editor.ts`、`src/utils/slideOperations.ts`
-- 暂存修改：无
+- 本轮 `PROJECT_STATUS.md` 状态同步开始前工作区：干净
+- 本轮 `PROJECT_STATUS.md` 状态同步开始前暂存区：干净
+- 状态同步开始前未提交修改：无
+- 状态同步开始前暂存修改：无
 - 第 5 阶段 HTML 导出 Click Step 同步：已验证完成并通过提交 `f29b255` push
 - 第 5.5 阶段：已开始
-- 第 5.5 阶段 Batch 1：**已验证完成（2026-07-28）**
-- 第 5.5 阶段 Batch 2：尚未开始
+- 第 5.5 阶段 Batch 1：**已验证完成并通过提交 `23e4901` push（2026-07-28）**
+- 第 5.5 阶段 Batch 2 前置只读架构审计：已完成
+- 第 5.5 阶段 Batch 2：尚未开始代码实现
 
 ---
 
@@ -548,7 +551,7 @@ PROJECT_STATUS.md
 
 - 第 4 阶段已经完成用户人工验收，并通过提交 `5391f11` commit / push。
 - 第 5 阶段“HTML 导出 Click Step 同步”已通过用户人工验收。
-- 下一计划阶段为第 5.5 阶段“渐进式架构拆分维护”，尚未开始。
+- 第 5.5 阶段“渐进式架构拆分维护”已经开始；Batch 1 已验证完成并通过提交 `23e4901` push，Batch 2 前置只读审计已完成，Batch 2 尚未开始代码实现。
 
 # 已完成前置：第 3 阶段 Click Step 数据与命令层
 
@@ -1006,7 +1009,7 @@ src/utils/exportPlayerRuntime.ts
 
 ### 第 5.5 阶段：渐进式架构拆分维护
 
-状态：**正在开发（Batch 1 已验证完成；Batch 2 尚未开始）**
+状态：**正在进行（Batch 1 已验证完成并 push；Batch 2 前置只读审计已完成，代码实现尚未开始）**
 
 #### 1. 阶段位置与总体原则
 
@@ -1017,7 +1020,8 @@ src/utils/exportPlayerRuntime.ts
 - 不创建大量只有一层转发的无意义文件，不把已经独立的职责重新塞回 `App.tsx`。
 - 每个 Batch 必须独立完成：开发 → lint → build → `git diff --check` → 对应人工回归 → 独立 commit → 独立 push。
 - 禁止一次完成全部第 5.5 阶段重构；每个 Batch 验收并完成 Git 闭环后，才能进入下一 Batch。
-- 第 5.5 阶段已于 2026-07-28 开始；Batch 1 首轮人工验收发现的页面复制关键帧问题已修复，用户复测确认全部通过；Batch 1 已验证完成，Batch 2 及以后尚未开始。
+- 第 5.5 阶段已于 2026-07-28 开始；Batch 1 首轮人工验收发现的页面复制关键帧问题已修复，用户复测确认全部通过；Batch 1 已通过提交 `23e4901 refactor: extract low risk editor boundaries` 完成 commit / push。
+- Batch 2 前置只读架构审计已完成；Batch 2A / 2B 目前仅完成职责边界和执行顺序规划，尚未开始代码实现。
 
 #### 2. 已确认架构事实与治理优先级
 
@@ -1090,7 +1094,8 @@ src/utils/exportPlayerRuntime.ts
 - `handleDuplicateSlide`、`commitProjectChange`、Undo / Redo 快照入口均未修改，因此页面复制仍是一个既有历史事务。
 - project / history / persistence、`commitProjectChange`、Undo / Redo、autosave、asset lifecycle、selection、playback 与 `SlideCanvas` sampling 均保留原位。
 - Stage 5 的 `SlideCanvas`、Presentation sampling、HTML export 与 standalone Runtime 未修改。
-- Batch 2 尚未开始；本轮未修改 `animationCommands.ts`、PropertyPanel 结构、AnimationTrackInspector、Timeline V2-B、Stage 6 / 7 或 Delete Clip Bug。
+- Batch 1 已完成人工验证、commit 和 push；正式提交为 `23e49015384380b48231e9e65d2f42adce57fc6c refactor: extract low risk editor boundaries`。
+- Batch 2 尚未开始代码实现；本轮未修改 `animationCommands.ts`、PropertyPanel 结构、AnimationTrackInspector、Timeline V2-B、Stage 6 / 7 或 Delete Clip Bug。
 
 实际提交文件：
 
@@ -1112,7 +1117,13 @@ src/utils/slideOperations.ts
 - 项目仍未定义 `test` 脚本；本轮没有新增测试框架或假的 test 命令。
 - `git diff --check` 通过，仅有 Git 的 LF / CRLF 转换提示。
 - 页面复制回归不落盘直接断言：27 项通过，覆盖普通元素、完整 Sequence / Clip / Track / Keyframe、Keyframe offset / value / easing / hold、各级 ID 与引用重映射、legacy mirror、Path / Marker、资源 / media 语义、深复制隔离，以及 Undo / Redo 快照中的关键帧保留。
-- 用户人工验收通过：Slide Navigator / Sortable Slide Card、slide operations、editor contract types、完整动画 Scene 深复制、页面复制隔离、Undo / Redo、页面排序 / 新增 / 删除均正常；Timeline、正式放映与 HTML export 无回归。
+- 用户人工验收通过：Slide Navigator / Sortable Slide Card、slide operations、editor contract types、完整动画 Scene 深复制、页面复制隔离、Undo / Redo、页面排序 / 新增 / 删除、图片与媒体资源均正常；Timeline、正式放映与 HTML export 无回归。
+
+Git 结果：
+
+- Batch 1 已通过提交 `23e49015384380b48231e9e65d2f42adce57fc6c` commit 并 push。
+- Commit message：`refactor: extract low risk editor boundaries`。
+- `main` 与 `origin/main` 已同步，ahead 0、behind 0。
 
 目标：
 
@@ -1137,11 +1148,87 @@ src/utils/slideOperations.ts
 
 ##### Batch 2：项目文档、历史与持久化
 
-目标：
+状态：**前置只读架构审计已完成；代码实现尚未开始**
 
-- 根据真实代码建立 `useProjectDocument`、`projectPersistence` 或等价职责边界。
-- 集中 `project`、`latestProjectRef`、`commitProjectChange`、Undo、Redo、history grouping、项目加载、自动保存和刷新恢复。
-- 这是高价值但高风险 Batch，必须单独开发和回归，不与其他大拆分混合。
+推荐执行顺序：
+
+```text
+Batch 2A：Project persistence adapter
+→ Batch 2B：Project document + history transaction
+→ 完整人工回归
+→ commit / push
+→ 重新评估 Batch 3 最小 Sequence Command Domain
+→ Stage 6
+```
+
+Batch 2A 建议文件：
+
+```text
+src/utils/projectPersistence.ts
+```
+
+Batch 2A 目标职责：
+
+- `STORAGE_KEY`。
+- `localStorage` load / save / clear。
+- JSON parse / fallback。
+- slide title / Animation Schema compatibility normalization。
+- legacy project / asset source 的持久化读取边界。
+
+Batch 2A 明确不负责：
+
+- Project React state ownership。
+- Undo / Redo。
+- history grouping。
+- asset Blob lifecycle。
+- selection。
+- playback。
+
+Batch 2B 推荐文件：
+
+```text
+src/hooks/useProjectDocument.ts
+```
+
+可选纯历史辅助：
+
+```text
+src/utils/projectHistory.ts
+```
+
+Batch 2B 目标职责：
+
+- `project`。
+- `latestProjectRef`。
+- undo / redo stacks。
+- history grouping。
+- snapshot clone。
+- autosave。
+- mutation transaction。
+
+事务边界：
+
+- `commitProjectChange` 不能孤立拆出。
+- 它必须与 history stacks、`latestProjectRef`、history grouping、redo 清理、no-op 判断等事务规则一起处理。
+- App 可以继续保留必要的薄 orchestration 边界，用于 duplicate-review 只读保护、Clip preview 清理、Undo / Redo 后 selection 调整和播放/UI 协调。
+- 资源 metadata 合并或永久删除仍必须同步处理当前项目及历史快照，不能因封装 history 而破坏资源一致性。
+- 自动保存必须继续受 `assetStoreReady` 或等价 persistence-ready 门闩保护。
+
+Batch 2 当前明确禁止移动：
+
+- `SlideCanvas` sampling。
+- `usePresentationPlaybackController`。
+- Presentation playback handlers。
+- `useTimelinePlaybackController`。
+- Stage 5 export Runtime。
+- Asset lifecycle 整体抽离。
+- selection / clipboard / shortcuts。
+- Animation Workspace coordinator。
+- `animationCommands` domain split。
+- Timeline V2-B。
+- Stage 6。
+- Stage 7。
+- Delete Clip UX Bug。
 
 回归重点：
 
@@ -1150,6 +1237,9 @@ src/utils/slideOperations.ts
 - 连续拖动历史分组和属性连续输入。
 - 动画编辑历史。
 - 自动保存、刷新恢复和重置项目。
+- Asset metadata 在 Undo / Redo 快照中的一致性。
+- 页面选择、资源定位和 Presentation 翻页等无历史导航。
+- Timeline、正式放映和 HTML export 基础回归。
 
 ##### Batch 3：Animation Command Domains
 
@@ -1221,7 +1311,7 @@ src/utils/slideOperations.ts
 
 - 不与第 5 阶段 HTML Click Step 同步混合开发。
 - 不提前实现第 6 阶段 Click Step 编辑 UI 或第 7 阶段 Timeline V2-C。
-- Batch 1 已验证完成；Batch 2 及以后仍为计划开发，尚未开始。
+- Batch 1 已验证完成并 push；Batch 2 前置只读架构审计已完成，Batch 2A / 2B 代码实现和后续 Batch 仍为计划开发，尚未开始。
 
 ### 第 6 阶段：Click Step 编辑界面
 
@@ -1461,7 +1551,8 @@ Step 3 及以后：保持未执行状态
 
 现状：
 
-- `App.tsx` 当前已经超过 6000 行，并承担大量项目状态、历史、资源、动画、放映和界面组装逻辑，已属于高优先级技术债。
+- `App.tsx` 在 Batch 1 前审计时为 6279 行；Batch 1 完成后当前为 5841 行。
+- 当前仍承担大量项目状态、历史、资源、动画、放映和界面组装逻辑，继续属于高优先级技术债；是否继续拆分仍以真实职责和状态所有权为标准，不以是否超过 6000 行作为机械门槛。
 - 第 5 阶段期间只限制继续膨胀，不进行大规模重构，也不改变当前功能范围。
 
 优化目标：
@@ -1945,7 +2036,9 @@ GitHub 状态：已 push
 2026-07-28：Batch 1 首轮人工验收发现页面复制丢失 V2 关键帧；对照 f29b255 确认原函数已存在 legacy 重建缺陷，抽取本身未漏搬代码
 2026-07-28：duplicateSlide 已改为深复制并重映射完整 V2 Scene，27 项直接断言、Lint、Build 和 Diff 检查通过
 2026-07-28：用户完成 Batch 1 人工验收，确认职责抽离、完整动画复制、隔离、Undo / Redo、页面操作、Timeline、正式放映和 HTML export 全部正常
-当前状态：第 5.5 阶段进行中；Batch 1 已验证完成；Batch 2 尚未开始
+2026-07-28：Batch 1 已通过提交 23e4901 refactor: extract low risk editor boundaries commit 并 push，main 与 origin/main 同步
+2026-07-28：Batch 2 前置只读架构审计完成，确定先执行 Batch 2A projectPersistence，再执行 Batch 2B useProjectDocument / history transaction；代码实现尚未开始
+当前状态：第 5.5 阶段进行中；Batch 1 已验证完成并 push；Batch 2 前置只读审计已完成，代码实现尚未开始
 ```
 
 ---
@@ -1959,13 +2052,16 @@ GitHub 状态：已 push
 - 第 4 阶段“PPT 式放映控制器”核心功能已经用户人工验收并标记为已验证完成。
 - Lint、Build、Diff、状态机专项断言和 pending / completed / active 采样优先级断言通过；项目没有自动化 `test` 脚本。
 - 第 4 阶段代码已通过提交 `5391f11` commit 并 push。
-- `App.tsx` 渐进式架构拆分计划已通过文档提交 `a9166c3` commit 并 push；第 5.5 阶段已开始，Batch 1 已验证完成，Batch 2 尚未开始。
+- `App.tsx` 渐进式架构拆分计划已通过文档提交 `a9166c3` commit 并 push；第 5.5 阶段已开始，Batch 1 已验证完成并通过提交 `23e4901` push，Batch 2 前置只读架构审计已完成，代码实现尚未开始。
 - 第 4 阶段直接复用 Sequence-local time、`compileAnimationSequence` 和 Sequence 级公共计算规则，没有另建 Click Step 时间模型。
 - 滚轮强制步进仍接入同一个 Presentation Playback Controller；普通推进锁保持不变，Wheel Down / Up 均遵守一次手势只跨一个确定状态边界，并已通过用户人工验收。
 - 第 5 阶段“HTML 导出 Click Step 同步”已经完成代码实现、代码级检查和用户人工验收，正式标记为已验证完成。
 - 第 5 阶段新增职责已进入 `exportPlaybackPlan.ts` 和 `exportPlayerRuntime.ts`，没有修改 `App.tsx` 或开始无关大重构。
 - standalone HTML 必须先由用户点击“开始放映”；启动前没有播放状态或媒体 autoplay，启动点击只进入第一页并为后续有声媒体提供浏览器 user activation，该行为已经用户人工验收。
-- 当前开发入口是完成第 5.5 阶段 Batch 1 独立 Git 闭环；Batch 2 尚未开始，必须等待用户明确要求。
+- 当前稳定基线是 `23e49015384380b48231e9e65d2f42adce57fc6c refactor: extract low risk editor boundaries`，`main` 与 `origin/main` 同步。
+- 第 5.5 阶段 Batch 1 已完成人工验证、commit 和 push；不再存在“待验证”或“待 Git 闭环”状态。
+- Batch 2 前置只读架构审计已完成。下一开发入口是 Stage 5.5 Batch 2A“Project persistence adapter”；Batch 2B 尚未开始。
+- Stage 6 必须等待 Batch 2 完成和回归结果，并重新评估 Batch 3 最小 Sequence Command Domain 后再决定进入时机。
 - 原暂缓项目已经分配到第 7、9、10、11、12 阶段；不得提前并行开发。
 
 ### 下次第一步：安全检查
@@ -1994,17 +2090,18 @@ git diff --cached
 9. Marker 保持 Scene-level，归属方案留到 Timeline V2-C 前决定。
 10. standalone HTML 在启动前不创建播放状态；一次真实“开始放映”点击只打开门闩并正常进入第一页，媒体 autoplay 不采用重试、强制静音或浏览器 hack。
 11. 第 5 阶段代码实现、代码级检查、人工验收和 Git 闭环均已完成。
-12. 第 5.5 阶段 Batch 1 首轮人工验收发现页面复制丢失 V2 关键帧；`slideOperations.ts` 已改为复制完整 Scene，用户复测通过，Batch 1 已验证完成；Batch 2 尚未开始。
+12. 第 5.5 阶段 Batch 1 首轮人工验收发现页面复制丢失 V2 关键帧；`slideOperations.ts` 已改为复制完整 Scene，用户复测通过，Batch 1 已验证完成并 push；Batch 2 前置只读架构审计已完成，Batch 2A / 2B 代码实现尚未开始。
 
 ### Git 状态说明
 
 - 第 5.5 阶段 Batch 1 开始基线：`f29b25546009a8b375f2ae61c825418a3325be88`。
-- Batch 1 收尾前 `main` 与 `origin/main` 一致，ahead 0、behind 0。
+- Batch 1 正式提交：`23e49015384380b48231e9e65d2f42adce57fc6c refactor: extract low risk editor boundaries`。
 - 第 5 阶段已通过提交 `f29b255 feat: sync click steps in html export` commit 并 push。
 - 第 5.5 阶段 Batch 1 开始前工作区和暂存区干净。
 - Batch 1 提交范围固定为 9 个文件：`PROJECT_STATUS.md`、`src/App.tsx`、3 个 editor component 共享契约消费者、Timeline Hook，以及 3 个新增职责模块。
-- Batch 1 收尾前暂存区为空；用户已明确授权使用 `refactor: extract low risk editor boundaries` 完成 commit 和 push。
-- 第 5.5 阶段 Batch 1 已验证完成。
-- Batch 2 尚未开始。
+- Batch 1 已验证完成并完成 commit / push。
+- 当前 `main`、本地 `origin/main` 均为 `23e49015384380b48231e9e65d2f42adce57fc6c`，ahead 0、behind 0。
+- Batch 2 前置只读架构审计开始前工作区和暂存区均干净。
+- Batch 2A / 2B 尚未开始代码实现。
 
 未经用户允许，不得 commit 或 push。

@@ -27,12 +27,16 @@ import {
   getAssetBlob,
   putVerifiedAssetBlob,
 } from "./utils/assetStore";
-import { normalizeProjectAnimationScenes } from "./utils/animationSchema";
 import {
   createBlankSlide,
   duplicateSlide,
   normalizeSlideTitles,
 } from "./utils/slideOperations";
+import {
+  clearPersistedProject,
+  loadPersistedProject,
+  savePersistedProject,
+} from "./utils/projectPersistence";
 import {
   addAnimationClipToSlide,
   addAnimationKeyframeToSlide,
@@ -79,8 +83,6 @@ import {
   getPresentationSequenceSamples,
 } from "./utils/presentationPlayback";
 
-const STORAGE_KEY = "animify-project";
-
 const ANIMATION_WORKSPACE_DISPLAY_MODE_KEY =
   "animify-animation-workspace-display-mode";
 
@@ -100,14 +102,6 @@ function loadAnimationWorkspaceDisplayMode(): AnimationWorkspaceDisplayMode {
     return "on-demand";
   }
 }
-
-type LegacyPresentationAsset = PresentationAsset & {
-  source?: string;
-};
-
-type LegacyPresentationProject = Omit<PresentationProject, "assets"> & {
-  assets?: Record<string, LegacyPresentationAsset>;
-};
 
 /**
  * Legacy Data URLs are collected during synchronous project loading and moved
@@ -475,45 +469,16 @@ function clampPosition(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function loadSavedProject(): PresentationProject {
+function loadProjectForEditor(): PresentationProject {
   pendingLegacyAssetSources.clear();
 
-  const savedProject = localStorage.getItem(STORAGE_KEY);
+  const { project, legacyAssetSources } = loadPersistedProject();
 
-  if (!savedProject) {
-    return normalizeProjectAnimationScenes(demoProject);
+  for (const { assetId, source } of legacyAssetSources) {
+    pendingLegacyAssetSources.set(assetId, source);
   }
 
-  try {
-    const parsedProject = JSON.parse(savedProject) as LegacyPresentationProject;
-
-    const normalizedAssets: Record<string, PresentationAsset> = {};
-
-    for (const [assetId, legacyAsset] of Object.entries(
-      parsedProject.assets ?? {},
-    )) {
-      const { source, ...assetMetadata } = legacyAsset;
-
-      if (typeof source === "string" && source.length > 0) {
-        pendingLegacyAssetSources.set(assetId, source);
-      }
-
-      normalizedAssets[assetId] = {
-        ...assetMetadata,
-        id: assetMetadata.id || assetId,
-      };
-    }
-
-    const normalizedProject: PresentationProject = {
-      ...parsedProject,
-      assets: normalizedAssets,
-      slides: normalizeSlideTitles(parsedProject.slides),
-    };
-
-    return normalizeProjectAnimationScenes(normalizedProject);
-  } catch {
-    return normalizeProjectAnimationScenes(demoProject);
-  }
+  return project;
 }
 
 function cloneProjectSnapshot(project: PresentationProject) {
@@ -723,7 +688,8 @@ function getVideoDisplaySize(source: string) {
 }
 
 function App() {
-  const [project, setProject] = useState<PresentationProject>(loadSavedProject);
+  const [project, setProject] =
+    useState<PresentationProject>(loadProjectForEditor);
   const latestProjectRef = useRef(project);
   const [mode, setMode] = useState<EditorMode>("edit");
   const [componentPanelOpen, setComponentPanelOpen] = useState(false);
@@ -1078,7 +1044,7 @@ function App() {
       return;
     }
 
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(project));
+    savePersistedProject(project);
   }, [assetStoreReady, project]);
 
   /**
@@ -4715,7 +4681,7 @@ function App() {
 
     const firstElementId = demoProject.slides[0]?.elements[0]?.id ?? "";
 
-    localStorage.removeItem(STORAGE_KEY);
+    clearPersistedProject();
     commitProjectChange(() => demoProject);
     setSelectedElementId(firstElementId);
     setSelectedElementIds(firstElementId ? [firstElementId] : []);

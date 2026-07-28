@@ -1,9 +1,9 @@
 # Animify 项目状态
 
-> 最后更新：2026-07-28
+> 最后更新：2026-07-29
 > 仓库：`https://github.com/Sharofanar/Animify`  
 > 主分支：`main`  
-> 当前稳定基线：`23e4901 refactor: extract low risk editor boundaries`
+> 当前稳定基线：Stage 5.5 Batch 2A · `refactor: extract project persistence`
 
 本文档是 Animify 当前开发状态的长期事实来源。
 
@@ -34,6 +34,8 @@
 当前已知 GitHub `origin/main` 最新提交：
 
 ```text
+Stage 5.5 Batch 2A: refactor: extract project persistence
+bbc7f5d docs: sync stage 5.5 architecture status
 23e4901 refactor: extract low risk editor boundaries
 ```
 
@@ -152,24 +154,25 @@ Tailwind CSS、dnd-kit 以及其他依赖的当前实际版本和使用范围，
 - 两个维护文件仍未被 Git 跟踪，存在被误删或未随仓库传递的维护风险，但不影响本地运行和人工回归；未经用户允许不得执行 `git add`。
 - 结论：**第 0 阶段可以正式结束，可以进入第 1 阶段“最新基线回归测试”。**
 
-### 5. 当前权威 Git 基线与第 5.5 阶段状态
+### 5. Batch 2A 开始基线与第 5.5 阶段状态
 
-复核日期：2026-07-28
+复核日期：2026-07-29
 
 - 当前分支：`main`
-- 当前 HEAD：`23e49015384380b48231e9e65d2f42adce57fc6c`
-- 本地 `origin/main`：`23e49015384380b48231e9e65d2f42adce57fc6c`
-- 最新提交：`23e4901 refactor: extract low risk editor boundaries`
-- 本地与 `origin/main`：ahead 0、behind 0
-- 本轮 `PROJECT_STATUS.md` 状态同步开始前工作区：干净
-- 本轮 `PROJECT_STATUS.md` 状态同步开始前暂存区：干净
-- 状态同步开始前未提交修改：无
-- 状态同步开始前暂存修改：无
+- Batch 2A 开始 HEAD：`bbc7f5d2bbf5403dcc2b0ede64014446cd258a3e`
+- Batch 2A 开始时本地 `origin/main`：`bbc7f5d2bbf5403dcc2b0ede64014446cd258a3e`
+- Batch 2A 开始前最新提交：`bbc7f5d docs: sync stage 5.5 architecture status`
+- Batch 2A 开始时本地与 `origin/main`：ahead 0、behind 0
+- Batch 2A 开始前工作区：干净
+- Batch 2A 开始前暂存区：干净
+- Batch 2A 实际提交范围：`PROJECT_STATUS.md`、`src/App.tsx`、新增 `src/utils/projectPersistence.ts`
+- Batch 2A 正式提交信息：`refactor: extract project persistence`
 - 第 5 阶段 HTML 导出 Click Step 同步：已验证完成并通过提交 `f29b255` push
 - 第 5.5 阶段：已开始
 - 第 5.5 阶段 Batch 1：**已验证完成并通过提交 `23e4901` push（2026-07-28）**
 - 第 5.5 阶段 Batch 2 前置只读架构审计：已完成
-- 第 5.5 阶段 Batch 2：尚未开始代码实现
+- 第 5.5 阶段 Batch 2A：**已验证完成并 commit / push**
+- 第 5.5 阶段 Batch 2B：尚未开始代码实现
 
 ---
 
@@ -551,7 +554,7 @@ PROJECT_STATUS.md
 
 - 第 4 阶段已经完成用户人工验收，并通过提交 `5391f11` commit / push。
 - 第 5 阶段“HTML 导出 Click Step 同步”已通过用户人工验收。
-- 第 5.5 阶段“渐进式架构拆分维护”已经开始；Batch 1 已验证完成并通过提交 `23e4901` push，Batch 2 前置只读审计已完成，Batch 2 尚未开始代码实现。
+- 第 5.5 阶段“渐进式架构拆分维护”已经开始；Batch 1 已验证完成并通过提交 `23e4901` push，Batch 2 前置只读审计已完成，Batch 2A 已验证完成并 commit / push，Batch 2B 尚未开始。
 
 # 已完成前置：第 3 阶段 Click Step 数据与命令层
 
@@ -1009,7 +1012,7 @@ src/utils/exportPlayerRuntime.ts
 
 ### 第 5.5 阶段：渐进式架构拆分维护
 
-状态：**正在进行（Batch 1 已验证完成并 push；Batch 2 前置只读审计已完成，代码实现尚未开始）**
+状态：**正在进行（Batch 1、Batch 2A 已验证完成并 push；Batch 2B 尚未开始）**
 
 #### 1. 阶段位置与总体原则
 
@@ -1021,7 +1024,7 @@ src/utils/exportPlayerRuntime.ts
 - 每个 Batch 必须独立完成：开发 → lint → build → `git diff --check` → 对应人工回归 → 独立 commit → 独立 push。
 - 禁止一次完成全部第 5.5 阶段重构；每个 Batch 验收并完成 Git 闭环后，才能进入下一 Batch。
 - 第 5.5 阶段已于 2026-07-28 开始；Batch 1 首轮人工验收发现的页面复制关键帧问题已修复，用户复测确认全部通过；Batch 1 已通过提交 `23e4901 refactor: extract low risk editor boundaries` 完成 commit / push。
-- Batch 2 前置只读架构审计已完成；Batch 2A / 2B 目前仅完成职责边界和执行顺序规划，尚未开始代码实现。
+- Batch 2 前置只读架构审计已完成；Batch 2A 已按审计边界完成实现、用户人工验证和 Git 闭环；Batch 2B 仍只有职责边界规划，尚未开始代码实现。
 
 #### 2. 已确认架构事实与治理优先级
 
@@ -1095,7 +1098,7 @@ src/utils/exportPlayerRuntime.ts
 - project / history / persistence、`commitProjectChange`、Undo / Redo、autosave、asset lifecycle、selection、playback 与 `SlideCanvas` sampling 均保留原位。
 - Stage 5 的 `SlideCanvas`、Presentation sampling、HTML export 与 standalone Runtime 未修改。
 - Batch 1 已完成人工验证、commit 和 push；正式提交为 `23e49015384380b48231e9e65d2f42adce57fc6c refactor: extract low risk editor boundaries`。
-- Batch 2 尚未开始代码实现；本轮未修改 `animationCommands.ts`、PropertyPanel 结构、AnimationTrackInspector、Timeline V2-B、Stage 6 / 7 或 Delete Clip Bug。
+- Batch 1 完成时尚未开始 Batch 2；后续 Batch 2A 已单独进入实现。本 Batch 未修改 `animationCommands.ts`、PropertyPanel 结构、AnimationTrackInspector、Timeline V2-B、Stage 6 / 7 或 Delete Clip Bug。
 
 实际提交文件：
 
@@ -1148,7 +1151,7 @@ Git 结果：
 
 ##### Batch 2：项目文档、历史与持久化
 
-状态：**前置只读架构审计已完成；代码实现尚未开始**
+状态：**Batch 2A 已验证完成并 commit / push；Batch 2B 尚未开始**
 
 推荐执行顺序：
 
@@ -1161,7 +1164,7 @@ Batch 2A：Project persistence adapter
 → Stage 6
 ```
 
-Batch 2A 建议文件：
+Batch 2A 实际文件：
 
 ```text
 src/utils/projectPersistence.ts
@@ -1183,6 +1186,40 @@ Batch 2A 明确不负责：
 - asset Blob lifecycle。
 - selection。
 - playback。
+
+Batch 2A 实现结果（2026-07-29）：
+
+- 新增低层 `src/utils/projectPersistence.ts`，统一拥有 Project storage key，以及同步 `localStorage` load / save / clear。
+- `loadPersistedProject()` 保持原 fallback 策略：无存储或 JSON / 字段解析失败时返回现有 `demoProject` 的 Animation Schema 兼容结果，不新增弹窗、不清除或覆盖损坏存储。
+- 持久化读取边界继续复用 `normalizeSlideTitles()` 和 `normalizeProjectAnimationScenes()`；没有复制标题或 Animation Schema 兼容规则。
+- legacy asset `source` 在 adapter 中从 Project metadata 剥离，并作为独立 migration input 返回；`App.tsx` 仍把该输入放入原 `pendingLegacyAssetSources`，由既有 IndexedDB migration 负责 Blob 写入。
+- App 的 autosave React effect 和 `assetStoreReady` 安全门闩保持原位；门闩通过后仅改为调用 `savePersistedProject(project)`。
+- Reset 的产品决策、React state、history transaction 和 selection 更新保持原位；只有 Project storage 清除改为调用 `clearPersistedProject()`。
+- 动画工作区显示偏好仍由 `App.tsx` 使用独立 localStorage key 读写，没有混入 Project persistence adapter。
+- `project`、`latestProjectRef`、Undo / Redo stacks、history grouping、snapshot clone、`commitProjectChange`、资源 metadata / history 一致性和全部 asset Blob lifecycle 均未迁移。
+- `App.tsx` 从 5841 行降至 5807 行；该变化只是职责抽离结果，不作为 Batch 成功标准。
+- 本轮没有修改 SlideCanvas、Timeline、Presentation playback、Stage 5 export Runtime、selection / clipboard / shortcuts、Animation Workspace、`animationCommands`、Stage 6 / 7 或 Delete Clip Bug。
+
+Batch 2A 修改文件：
+
+```text
+PROJECT_STATUS.md
+src/App.tsx
+src/utils/projectPersistence.ts
+```
+
+Batch 2A 代码检查：
+
+- project persistence 不落盘直接断言：19 项通过，覆盖 valid stored Project、missing storage fallback、malformed JSON fallback 且不清理原值、标题与 Animation Schema normalization、legacy animation、legacy asset source 提取、asset ID fallback、save → load round trip 和 clear。
+- `npm.cmd run lint`：通过，0 error、0 warning。
+- `npm.cmd run build`：通过。
+- `git diff --check`：通过，仅有 `PROJECT_STATUS.md` 和 `src/App.tsx` 的 LF / CRLF 转换提示。
+- 用户人工验证：通过。修改 → autosave → refresh 能保留最新内容；Reset 后恢复 demo 且再次刷新仍保持；普通元素和动画关键帧的 Undo / Redo 正常。
+- 动画数据持久化回归：Video 的 AnimationScene / Sequence / Clip / Track / Keyframe 在刷新后完整保留。
+- 资源回归：图片和视频在第一次、第二次刷新后均正常，无资源丢失或 missing asset；原 asset Blob lifecycle 与 readiness gate 行为保持。
+- Presentation 基础回归：普通元素、页面导航和媒体播放正常。
+- HTML export 基础回归：打开、开始放映、普通元素、页面导航以及图片 / 音频 / 视频资源正常。
+- 状态：**已验证完成并通过 `refactor: extract project persistence` 完成 commit / push**。
 
 Batch 2B 推荐文件：
 
@@ -1311,7 +1348,7 @@ Batch 2 当前明确禁止移动：
 
 - 不与第 5 阶段 HTML Click Step 同步混合开发。
 - 不提前实现第 6 阶段 Click Step 编辑 UI 或第 7 阶段 Timeline V2-C。
-- Batch 1 已验证完成并 push；Batch 2 前置只读架构审计已完成，Batch 2A / 2B 代码实现和后续 Batch 仍为计划开发，尚未开始。
+- Batch 1、Batch 2A 已验证完成并 push；Batch 2 前置只读架构审计已完成；Batch 2B 和后续 Batch 仍为计划开发，尚未开始。
 
 ### 第 6 阶段：Click Step 编辑界面
 
@@ -1756,9 +1793,9 @@ Step 3 及以后：保持未执行状态
 
 ## 九、已知 Bug、UX 问题与正常行为
 
-### 1. 当前没有确认中的严重 Bug
+### 1. 当前没有确认中的数据损坏或无法启动 Bug
 
-截至本文档建立时，没有取得最新版上的明确崩溃、数据损坏或无法启动报告。
+截至本文档建立时，没有取得最新版上的明确崩溃、数据损坏或无法启动报告。当前另有已确认的 Video animation / compositor 生命周期问题，见本节第 13 项。
 
 状态：**待新本地环境和用户回归确认**
 
@@ -1904,6 +1941,34 @@ Step 3 及以后：保持未执行状态
 - 不作为第 3 阶段阻塞项。
 - 作为 HTML 本地打开兼容性观察项留待后续定位，本轮不修复。
 
+### 13. Video animation / compositor 生命周期问题
+
+已确认现象：
+
+- Timeline / 普通动画预览中的 Video 动画正常。
+- 编辑器正式 Presentation 中，Video 动画可能出现闪烁 / 抽动、局部白屏；鼠标移动或触发重绘后可能暂时恢复。
+- standalone HTML 的导出播放计划没有丢失该 Clip：target `elementId`、DOM 查找和 Runtime WAAPI 创建均已确认存在，但实际导出 Video 动画不可见。
+- standalone 原生全屏还会出现可见局部白屏 / 重绘问题。
+
+已证明的编辑器 Presentation 根因：
+
+- deterministic Presentation sampling 的 `renderableCompiledAnimations` 引用会随每个 rAF 变化。
+- 现有 WAAPI 生命周期因此在每帧执行 cancel → recreate → pause → `currentTime`，造成 Video compositor 状态持续重置。
+- 后续修复应只在动画定义变化时重建 WAAPI；仅局部时间变化时只更新 `currentTime`。
+- 修复不得按 Video preset 特判，也不得用 `will-change`、`translateZ` 或强制 GPU hack 掩盖生命周期根因。
+
+导出侧当前结论：
+
+- export Runtime 问题尚未证明与编辑器 Presentation 的逐帧 WAAPI 重建属于同一根因，禁止提前合并结论。
+- 后续需在真实 standalone Runtime 中继续检查 wrapper `getAnimations()`、`animation.currentTime`、Sequence 状态、`video.readyState`，以及媒体 mount / 首帧 readiness。
+
+分类与顺序：
+
+- 与 Batch 2A persistence adapter 无关；本轮不修改任何 Video、playback、sampling 或 export 代码。
+- Batch 2A Git 闭环后，先作为独立高优先级 Bug 完成诊断、修复、人工验证和独立 commit，再进入 Batch 2B。
+
+状态：**已确认，待独立开发**
+
 ---
 
 ## 十、最近测试状态
@@ -2038,7 +2103,11 @@ GitHub 状态：已 push
 2026-07-28：用户完成 Batch 1 人工验收，确认职责抽离、完整动画复制、隔离、Undo / Redo、页面操作、Timeline、正式放映和 HTML export 全部正常
 2026-07-28：Batch 1 已通过提交 23e4901 refactor: extract low risk editor boundaries commit 并 push，main 与 origin/main 同步
 2026-07-28：Batch 2 前置只读架构审计完成，确定先执行 Batch 2A projectPersistence，再执行 Batch 2B useProjectDocument / history transaction；代码实现尚未开始
-当前状态：第 5.5 阶段进行中；Batch 1 已验证完成并 push；Batch 2 前置只读审计已完成，代码实现尚未开始
+2026-07-29：Stage 5.5 状态同步已通过提交 bbc7f5d docs: sync stage 5.5 architecture status commit 并 push，main 与 origin/main 同步
+2026-07-29：Batch 2A 新增 projectPersistence adapter 并完成 19 项直接断言、Lint、Build 和 Diff 检查
+2026-07-29：用户完成 Batch 2A 人工验收，确认 autosave / refresh、AnimationScene V2、图片和视频资源、Reset、Undo / Redo、Presentation 与 HTML export 基础回归正常
+2026-07-29：Batch 2A 通过 refactor: extract project persistence 完成 commit / push；独立 Video animation / compositor 生命周期问题已记录，未混入本提交
+当前状态：第 5.5 阶段进行中；Batch 1、Batch 2A 已验证完成并 push；下一入口是独立 Video animation / compositor Bug，Batch 2B 尚未开始
 ```
 
 ---
@@ -2052,15 +2121,15 @@ GitHub 状态：已 push
 - 第 4 阶段“PPT 式放映控制器”核心功能已经用户人工验收并标记为已验证完成。
 - Lint、Build、Diff、状态机专项断言和 pending / completed / active 采样优先级断言通过；项目没有自动化 `test` 脚本。
 - 第 4 阶段代码已通过提交 `5391f11` commit 并 push。
-- `App.tsx` 渐进式架构拆分计划已通过文档提交 `a9166c3` commit 并 push；第 5.5 阶段已开始，Batch 1 已验证完成并通过提交 `23e4901` push，Batch 2 前置只读架构审计已完成，代码实现尚未开始。
+- `App.tsx` 渐进式架构拆分计划已通过文档提交 `a9166c3` commit 并 push；第 5.5 阶段已开始，Batch 1 已验证完成并通过提交 `23e4901` push，Batch 2 前置只读架构审计已完成，Batch 2A 已验证完成并完成 commit / push。
 - 第 4 阶段直接复用 Sequence-local time、`compileAnimationSequence` 和 Sequence 级公共计算规则，没有另建 Click Step 时间模型。
 - 滚轮强制步进仍接入同一个 Presentation Playback Controller；普通推进锁保持不变，Wheel Down / Up 均遵守一次手势只跨一个确定状态边界，并已通过用户人工验收。
 - 第 5 阶段“HTML 导出 Click Step 同步”已经完成代码实现、代码级检查和用户人工验收，正式标记为已验证完成。
 - 第 5 阶段新增职责已进入 `exportPlaybackPlan.ts` 和 `exportPlayerRuntime.ts`，没有修改 `App.tsx` 或开始无关大重构。
 - standalone HTML 必须先由用户点击“开始放映”；启动前没有播放状态或媒体 autoplay，启动点击只进入第一页并为后续有声媒体提供浏览器 user activation，该行为已经用户人工验收。
-- 当前稳定基线是 `23e49015384380b48231e9e65d2f42adce57fc6c refactor: extract low risk editor boundaries`，`main` 与 `origin/main` 同步。
+- Batch 2A 开始基线是 `bbc7f5d2bbf5403dcc2b0ede64014446cd258a3e docs: sync stage 5.5 architecture status`；Batch 2A 已通过 `refactor: extract project persistence` 完成 Git 闭环。
 - 第 5.5 阶段 Batch 1 已完成人工验证、commit 和 push；不再存在“待验证”或“待 Git 闭环”状态。
-- Batch 2 前置只读架构审计已完成。下一开发入口是 Stage 5.5 Batch 2A“Project persistence adapter”；Batch 2B 尚未开始。
+- Batch 2 前置只读架构审计已完成。Stage 5.5 Batch 2A“Project persistence adapter”已验证完成并 push；下一入口是独立 Video animation / compositor 生命周期 Bug，完成诊断、修复、人工验证和独立 Git 闭环后再进入 Batch 2B。
 - Stage 6 必须等待 Batch 2 完成和回归结果，并重新评估 Batch 3 最小 Sequence Command Domain 后再决定进入时机。
 - 原暂缓项目已经分配到第 7、9、10、11、12 阶段；不得提前并行开发。
 
@@ -2077,7 +2146,7 @@ git diff --cached
 
 不得直接执行 pull、reset、clean、rebase、merge、restore 或其他 Git 写操作。
 
-### 第 5.5 阶段 Batch 1 代码实现后的边界
+### 第 5.5 阶段 Batch 2A 代码实现后的边界
 
 1. 第 3 阶段数据与命令层已经用户验证，并通过提交 `975f109` push。
 2. 第 5 阶段已实现独立 HTML 的 Click Step 同步；Click Step 编辑 UI 和 Timeline V2-C 仍未开发。
@@ -2090,7 +2159,9 @@ git diff --cached
 9. Marker 保持 Scene-level，归属方案留到 Timeline V2-C 前决定。
 10. standalone HTML 在启动前不创建播放状态；一次真实“开始放映”点击只打开门闩并正常进入第一页，媒体 autoplay 不采用重试、强制静音或浏览器 hack。
 11. 第 5 阶段代码实现、代码级检查、人工验收和 Git 闭环均已完成。
-12. 第 5.5 阶段 Batch 1 首轮人工验收发现页面复制丢失 V2 关键帧；`slideOperations.ts` 已改为复制完整 Scene，用户复测通过，Batch 1 已验证完成并 push；Batch 2 前置只读架构审计已完成，Batch 2A / 2B 代码实现尚未开始。
+12. 第 5.5 阶段 Batch 1 首轮人工验收发现页面复制丢失 V2 关键帧；`slideOperations.ts` 已改为复制完整 Scene，用户复测通过，Batch 1 已验证完成并 push。
+13. Batch 2A 只抽离 Project JSON 的 localStorage / normalization / legacy source 解析边界；Project React state、History、asset Blob lifecycle、playback 与 Timeline 均未迁移。Batch 2A 已验证完成并 push；Batch 2B 尚未开始。
+14. Video animation / compositor 生命周期问题已确认为独立高优先级 Bug，与 persistence adapter 无关；必须独立修复和验证，不得混入 Batch 2A。
 
 ### Git 状态说明
 
@@ -2100,8 +2171,10 @@ git diff --cached
 - 第 5.5 阶段 Batch 1 开始前工作区和暂存区干净。
 - Batch 1 提交范围固定为 9 个文件：`PROJECT_STATUS.md`、`src/App.tsx`、3 个 editor component 共享契约消费者、Timeline Hook，以及 3 个新增职责模块。
 - Batch 1 已验证完成并完成 commit / push。
-- 当前 `main`、本地 `origin/main` 均为 `23e49015384380b48231e9e65d2f42adce57fc6c`，ahead 0、behind 0。
-- Batch 2 前置只读架构审计开始前工作区和暂存区均干净。
-- Batch 2A / 2B 尚未开始代码实现。
+- Batch 2A 开始时 `main`、本地 `origin/main` 均为 `bbc7f5d2bbf5403dcc2b0ede64014446cd258a3e`，ahead 0、behind 0。
+- Batch 2A 开始前工作区和暂存区均干净。
+- Batch 2A 正式提交范围只有 `PROJECT_STATUS.md`、`src/App.tsx` 和新增 `src/utils/projectPersistence.ts`，提交信息为 `refactor: extract project persistence`。
+- Batch 2A 已完成人工验证、commit 和 push；`main` 与 `origin/main` 同步，工作区和暂存区干净。
+- Batch 2B 尚未开始代码实现；下一任务是独立 Video animation / compositor 生命周期 Bug。
 
 未经用户允许，不得 commit 或 push。

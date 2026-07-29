@@ -79,6 +79,10 @@ import type {
 import { useTimelinePlaybackController } from "./hooks/useTimelinePlaybackController";
 import { usePresentationPlaybackController } from "./hooks/usePresentationPlaybackController";
 import {
+  useProjectDocument,
+  type ProjectUpdater,
+} from "./hooks/useProjectDocument";
+import {
   createPresentationSlidePlaybackPlan,
   getPresentationSequenceSamples,
 } from "./utils/presentationPlayback";
@@ -248,10 +252,6 @@ type CanvasContextMenuState = {
   slideY: number;
 } | null;
 
-type ProjectUpdater = (
-  currentProject: PresentationProject,
-) => PresentationProject;
-
 type CopiedElementClipboard = {
   sourceSlideId: string;
   elements: SlideElement[];
@@ -280,8 +280,6 @@ type PendingDuplicateResource = {
   reviewIndex: number;
   reviewTotal: number;
 };
-
-const MAX_HISTORY_LENGTH = 60;
 
 const featureCards = [
   {
@@ -479,10 +477,6 @@ function loadProjectForEditor(): PresentationProject {
   }
 
   return project;
-}
-
-function cloneProjectSnapshot(project: PresentationProject) {
-  return JSON.parse(JSON.stringify(project)) as PresentationProject;
 }
 
 /**
@@ -688,9 +682,17 @@ function getVideoDisplaySize(source: string) {
 }
 
 function App() {
-  const [project, setProject] =
-    useState<PresentationProject>(loadProjectForEditor);
-  const latestProjectRef = useRef(project);
+  const {
+    project,
+    latestProjectRef,
+    commitProjectChange: commitDocumentProjectChange,
+    mutateProjectWithoutHistory,
+    beginHistoryGroup: beginProjectHistoryGroup,
+    finishHistoryGroup: finishProjectHistoryGroup,
+    undoProject: undoProjectDocument,
+    redoProject: redoProjectDocument,
+    transformProjectAndHistorySnapshots,
+  } = useProjectDocument(loadProjectForEditor);
   const [mode, setMode] = useState<EditorMode>("edit");
   const [componentPanelOpen, setComponentPanelOpen] = useState(false);
 
@@ -786,11 +788,6 @@ function App() {
     useState<ElementContextMenuState>(null);
   const [canvasContextMenu, setCanvasContextMenu] =
     useState<CanvasContextMenuState>(null);
-  const undoStackRef = useRef<PresentationProject[]>([]);
-  const redoStackRef = useRef<PresentationProject[]>([]);
-  const historyGroupSnapshotRef = useRef<PresentationProject | null>(null);
-  const historyGroupChangedRef = useRef(false);
-
   /**
    * Keep outside animation-navigation requests increasing even after the active
    * Clip is cleared by a normal canvas or slide selection.
@@ -940,14 +937,6 @@ function App() {
   });
 
   /**
-   * Keep event handlers synchronized with the latest project independently from
-   * persistent saving.
-   */
-  useEffect(() => {
-    latestProjectRef.current = project;
-  }, [project]);
-
-  /**
    * Initialize IndexedDB, migrate old Data URLs, and create runtime Blob URLs.
    */
   useEffect(() => {
@@ -1034,10 +1023,12 @@ function App() {
 
       assetSourcesRef.current = {};
     };
-  }, []);
+  }, [latestProjectRef]);
 
   /**
-   * Save only metadata after IndexedDB initialization or migration succeeds.
+   * Save only after IndexedDB initialization or migration succeeds. The gate
+   * prevents the initial editor state from overwriting persisted asset metadata
+   * before its Blob migration result is known.
    */
   useEffect(() => {
     if (!assetStoreReady) {
@@ -1091,15 +1082,6 @@ function App() {
     };
   }, [canvasContextMenu, elementContextMenu]);
 
-  const pushUndoSnapshot = useCallback((snapshot: PresentationProject) => {
-    undoStackRef.current = [
-      ...undoStackRef.current,
-      cloneProjectSnapshot(snapshot),
-    ].slice(-MAX_HISTORY_LENGTH);
-
-    redoStackRef.current = [];
-  }, []);
-
   /**
    * Clip preview is transient editor state. Every navigation or project mutation
    * exits that mode before changing the underlying slide/scene data.
@@ -1132,87 +1114,46 @@ function App() {
         return;
       }
 
-      const currentProject = latestProjectRef.current;
-      const nextProject = updater(currentProject);
+      return commitDocumentProjectChange((currentProject) => {
+        const nextProject = updater(currentProject);
 
-      if (nextProject === currentProject) {
-        return;
-      }
-
-      clearAnimationClipPreview();
-
-      if (options.recordHistory === false) {
-        if (historyGroupSnapshotRef.current) {
-          historyGroupChangedRef.current = true;
-        } else {
-          pushUndoSnapshot(currentProject);
+        if (nextProject !== currentProject) {
+          clearAnimationClipPreview();
         }
-      } else {
-        pushUndoSnapshot(currentProject);
-      }
 
-      latestProjectRef.current = nextProject;
-      setProject(nextProject);
+        return nextProject;
+      }, options);
     },
-    [clearAnimationClipPreview, pushUndoSnapshot],
+    [clearAnimationClipPreview, commitDocumentProjectChange],
   );
 
-  const beginProjectHistoryGroup = useCallback(() => {
-    if (historyGroupSnapshotRef.current) {
-      return;
-    }
-
-    historyGroupSnapshotRef.current = cloneProjectSnapshot(
-      latestProjectRef.current,
-    );
-    historyGroupChangedRef.current = false;
-  }, []);
-
-  const finishProjectHistoryGroup = useCallback(() => {
-    const snapshot = historyGroupSnapshotRef.current;
-
-    if (snapshot && historyGroupChangedRef.current) {
-      pushUndoSnapshot(snapshot);
-    }
-
-    historyGroupSnapshotRef.current = null;
-    historyGroupChangedRef.current = false;
-  }, [pushUndoSnapshot]);
-
+  /**
+   * The document hook restores the Project snapshot. App owns the transient
+   * selection and preview cleanup because those states are not document data.
+   */
   const undoProject = useCallback(() => {
     if (duplicateReviewActiveRef.current) {
       return;
     }
 
-    const previousProject = undoStackRef.current.at(-1);
+    const projectToRestore = undoProjectDocument();
 
-    if (!previousProject) {
+    if (!projectToRestore) {
       return;
     }
 
     clearAnimationClipPreview();
-
-    const currentProject = latestProjectRef.current;
-
-    undoStackRef.current = undoStackRef.current.slice(0, -1);
-    redoStackRef.current = [
-      ...redoStackRef.current,
-      cloneProjectSnapshot(currentProject),
-    ].slice(-MAX_HISTORY_LENGTH);
-
-    const projectToRestore = cloneProjectSnapshot(previousProject);
     const previousActiveSlide = projectToRestore.slides.find(
       (slide) => slide.id === projectToRestore.activeSlideId,
     );
 
-    latestProjectRef.current = projectToRestore;
-    setProject(projectToRestore);
     setSelectedElementId(previousActiveSlide?.elements[0]?.id ?? "");
     setAnimationPreviewKey((key) => key + 1);
   }, [
     clearAnimationClipPreview,
     setAnimationPreviewKey,
     setSelectedElementId,
+    undoProjectDocument,
   ]);
 
   const redoProject = useCallback(() => {
@@ -1220,33 +1161,22 @@ function App() {
       return;
     }
 
-    const nextProject = redoStackRef.current.at(-1);
+    const projectToRestore = redoProjectDocument();
 
-    if (!nextProject) {
+    if (!projectToRestore) {
       return;
     }
 
     clearAnimationClipPreview();
-
-    const currentProject = latestProjectRef.current;
-
-    redoStackRef.current = redoStackRef.current.slice(0, -1);
-    undoStackRef.current = [
-      ...undoStackRef.current,
-      cloneProjectSnapshot(currentProject),
-    ].slice(-MAX_HISTORY_LENGTH);
-
-    const projectToRestore = cloneProjectSnapshot(nextProject);
     const nextActiveSlide = projectToRestore.slides.find(
       (slide) => slide.id === projectToRestore.activeSlideId,
     );
 
-    latestProjectRef.current = projectToRestore;
-    setProject(projectToRestore);
     setSelectedElementId(nextActiveSlide?.elements[0]?.id ?? "");
     setAnimationPreviewKey((key) => key + 1);
   }, [
     clearAnimationClipPreview,
+    redoProjectDocument,
     setAnimationPreviewKey,
     setSelectedElementId,
   ]);
@@ -1323,10 +1253,10 @@ function App() {
       };
 
       /**
-       * Update the imperative snapshot before React renders. A rapid second input
-       * then observes the destination page and cannot navigate the source twice.
+       * The no-history document mutation updates latestProjectRef synchronously.
+       * A rapid second input therefore observes the destination page immediately.
        */
-      latestProjectRef.current = nextProject;
+      mutateProjectWithoutHistory(() => nextProject);
       enterPresentationSlidePlayback(
         createPresentationSlidePlaybackPlan(nextSlide),
         position,
@@ -1334,11 +1264,14 @@ function App() {
       setSelectedElementId(nextSlide.elements[0]?.id ?? "");
       setActiveAnimationContext(null);
       setAnimationPreviewKey((key) => key + 1);
-      setProject(nextProject);
 
       return true;
     },
-    [enterPresentationSlidePlayback],
+    [
+      enterPresentationSlidePlayback,
+      latestProjectRef,
+      mutateProjectWithoutHistory,
+    ],
   );
 
   const handlePresentAdvance = useCallback(() => {
@@ -1358,7 +1291,11 @@ function App() {
     if (navigation === "next-slide") {
       navigatePresentationSlide(1, "start");
     }
-  }, [advancePresentationPlayback, navigatePresentationSlide]);
+  }, [
+    advancePresentationPlayback,
+    latestProjectRef,
+    navigatePresentationSlide,
+  ]);
 
   const handlePresentForceAdvance = useCallback(() => {
     const currentProject = latestProjectRef.current;
@@ -1377,7 +1314,11 @@ function App() {
     if (navigation === "next-slide") {
       navigatePresentationSlide(1, "start");
     }
-  }, [forceAdvancePresentationPlayback, navigatePresentationSlide]);
+  }, [
+    forceAdvancePresentationPlayback,
+    latestProjectRef,
+    navigatePresentationSlide,
+  ]);
 
   const handlePresentRetreat = useCallback(() => {
     const currentProject = latestProjectRef.current;
@@ -1396,7 +1337,11 @@ function App() {
     if (navigation === "previous-slide") {
       navigatePresentationSlide(-1, "end");
     }
-  }, [navigatePresentationSlide, retreatPresentationPlayback]);
+  }, [
+    latestProjectRef,
+    navigatePresentationSlide,
+    retreatPresentationPlayback,
+  ]);
 
   const handleExitPresentationMode = useCallback(() => {
     resetPresentationPlayback();
@@ -1913,7 +1858,13 @@ function App() {
     return () => {
       window.removeEventListener("keydown", handleSelectedElementKeyDown);
     };
-  }, [commitProjectChange, mode, selectedElementId, selectedElementIds]);
+  }, [
+    commitProjectChange,
+    latestProjectRef,
+    mode,
+    selectedElementId,
+    selectedElementIds,
+  ]);
 
   function handleEnterPresentationMode() {
     const currentProject = latestProjectRef.current;
@@ -2247,26 +2198,22 @@ function App() {
       };
     }
 
-    undoStackRef.current = undoStackRef.current.map(mergeAssets);
+    const currentProjectChanged = transformProjectAndHistorySnapshots(
+      (sourceProject, kind) => {
+        const mergedProject = mergeAssets(sourceProject);
 
-    redoStackRef.current = redoStackRef.current.map(mergeAssets);
+        return kind === "current"
+          ? {
+              ...mergedProject,
+              updatedAt,
+            }
+          : mergedProject;
+      },
+    );
 
-    if (historyGroupSnapshotRef.current) {
-      historyGroupSnapshotRef.current = mergeAssets(
-        historyGroupSnapshotRef.current,
-      );
+    if (currentProjectChanged) {
+      clearAnimationClipPreview();
     }
-
-    const nextProject = {
-      ...mergeAssets(latestProjectRef.current),
-
-      updatedAt,
-    };
-
-    latestProjectRef.current = nextProject;
-
-    clearAnimationClipPreview();
-    setProject(nextProject);
   }
 
   /**
@@ -3072,25 +3019,23 @@ function App() {
      * Prevent later undo or redo operations from restoring metadata whose Blob
      * has already been permanently removed.
      */
-    undoStackRef.current = undoStackRef.current.map(removeAssetMetadata);
+    const updatedAt = new Date().toISOString();
+    const currentProjectChanged = transformProjectAndHistorySnapshots(
+      (sourceProject, kind) => {
+        const projectWithoutDeletedAssets = removeAssetMetadata(sourceProject);
 
-    redoStackRef.current = redoStackRef.current.map(removeAssetMetadata);
+        return kind === "current"
+          ? {
+              ...projectWithoutDeletedAssets,
+              updatedAt,
+            }
+          : projectWithoutDeletedAssets;
+      },
+    );
 
-    if (historyGroupSnapshotRef.current) {
-      historyGroupSnapshotRef.current = removeAssetMetadata(
-        historyGroupSnapshotRef.current,
-      );
+    if (currentProjectChanged) {
+      clearAnimationClipPreview();
     }
-
-    const nextProject = {
-      ...removeAssetMetadata(latestProjectRef.current),
-      updatedAt: new Date().toISOString(),
-    };
-
-    latestProjectRef.current = nextProject;
-
-    clearAnimationClipPreview();
-    setProject(nextProject);
 
     if (failedAssetIds.length > 0) {
       window.alert(
@@ -4719,7 +4664,7 @@ function App() {
       clearAnimationClipPreview();
     }
 
-    setProject((currentProject) => ({
+    mutateProjectWithoutHistory((currentProject) => ({
       ...currentProject,
       activeSlideId: slideId,
       updatedAt: new Date().toISOString(),
@@ -4757,10 +4702,8 @@ function App() {
       updatedAt: new Date().toISOString(),
     };
 
-    latestProjectRef.current = nextProject;
-
     clearAnimationClipPreview();
-    setProject(nextProject);
+    mutateProjectWithoutHistory(() => nextProject);
 
     setMode("edit");
     setSelectedElementId(elementId);

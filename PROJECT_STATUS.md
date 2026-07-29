@@ -3,7 +3,7 @@
 > 最后更新：2026-07-30
 > 仓库：`https://github.com/Sharofanar/Animify`  
 > 主分支：`main`  
-> 当前稳定基线：Video Bug Part A · `fix: stabilize deterministic presentation animations`
+> 当前稳定基线：Stage 5.5 Batch 2B · `refactor: extract project document history`
 
 本文档是 Animify 当前开发状态的长期事实来源。
 
@@ -34,7 +34,8 @@
 当前已知 GitHub `origin/main` 最新提交：
 
 ```text
-Video Bug Part A: fix: stabilize deterministic presentation animations
+Batch 2B: refactor: extract project document history
+291f1c8 fix: stabilize deterministic presentation animations
 dac4fe2 refactor: extract project persistence
 bbc7f5d docs: sync stage 5.5 architecture status
 23e4901 refactor: extract low risk editor boundaries
@@ -173,7 +174,8 @@ Tailwind CSS、dnd-kit 以及其他依赖的当前实际版本和使用范围，
 - 第 5.5 阶段 Batch 1：**已验证完成并通过提交 `23e4901` push（2026-07-28）**
 - 第 5.5 阶段 Batch 2 前置只读架构审计：已完成
 - 第 5.5 阶段 Batch 2A：**已验证完成并 commit / push**
-- 第 5.5 阶段 Batch 2B：尚未开始代码实现
+- 第 5.5 阶段 Batch 2B：**已验证完成；manual QA passed；作为稳定 Project Document / History 架构基线**
+- Batch 2B 开始基线：`main` = `origin/main` = `291f1c87d426fcdd8b7eb473046fd4c591cfebdf`，开始前 ahead 0、behind 0、工作区和暂存区干净
 
 ---
 
@@ -555,7 +557,7 @@ PROJECT_STATUS.md
 
 - 第 4 阶段已经完成用户人工验收，并通过提交 `5391f11` commit / push。
 - 第 5 阶段“HTML 导出 Click Step 同步”已通过用户人工验收。
-- 第 5.5 阶段“渐进式架构拆分维护”已经开始；Batch 1 已验证完成并通过提交 `23e4901` push，Batch 2 前置只读审计已完成，Batch 2A 已验证完成并 commit / push，Batch 2B 尚未开始。
+- 第 5.5 阶段“渐进式架构拆分维护”已经开始；Batch 1 已验证完成并通过提交 `23e4901` push，Batch 2 前置只读审计已完成，Batch 2A 已验证完成并 commit / push，Batch 2B 已完成全部人工 QA 并作为稳定 Project Document / History 架构基线；Batch 3 尚未开始。
 
 # 已完成前置：第 3 阶段 Click Step 数据与命令层
 
@@ -1013,7 +1015,7 @@ src/utils/exportPlayerRuntime.ts
 
 ### 第 5.5 阶段：渐进式架构拆分维护
 
-状态：**正在进行（Batch 1、Batch 2A 已验证完成并 push；Batch 2B 尚未开始）**
+状态：**正在进行（Batch 1、Batch 2A、Batch 2B 已验证完成；Batch 3 尚未开始）**
 
 #### 1. 阶段位置与总体原则
 
@@ -1025,7 +1027,7 @@ src/utils/exportPlayerRuntime.ts
 - 每个 Batch 必须独立完成：开发 → lint → build → `git diff --check` → 对应人工回归 → 独立 commit → 独立 push。
 - 禁止一次完成全部第 5.5 阶段重构；每个 Batch 验收并完成 Git 闭环后，才能进入下一 Batch。
 - 第 5.5 阶段已于 2026-07-28 开始；Batch 1 首轮人工验收发现的页面复制关键帧问题已修复，用户复测确认全部通过；Batch 1 已通过提交 `23e4901 refactor: extract low risk editor boundaries` 完成 commit / push。
-- Batch 2 前置只读架构审计已完成；Batch 2A 已按审计边界完成实现、用户人工验证和 Git 闭环；Batch 2B 仍只有职责边界规划，尚未开始代码实现。
+- Batch 2 前置只读架构审计已完成；Batch 2A 已按审计边界完成实现、用户人工验证和 Git 闭环；Batch 2B 已按规划完成 Project Document / History 生命周期边界抽离及 final no-op 最小修复，并通过全部人工 QA，作为后续工作的稳定架构基线。Batch 3 尚未开始。
 
 #### 2. 已确认架构事实与治理优先级
 
@@ -1152,7 +1154,7 @@ Git 结果：
 
 ##### Batch 2：项目文档、历史与持久化
 
-状态：**Batch 2A 已验证完成并 commit / push；Batch 2B 尚未开始**
+状态：**Batch 2A 已验证完成并 commit / push；Batch 2B 已验证完成，manual QA passed**
 
 推荐执行顺序：
 
@@ -1222,26 +1224,26 @@ Batch 2A 代码检查：
 - HTML export 基础回归：打开、开始放映、普通元素、页面导航以及图片 / 音频 / 视频资源正常。
 - 状态：**已验证完成并通过 `refactor: extract project persistence` 完成 commit / push**。
 
-Batch 2B 推荐文件：
+Batch 2B 实际 Hook 文件：
 
 ```text
 src/hooks/useProjectDocument.ts
 ```
 
-可选纯历史辅助：
+Batch 2B 实际纯历史辅助文件：
 
 ```text
 src/utils/projectHistory.ts
 ```
 
-Batch 2B 目标职责：
+Batch 2B 实现职责：
 
 - `project`。
 - `latestProjectRef`。
 - undo / redo stacks。
 - history grouping。
 - snapshot clone。
-- autosave。
+- 为 autosave 提供统一 Project document state；`assetStoreReady` 门闩和保存 effect 继续留在 App orchestration。
 - mutation transaction。
 
 事务边界：
@@ -1251,6 +1253,52 @@ Batch 2B 目标职责：
 - App 可以继续保留必要的薄 orchestration 边界，用于 duplicate-review 只读保护、Clip preview 清理、Undo / Redo 后 selection 调整和播放/UI 协调。
 - 资源 metadata 合并或永久删除仍必须同步处理当前项目及历史快照，不能因封装 history 而破坏资源一致性。
 - 自动保存必须继续受 `assetStoreReady` 或等价 persistence-ready 门闩保护。
+
+Batch 2B 实现结果（2026-07-30）：
+
+- 新增 `src/hooks/useProjectDocument.ts`，统一拥有 `project` React state、`latestProjectRef`、Undo / Redo history state、history grouping，以及普通 mutation、无历史 document mutation、Undo / Redo 和跨快照 metadata transform 的公开边界。
+- 新增 `src/utils/projectHistory.ts`，以不依赖 React 的纯逻辑统一 snapshot clone、60 条历史上限、Undo / Redo stack 转换、group 初始快照和当前 / Undo / Redo / 活跃 group snapshot 的一致性变换。
+- `commitProjectChange` 的 reference-identity no-op 规则保持不变：updater 返回同一 Project 引用时不创建历史、不清空 Redo，也不触发 React 更新。
+- 普通修改继续创建一个 Undo 边界并清空 Redo；`recordHistory: false` 在活跃 group 内只标记该 group 已变化，在 group 外仍按既有行为创建一个 Undo 边界。
+- history group 只保存连续编辑开始前的初始快照；连续多次拖动 / 输入结束后只形成一个 Undo。
+- 最终静态收尾发现原实现只记录“中间是否发生 mutation”，无法识别 `A → B → A`；该状态不能作为 final no-op 的稳定保证，因此没有执行原计划 commit / push。
+- `finishProjectHistoryGroup()` 现在只在事务结束时比较最终 Project 与起始快照；顶层 `Project.updatedAt` 和仅用于编译缓存失效的 `AnimationScene.revision` 被明确视为 bookkeeping，其余 Project、Slide、元素、资源、动画数据和数组顺序继续参与内容等价判断。
+- Group 最终内容等价时不压入 Undo，也不清空 Group 开始前已有的 Redo；最终确实变化时才压入一次起始快照并在同一 finish 边界清空 Redo。whole-project canonical comparison 不进入 pointermove / rAF / 中间 mutation。
+- Undo / Redo 恢复值继续使用深快照，不与 history stack 中保存的可变对象共享引用；新修改后的 Redo 清理规则保持不变。
+- 资源 metadata 合并和永久删除改为通过统一 snapshot transformer 同时处理 current、Undo、Redo 和活跃 group 初始快照；asset Blob、Object URL、IndexedDB migration 和永久删除副作用仍由 App 原有 asset lifecycle 负责。
+- `App.tsx` 保留 selection、Undo / Redo 后 UI cleanup、Clip preview 清理、`animationPreviewKey`、duplicate-review mutation guard、Blob / Object URL / IndexedDB runtime lifecycle、`assetStoreReady` autosave gate，以及 Presentation、Timeline、Export、keyboard、clipboard、context menu 和 UI composition；没有把这些编辑器或运行时职责塞入 Project Document Hook。
+- 页面选择、资源定位和 Presentation 翻页通过同步更新 `latestProjectRef` 的无历史 document mutation 继续保持 stack-neutral；快速连续 Presentation 导航仍会立即看到最新页面。
+- autosave effect 与 `assetStoreReady` 门闩仍留在 `App.tsx`，继续调用 Batch 2A 的 `savePersistedProject(project)`；`useProjectDocument` 不依赖 localStorage、IndexedDB、Blob 或 Object URL。
+- `App.tsx` 从 Batch 2A 后的 5807 行降至 5750 行；该变化只是职责抽离结果，不作为 Batch 成功标准。
+- 本轮没有修改 `SlideCanvas` sampling、Presentation / Timeline Controller、Stage 5 export Runtime、asset lifecycle 整体、selection / clipboard / shortcuts、Animation Workspace、`animationCommands`、Stage 6 / 7 或 Delete Clip Bug。
+
+Batch 2B 实际修改文件：
+
+```text
+PROJECT_STATUS.md
+src/App.tsx
+src/hooks/useProjectDocument.ts
+src/utils/projectHistory.ts
+```
+
+Batch 2B 代码级验证：
+
+- 不落盘直接断言：24 项通过，覆盖普通 mutation、reference no-op、Redo 清理、group 外 `recordHistory: false`、10 次 group 修改合并为一个 Undo、空 group、60 条上限、Undo / Redo 深快照恢复、资源 metadata 跨 current / Undo / Redo / active group 一致性，以及 autosave readiness gate / Blob lifecycle 未进入 Hook。
+- final no-op History Group 专项直接断言：21 项通过，覆盖 `A → B` 一个 Undo、`A → B → A` 零新增 Undo、无重复 B snapshot、已有 Redo 在最终 no-op Group 后保留、真实变化 Group 清空旧 Redo、仅 `updatedAt` / Scene `revision` 变化不产生 History、内容字段仍参与比较、对象键顺序 canonicalization、数组语义以及 History max 60。
+- `npm.cmd run lint`：通过，0 error、0 warning。
+- `npm.cmd run build`：通过。
+- `git diff --check`：通过；仅报告工作区既有 Git 行尾转换提示，不存在 whitespace error。
+
+Batch 2B 最终人工 QA（2026-07-30）：
+
+- 普通 Undo / Redo、连续拖动一个 Undo boundary、新实际 mutation 清空 Redo、autosave + F5、资源 + Undo / Redo + F5、Undo 状态保存、Reset + F5 和原 Project 恢复全部通过。
+- Presentation smoke 通过：slide-enter、Click Step、Wheel Down / Up、页面切换、图片与 Video 均正常。
+- standalone HTML Export smoke 通过：导出、页面、图片 / Video、slide-enter、Click Step 和页面导航均正常。
+- 隐藏重复 Undo 专项通过：已有 `A → B` 历史后执行 `B → C → B`，一次 Ctrl+Z 直接回到 A，没有重复 B snapshot。
+- Redo preservation 专项通过：`A → B → Undo(A)` 后执行 `A → C → A`，一次 Ctrl+Y 仍恢复到 B，final no-op Group 没有清空既有 Redo。
+- 最终 History invariant：History max = 60；普通实际 mutation 产生一个 Undo，新实际 mutation 清空 Redo；连续 Group 最多产生一个 Undo；Group 最终回到起始文档时产生零 Undo 并保留 Redo；中间 mutation 不提前清空 Redo；只有 finish 确认真实内容变化后才提交 Undo 并清空 Redo。
+- 内容等价比较只发生在 Group finish，并且只忽略确认属于 bookkeeping 的 `Project.updatedAt` 与 `AnimationScene.revision`；其他实际 Project 内容、对象值和数组顺序继续参与比较。
+- 状态：**已验证完成；manual QA passed；作为稳定 Project Document / History 架构基线。Batch 3 尚未开始。**
 
 Batch 2 当前明确禁止移动：
 
@@ -1349,7 +1397,7 @@ Batch 2 当前明确禁止移动：
 
 - 不与第 5 阶段 HTML Click Step 同步混合开发。
 - 不提前实现第 6 阶段 Click Step 编辑 UI 或第 7 阶段 Timeline V2-C。
-- Batch 1、Batch 2A 已验证完成并 push；Batch 2 前置只读架构审计已完成；Batch 2B 和后续 Batch 仍为计划开发，尚未开始。
+- Batch 1、Batch 2A、Batch 2B 已验证完成；Batch 2 前置只读架构审计已完成；Batch 3、Stage 6 和 Stage 7 尚未开始。
 
 ### 第 6 阶段：Click Step 编辑界面
 
@@ -1990,7 +2038,7 @@ Standalone HTML 重新验证结论：
 分类与顺序：
 
 - 与 Batch 2A persistence adapter 无关；Part A 只修复编辑器正式 Presentation 的通用 deterministic WAAPI 生命周期。
-- Part A 已完成人工验证；Export 当前无法复现且不启动猜测性修复。Part A Git 闭环后的下一项正式开发任务是 Batch 2B。
+- Part A 已完成人工验证；Export 当前无法复现且不启动猜测性修复。Part A Git 闭环后已按计划进入 Batch 2B，Batch 2B 已通过全部人工 QA 并作为稳定架构基线。
 
 状态：**Part A 已解决并通过人工 QA；Export 现象当前无法复现；全屏发白记录为环境观察项**
 
@@ -2136,7 +2184,11 @@ GitHub 状态：已 push
 2026-07-30：用户完成 Part A 全部人工 QA，确认正式 Presentation、Timeline、Click Step、startMs 和 Wheel 回归正常；Part A 标记为已解决
 2026-07-30：standalone HTML 的 Video 普通动画、Click Step 和 startMs 重新测试通过，原“Video animation invisible”无法复现；未修改 Export implementation，不启动 speculative repair
 2026-07-30：原生全屏发白仅在特定显示设备出现，记录为 environment-specific observation，不作为 Animify 当前代码缺陷
-当前状态：第 5.5 阶段 Batch 1、Batch 2A 已验证完成并 push；Video Bug Part A 已解决并完成 Git 闭环；下一项正式开发任务是 Batch 2B，尚未开始
+2026-07-30：Batch 2B 完成 Project Document / History 生命周期边界抽离及 24 项直接断言；代码已实现，等待用户人工验证，尚未 commit / push
+2026-07-30：用户完成 Batch 2B 首轮完整人工 QA，普通 Undo / Redo、连续拖动、Redo invalidation、autosave、资源、Reset、Presentation 和 standalone HTML 均通过
+2026-07-30：最终静态收尾确认原 Group 只记录中间 mutation，不能保证 A → B → A 零 History；已停止 Git 闭环并完成 finish-time 内容等价与事务级 Redo 最小修复，21 项专项断言通过
+2026-07-30：用户完成 Batch 2B 最终专项 QA，确认 B → C → B 不产生隐藏重复 Undo，A → C → A 保留既有 Redo；Batch 2B 正式标记为已验证完成
+当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B 已验证完成；Video Bug Part A 已解决并完成 Git 闭环；Batch 3 尚未开始
 ```
 
 ---
@@ -2158,7 +2210,7 @@ GitHub 状态：已 push
 - standalone HTML 必须先由用户点击“开始放映”；启动前没有播放状态或媒体 autoplay，启动点击只进入第一页并为后续有声媒体提供浏览器 user activation，该行为已经用户人工验收。
 - Batch 2A 开始基线是 `bbc7f5d2bbf5403dcc2b0ede64014446cd258a3e docs: sync stage 5.5 architecture status`；Batch 2A 已通过 `refactor: extract project persistence` 完成 Git 闭环。
 - 第 5.5 阶段 Batch 1 已完成人工验证、commit 和 push；不再存在“待验证”或“待 Git 闭环”状态。
-- Batch 2 前置只读架构审计已完成。Stage 5.5 Batch 2A“Project persistence adapter”已验证完成并 push；Video Bug Part A 已解决并完成人工 QA / Git 闭环。Export 现象当前无法复现，不启动 speculative repair；下一项正式开发任务是 Batch 2B，尚未开始。
+- Batch 2 前置只读架构审计已完成。Stage 5.5 Batch 2A“Project persistence adapter”已验证完成并 push；Video Bug Part A 已解决并完成人工 QA / Git 闭环。Export 现象当前无法复现，不启动 speculative repair；Batch 2B“Project document + history transaction”及 final no-op 修复已通过全部人工 QA 并成为稳定架构基线。Batch 3 尚未开始。
 - Stage 6 必须等待 Batch 2 完成和回归结果，并重新评估 Batch 3 最小 Sequence Command Domain 后再决定进入时机。
 - 原暂缓项目已经分配到第 7、9、10、11、12 阶段；不得提前并行开发。
 
@@ -2175,7 +2227,7 @@ git diff --cached
 
 不得直接执行 pull、reset、clean、rebase、merge、restore 或其他 Git 写操作。
 
-### 第 5.5 阶段 Batch 2A 代码实现后的边界
+### 第 5.5 阶段 Batch 2B 代码实现后的边界
 
 1. 第 3 阶段数据与命令层已经用户验证，并通过提交 `975f109` push。
 2. 第 5 阶段已实现独立 HTML 的 Click Step 同步；Click Step 编辑 UI 和 Timeline V2-C 仍未开发。
@@ -2189,8 +2241,10 @@ git diff --cached
 10. standalone HTML 在启动前不创建播放状态；一次真实“开始放映”点击只打开门闩并正常进入第一页，媒体 autoplay 不采用重试、强制静音或浏览器 hack。
 11. 第 5 阶段代码实现、代码级检查、人工验收和 Git 闭环均已完成。
 12. 第 5.5 阶段 Batch 1 首轮人工验收发现页面复制丢失 V2 关键帧；`slideOperations.ts` 已改为复制完整 Scene，用户复测通过，Batch 1 已验证完成并 push。
-13. Batch 2A 只抽离 Project JSON 的 localStorage / normalization / legacy source 解析边界；Project React state、History、asset Blob lifecycle、playback 与 Timeline 均未迁移。Batch 2A 已验证完成并 push；Batch 2B 尚未开始。
-14. Video animation / compositor 生命周期问题与 persistence adapter 无关；Part A Presentation 已修复并通过人工 QA。Export Video animation invisible 当前无法复现且未修改 Export implementation；全屏发白为 environment-specific observation，不增加 workaround。下一项正式开发任务为尚未开始的 Batch 2B。
+13. Batch 2A 只抽离 Project JSON 的 localStorage / normalization / legacy source 解析边界，并已验证完成并 push。
+14. Batch 2B 已把 Project React state、`latestProjectRef`、History stacks、grouping、snapshot clone、mutation transaction、Undo / Redo 和跨历史快照 metadata transform 抽入 `useProjectDocument` / `projectHistory`；autosave readiness gate、asset Blob lifecycle、selection、playback 与 Timeline 仍在原职责边界。
+15. Video animation / compositor 生命周期问题与 persistence adapter 和 Batch 2B 无关；Part A Presentation 已修复并通过人工 QA。Export Video animation invisible 当前无法复现且未修改 Export implementation；全屏发白为 environment-specific observation，不增加 workaround。
+16. Batch 2B 已通过完整人工 QA 与 final no-op / Redo preservation 专项 QA，正式标记为已验证完成并作为稳定架构基线；Batch 3 与 Stage 6 均尚未开始。
 
 ### Git 状态说明
 
@@ -2207,6 +2261,7 @@ git diff --cached
 - Video Bug Part A 开始基线：`dac4fe2a28c988da7285d71f101fa2ecfc0ee8c8`。
 - Part A 正式提交范围仅包含 `PROJECT_STATUS.md`、`src/components/editor/SlideCanvas.tsx` 和新增 `src/utils/deterministicAnimationLifecycle.ts`，提交信息为 `fix: stabilize deterministic presentation animations`。
 - Part A 已完成人工验证、commit 和 push；`main` 与 `origin/main` 同步，工作区和暂存区干净。
-- Batch 2B 尚未开始代码实现，并作为下一项正式开发任务等待用户明确要求。
+- Batch 2B 开始基线：`main`、本地 `origin/main` 均为 `291f1c87d426fcdd8b7eb473046fd4c591cfebdf`，ahead 0、behind 0，开始前工作区和暂存区干净。
+- Batch 2B 最终提交范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/hooks/useProjectDocument.ts`、`src/utils/projectHistory.ts`，提交信息为 `refactor: extract project document history`；本次 Git 闭环不包含 Batch 3。
 
 未经用户允许，不得 commit 或 push。

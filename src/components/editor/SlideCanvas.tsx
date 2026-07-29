@@ -22,6 +22,12 @@ import {
   type CompiledSlideAnimations,
 } from "../../utils/animationCompiler";
 import {
+  clearDeterministicAnimations,
+  ensureDeterministicAnimation,
+  removeUnusedDeterministicAnimations,
+  type ManagedDeterministicAnimation,
+} from "../../utils/deterministicAnimationLifecycle";
+import {
   getPresentationRenderableAnimationSamples,
   type PresentationSequenceSample,
 } from "../../utils/presentationPlayback";
@@ -1067,12 +1073,17 @@ function SlideElementView({
   const animationNodeRef = useRef<HTMLDivElement | null>(null);
 
   /**
-   * Web Animation instances owned by Timeline-controlled editor playback.
-   *
-   * They remain paused permanently. The shared Timeline writes currentTime
-   * directly so play, pause, and seek always render the exact same frame.
+   * Stable WAAPI instances owned by deterministic Timeline and Presentation
+   * sampling. Native media exposes compositor churn most visibly, but every
+   * element requires definition changes and playback clock ticks to stay
+   * separate.
    */
-  const timelineAnimationsRef = useRef<Map<string, Animation>>(new Map());
+  const deterministicAnimationsRef = useRef<
+    Map<
+      string,
+      ManagedDeterministicAnimation<CompiledElementAnimation, Animation>
+    >
+  >(new Map());
 
   const mediaNodeRef = useRef<HTMLMediaElement | null>(null);
 
@@ -1186,7 +1197,7 @@ function SlideElementView({
   useEffect(() => {
     const animationNode = animationNodeRef.current;
 
-    const managedAnimations = timelineAnimationsRef.current;
+    const managedAnimations = deterministicAnimationsRef.current;
 
     const sequenceControlled = animationSequenceSamplesById !== undefined;
 
@@ -1195,9 +1206,7 @@ function SlideElementView({
       !animationNode ||
       isEditing
     ) {
-      managedAnimations.forEach((animation) => animation.cancel());
-
-      managedAnimations.clear();
+      clearDeterministicAnimations(managedAnimations);
 
       return;
     }
@@ -1219,7 +1228,7 @@ function SlideElementView({
       if (sampledTimeMs === undefined) {
         const existingAnimation = managedAnimations.get(compiledAnimation.id);
 
-        existingAnimation?.cancel();
+        existingAnimation?.animation.cancel();
         managedAnimations.delete(compiledAnimation.id);
         continue;
       }
@@ -1240,7 +1249,7 @@ function SlideElementView({
       if (elapsedTimelineMs < 0) {
         const existingAnimation = managedAnimations.get(compiledAnimation.id);
 
-        existingAnimation?.cancel();
+        existingAnimation?.animation.cancel();
 
         managedAnimations.delete(compiledAnimation.id);
 
@@ -1262,41 +1271,46 @@ function SlideElementView({
       if (reachedEnd && !keepsFinalFrame) {
         const existingAnimation = managedAnimations.get(compiledAnimation.id);
 
-        existingAnimation?.cancel();
+        existingAnimation?.animation.cancel();
 
         managedAnimations.delete(compiledAnimation.id);
 
         continue;
       }
 
-      let animation = managedAnimations.get(compiledAnimation.id);
+      const animation = ensureDeterministicAnimation(
+        managedAnimations,
+        compiledAnimation.id,
+        compiledAnimation,
+        () => {
+          const keyframes = createBrowserAnimationKeyframes(compiledAnimation);
+
+          if (keyframes.length === 0) {
+            return undefined;
+          }
+
+          const createdAnimation = animationNode.animate(keyframes, {
+            delay: 0,
+            duration: compiledAnimation.timing.duration,
+            fill: compiledAnimation.timing.fill,
+            iterations: compiledAnimation.timing.iterations,
+            direction: compiledAnimation.timing.direction,
+            easing: "linear",
+          });
+
+          /**
+           * Deterministic playback owns the clock. The browser animation remains
+           * paused and is reused while rAF updates only currentTime.
+           */
+          createdAnimation.pause();
+
+          return createdAnimation;
+        },
+      );
 
       if (!animation) {
-        const keyframes = createBrowserAnimationKeyframes(compiledAnimation);
-
-        if (keyframes.length === 0) {
-          continue;
-        }
-
-        animation = animationNode.animate(keyframes, {
-          delay: 0,
-          duration: compiledAnimation.timing.duration,
-          fill: compiledAnimation.timing.fill,
-          iterations: compiledAnimation.timing.iterations,
-          direction: compiledAnimation.timing.direction,
-          easing: "linear",
-        });
-
-        /**
-         * Timeline playback is manually sampled, so these animations must never
-         * advance using their own browser clock.
-         */
-        animation.pause();
-
-        managedAnimations.set(compiledAnimation.id, animation);
+        continue;
       }
-
-      animation.pause();
 
       animation.currentTime = Math.min(
         totalAnimationTimeMs,
@@ -1306,15 +1320,10 @@ function SlideElementView({
       visibleAnimationIds.add(compiledAnimation.id);
     }
 
-    managedAnimations.forEach((animation, animationId) => {
-      if (visibleAnimationIds.has(animationId)) {
-        return;
-      }
-
-      animation.cancel();
-
-      managedAnimations.delete(animationId);
-    });
+    removeUnusedDeterministicAnimations(
+      managedAnimations,
+      visibleAnimationIds,
+    );
   }, [
     animationSequenceSamplesById,
     animationTimelineTimeMs,
@@ -1324,20 +1333,16 @@ function SlideElementView({
   ]);
 
   /**
-   * A Clip edit may keep the same ID while changing its keyframes or timing.
-   *
-   * Cancel old browser Animation instances before the next compiled version is
-   * sampled so stale keyframes can never survive an animation edit.
+   * Component disposal owns the final cleanup. Definition changes are reconciled
+   * in the sampling effect, while rAF time changes reuse the same WAAPI instance.
    */
   useEffect(() => {
-    const managedAnimations = timelineAnimationsRef.current;
+    const managedAnimations = deterministicAnimationsRef.current;
 
     return () => {
-      managedAnimations.forEach((animation) => animation.cancel());
-
-      managedAnimations.clear();
+      clearDeterministicAnimations(managedAnimations);
     };
-  }, [renderableCompiledAnimations]);
+  }, []);
 
   /**
    * Play compiled Animation Schema V2 Clips through the Web Animations API.

@@ -1,9 +1,9 @@
 # Animify 项目状态
 
-> 最后更新：2026-07-29
+> 最后更新：2026-07-30
 > 仓库：`https://github.com/Sharofanar/Animify`  
 > 主分支：`main`  
-> 当前稳定基线：Stage 5.5 Batch 2A · `refactor: extract project persistence`
+> 当前稳定基线：Video Bug Part A · `fix: stabilize deterministic presentation animations`
 
 本文档是 Animify 当前开发状态的长期事实来源。
 
@@ -34,7 +34,8 @@
 当前已知 GitHub `origin/main` 最新提交：
 
 ```text
-Stage 5.5 Batch 2A: refactor: extract project persistence
+Video Bug Part A: fix: stabilize deterministic presentation animations
+dac4fe2 refactor: extract project persistence
 bbc7f5d docs: sync stage 5.5 architecture status
 23e4901 refactor: extract low risk editor boundaries
 ```
@@ -166,7 +167,7 @@ Tailwind CSS、dnd-kit 以及其他依赖的当前实际版本和使用范围，
 - Batch 2A 开始前工作区：干净
 - Batch 2A 开始前暂存区：干净
 - Batch 2A 实际提交范围：`PROJECT_STATUS.md`、`src/App.tsx`、新增 `src/utils/projectPersistence.ts`
-- Batch 2A 正式提交信息：`refactor: extract project persistence`
+- Batch 2A 正式提交：`dac4fe2a28c988da7285d71f101fa2ecfc0ee8c8 refactor: extract project persistence`
 - 第 5 阶段 HTML 导出 Click Step 同步：已验证完成并通过提交 `f29b255` push
 - 第 5.5 阶段：已开始
 - 第 5.5 阶段 Batch 1：**已验证完成并通过提交 `23e4901` push（2026-07-28）**
@@ -1954,20 +1955,44 @@ Step 3 及以后：保持未执行状态
 
 - deterministic Presentation sampling 的 `renderableCompiledAnimations` 引用会随每个 rAF 变化。
 - 现有 WAAPI 生命周期因此在每帧执行 cancel → recreate → pause → `currentTime`，造成 Video compositor 状态持续重置。
-- 后续修复应只在动画定义变化时重建 WAAPI；仅局部时间变化时只更新 `currentTime`。
+- 修复必须只在动画定义变化时重建 WAAPI；仅局部时间变化时只更新 `currentTime`。
 - 修复不得按 Video preset 特判，也不得用 `will-change`、`translateZ` 或强制 GPU hack 掩盖生命周期根因。
 
-导出侧当前结论：
+Presentation Part A 修复与验收（2026-07-30）：
 
-- export Runtime 问题尚未证明与编辑器 Presentation 的逐帧 WAAPI 重建属于同一根因，禁止提前合并结论。
-- 后续需在真实 standalone Runtime 中继续检查 wrapper `getAnimations()`、`animation.currentTime`、Sequence 状态、`video.readyState`，以及媒体 mount / 首帧 readiness。
+- `SlideCanvas` 的 deterministic WAAPI Map 现在同时保存 compiler 输出 definition 与浏览器 `Animation` instance。
+- compiler 输出在同一 scene / Sequence 定义期间保持不可变且引用稳定；同一 animation ID 下 definition 引用不变时，rAF 只更新既有实例的 `currentTime`。
+- Keyframe、timing、target、Sequence / Clip 集合或页面变化产生新的 compiler definition 时，旧实例会被取消并建立新实例。
+- 不再使用每帧新建的 `renderableCompiledAnimations` 数组引用触发全量 cleanup；组件卸载仍会清理全部实例，参与集合变化仍会清理失效实例。
+- 新增 `src/utils/deterministicAnimationLifecycle.ts`，集中表达 reuse、definition replacement、失效实例清理和 unmount 清理规则。
+- 该修复是全部元素共用的 deterministic animation lifecycle 规则，没有 Video、preset 或动画类别特判，也没有 GPU / repaint workaround。
+- completed / active / pending、pending baseline、`localTime < startMs` 不参与合成、Wheel / retreat 与媒体自身播放时间语义均未改变。
+- 内存 mock 直接断言 16 项通过：覆盖连续 3 帧复用、创建次数、仅更新时间、definition 替换、startMs 前后边界、active / completed / pending baseline 稳定、Sequence 切换、页面切换和组件卸载清理。
+- 用户人工 QA 已确认：正式 Presentation 的 Video 普通动画不再抽动 / 闪烁；Timeline 播放、暂停、scrub 正常；Video 可进入并正常播放 Click Step。
+- `startMs = 1000ms` 回归通过：`localTime < startMs` 时保持前一 Sequence completed 状态，到达 `startMs` 后才由当前 Clip 接管。
+- Wheel Down / Wheel Up 回归通过。
+- Part A 状态：**代码修复完成，人工 QA 通过，已解决**。
+
+Standalone HTML 重新验证结论：
+
+- 当前重新人工测试已无法复现此前记录的“Video animation invisible”。
+- standalone HTML 的 Video 普通动画、Click Step 和 `startMs = 1000ms` 均已通过人工 QA。
+- 本轮没有修改任何 Export implementation，因此不得声称 Part A 已证明修复 Export；当前只记录“无法复现”。
+- 不启动 speculative repair。若以后取得稳定复现步骤，再重新开启 Export Runtime 动态诊断。
+- 原计划 Part B 当前关闭：**无需启动代码修复；等待未来稳定复现证据**。
+
+原生全屏发白观察：
+
+- 同一视频只在一块显示设备上出现，拖到另一块显示设备后正常；另一个导入视频也未出现该问题。
+- 当前证据更符合特定显示设备 / Chromium / OS 色彩或 compositor 路径差异，属于 environment-specific observation，不是当前已确认的 Animify defect。
+- 不计划增加 `filter`、`brightness`、`will-change`、`translateZ` 或其他代码 workaround。
 
 分类与顺序：
 
-- 与 Batch 2A persistence adapter 无关；本轮不修改任何 Video、playback、sampling 或 export 代码。
-- Batch 2A Git 闭环后，先作为独立高优先级 Bug 完成诊断、修复、人工验证和独立 commit，再进入 Batch 2B。
+- 与 Batch 2A persistence adapter 无关；Part A 只修复编辑器正式 Presentation 的通用 deterministic WAAPI 生命周期。
+- Part A 已完成人工验证；Export 当前无法复现且不启动猜测性修复。Part A Git 闭环后的下一项正式开发任务是 Batch 2B。
 
-状态：**已确认，待独立开发**
+状态：**Part A 已解决并通过人工 QA；Export 现象当前无法复现；全屏发白记录为环境观察项**
 
 ---
 
@@ -2107,7 +2132,11 @@ GitHub 状态：已 push
 2026-07-29：Batch 2A 新增 projectPersistence adapter 并完成 19 项直接断言、Lint、Build 和 Diff 检查
 2026-07-29：用户完成 Batch 2A 人工验收，确认 autosave / refresh、AnimationScene V2、图片和视频资源、Reset、Undo / Redo、Presentation 与 HTML export 基础回归正常
 2026-07-29：Batch 2A 通过 refactor: extract project persistence 完成 commit / push；独立 Video animation / compositor 生命周期问题已记录，未混入本提交
-当前状态：第 5.5 阶段进行中；Batch 1、Batch 2A 已验证完成并 push；下一入口是独立 Video animation / compositor Bug，Batch 2B 尚未开始
+2026-07-29：Video Bug Part A 已分离 Presentation animation definition lifecycle 与 rAF time sampling，并完成 16 项生命周期 / startMs / cleanup 直接断言
+2026-07-30：用户完成 Part A 全部人工 QA，确认正式 Presentation、Timeline、Click Step、startMs 和 Wheel 回归正常；Part A 标记为已解决
+2026-07-30：standalone HTML 的 Video 普通动画、Click Step 和 startMs 重新测试通过，原“Video animation invisible”无法复现；未修改 Export implementation，不启动 speculative repair
+2026-07-30：原生全屏发白仅在特定显示设备出现，记录为 environment-specific observation，不作为 Animify 当前代码缺陷
+当前状态：第 5.5 阶段 Batch 1、Batch 2A 已验证完成并 push；Video Bug Part A 已解决并完成 Git 闭环；下一项正式开发任务是 Batch 2B，尚未开始
 ```
 
 ---
@@ -2129,7 +2158,7 @@ GitHub 状态：已 push
 - standalone HTML 必须先由用户点击“开始放映”；启动前没有播放状态或媒体 autoplay，启动点击只进入第一页并为后续有声媒体提供浏览器 user activation，该行为已经用户人工验收。
 - Batch 2A 开始基线是 `bbc7f5d2bbf5403dcc2b0ede64014446cd258a3e docs: sync stage 5.5 architecture status`；Batch 2A 已通过 `refactor: extract project persistence` 完成 Git 闭环。
 - 第 5.5 阶段 Batch 1 已完成人工验证、commit 和 push；不再存在“待验证”或“待 Git 闭环”状态。
-- Batch 2 前置只读架构审计已完成。Stage 5.5 Batch 2A“Project persistence adapter”已验证完成并 push；下一入口是独立 Video animation / compositor 生命周期 Bug，完成诊断、修复、人工验证和独立 Git 闭环后再进入 Batch 2B。
+- Batch 2 前置只读架构审计已完成。Stage 5.5 Batch 2A“Project persistence adapter”已验证完成并 push；Video Bug Part A 已解决并完成人工 QA / Git 闭环。Export 现象当前无法复现，不启动 speculative repair；下一项正式开发任务是 Batch 2B，尚未开始。
 - Stage 6 必须等待 Batch 2 完成和回归结果，并重新评估 Batch 3 最小 Sequence Command Domain 后再决定进入时机。
 - 原暂缓项目已经分配到第 7、9、10、11、12 阶段；不得提前并行开发。
 
@@ -2161,7 +2190,7 @@ git diff --cached
 11. 第 5 阶段代码实现、代码级检查、人工验收和 Git 闭环均已完成。
 12. 第 5.5 阶段 Batch 1 首轮人工验收发现页面复制丢失 V2 关键帧；`slideOperations.ts` 已改为复制完整 Scene，用户复测通过，Batch 1 已验证完成并 push。
 13. Batch 2A 只抽离 Project JSON 的 localStorage / normalization / legacy source 解析边界；Project React state、History、asset Blob lifecycle、playback 与 Timeline 均未迁移。Batch 2A 已验证完成并 push；Batch 2B 尚未开始。
-14. Video animation / compositor 生命周期问题已确认为独立高优先级 Bug，与 persistence adapter 无关；必须独立修复和验证，不得混入 Batch 2A。
+14. Video animation / compositor 生命周期问题与 persistence adapter 无关；Part A Presentation 已修复并通过人工 QA。Export Video animation invisible 当前无法复现且未修改 Export implementation；全屏发白为 environment-specific observation，不增加 workaround。下一项正式开发任务为尚未开始的 Batch 2B。
 
 ### Git 状态说明
 
@@ -2175,6 +2204,9 @@ git diff --cached
 - Batch 2A 开始前工作区和暂存区均干净。
 - Batch 2A 正式提交范围只有 `PROJECT_STATUS.md`、`src/App.tsx` 和新增 `src/utils/projectPersistence.ts`，提交信息为 `refactor: extract project persistence`。
 - Batch 2A 已完成人工验证、commit 和 push；`main` 与 `origin/main` 同步，工作区和暂存区干净。
-- Batch 2B 尚未开始代码实现；下一任务是独立 Video animation / compositor 生命周期 Bug。
+- Video Bug Part A 开始基线：`dac4fe2a28c988da7285d71f101fa2ecfc0ee8c8`。
+- Part A 正式提交范围仅包含 `PROJECT_STATUS.md`、`src/components/editor/SlideCanvas.tsx` 和新增 `src/utils/deterministicAnimationLifecycle.ts`，提交信息为 `fix: stabilize deterministic presentation animations`。
+- Part A 已完成人工验证、commit 和 push；`main` 与 `origin/main` 同步，工作区和暂存区干净。
+- Batch 2B 尚未开始代码实现，并作为下一项正式开发任务等待用户明确要求。
 
 未经用户允许，不得 commit 或 push。

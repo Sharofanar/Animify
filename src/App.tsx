@@ -911,15 +911,9 @@ function App() {
   const clearTimelinePlaybackRange = timelinePlayback.clearPlaybackRange;
   const stopTimelinePlayback = timelinePlayback.stop;
 
-  const [selectedElementId, setSelectedElementId] = useState(
-    demoProject.slides[0]?.elements[0]?.id ?? "",
-  );
+  const [selectedElementId, setSelectedElementId] = useState("");
 
-  const [selectedElementIds, setSelectedElementIds] = useState<string[]>(() => {
-    const firstElementId = demoProject.slides[0]?.elements[0]?.id ?? "";
-
-    return firstElementId ? [firstElementId] : [];
-  });
+  const [selectedElementIds, setSelectedElementIds] = useState<string[]>([]);
 
   /**
    * Elements currently enabled as property-panel operation targets.
@@ -930,11 +924,7 @@ function App() {
    */
   const [propertyTargetElementIds, setPropertyTargetElementIds] = useState<
     string[]
-  >(() => {
-    const firstElementId = demoProject.slides[0]?.elements[0]?.id ?? "";
-
-    return firstElementId ? [firstElementId] : [];
-  });
+  >([]);
 
   /**
    * Initialize IndexedDB, migrate old Data URLs, and create runtime Blob URLs.

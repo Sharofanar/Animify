@@ -1,9 +1,9 @@
 # Animify 项目状态
 
-> 最后更新：2026-07-30
+> 最后更新：2026-07-31
 > 仓库：`https://github.com/Sharofanar/Animify`  
 > 主分支：`main`  
-> 当前稳定基线：Stage 5.5 Batch 2B · `refactor: extract project document history`
+> 当前稳定基线：`8a460e339a1300bef157faaadeea33f744daebd8 fix: initialize editor without selection`
 
 本文档是 Animify 当前开发状态的长期事实来源。
 
@@ -34,7 +34,8 @@
 当前已知 GitHub `origin/main` 最新提交：
 
 ```text
-Batch 2B: refactor: extract project document history
+8a460e3 fix: initialize editor without selection
+9f56c5e refactor: extract project document history
 291f1c8 fix: stabilize deterministic presentation animations
 dac4fe2 refactor: extract project persistence
 bbc7f5d docs: sync stage 5.5 architecture status
@@ -557,7 +558,7 @@ PROJECT_STATUS.md
 
 - 第 4 阶段已经完成用户人工验收，并通过提交 `5391f11` commit / push。
 - 第 5 阶段“HTML 导出 Click Step 同步”已通过用户人工验收。
-- 第 5.5 阶段“渐进式架构拆分维护”已经开始；Batch 1 已验证完成并通过提交 `23e4901` push，Batch 2 前置只读审计已完成，Batch 2A 已验证完成并 commit / push，Batch 2B 已完成全部人工 QA 并作为稳定 Project Document / History 架构基线；Batch 3 尚未开始。
+- 第 5.5 阶段“渐进式架构拆分维护”已经开始；Batch 1、Batch 2A、Batch 2B 已验证完成并完成 Git 闭环；Batch 3A Sequence / Click Step Command Domain 已通过用户人工 QA，作为稳定职责边界并准备完成独立 Git 闭环；Batch 3B 尚未开始。
 
 # 已完成前置：第 3 阶段 Click Step 数据与命令层
 
@@ -1015,7 +1016,7 @@ src/utils/exportPlayerRuntime.ts
 
 ### 第 5.5 阶段：渐进式架构拆分维护
 
-状态：**正在进行（Batch 1、Batch 2A、Batch 2B 已验证完成；Batch 3 尚未开始）**
+状态：**正在进行（Batch 1、Batch 2A、Batch 2B、Batch 3A 已验证完成；Batch 3A 准备完成独立 Git 闭环；Batch 3B 尚未开始）**
 
 #### 1. 阶段位置与总体原则
 
@@ -1027,7 +1028,7 @@ src/utils/exportPlayerRuntime.ts
 - 每个 Batch 必须独立完成：开发 → lint → build → `git diff --check` → 对应人工回归 → 独立 commit → 独立 push。
 - 禁止一次完成全部第 5.5 阶段重构；每个 Batch 验收并完成 Git 闭环后，才能进入下一 Batch。
 - 第 5.5 阶段已于 2026-07-28 开始；Batch 1 首轮人工验收发现的页面复制关键帧问题已修复，用户复测确认全部通过；Batch 1 已通过提交 `23e4901 refactor: extract low risk editor boundaries` 完成 commit / push。
-- Batch 2 前置只读架构审计已完成；Batch 2A 已按审计边界完成实现、用户人工验证和 Git 闭环；Batch 2B 已按规划完成 Project Document / History 生命周期边界抽离及 final no-op 最小修复，并通过全部人工 QA，作为后续工作的稳定架构基线。Batch 3 尚未开始。
+- Batch 2 前置只读架构审计已完成；Batch 2A 已按审计边界完成实现、用户人工验证和 Git 闭环；Batch 2B 已按规划完成 Project Document / History 生命周期边界抽离及 final no-op 最小修复，并通过全部人工 QA，作为后续工作的稳定架构基线。Batch 3A 已通过人工 QA，准备完成独立 Git 闭环；Batch 3B 尚未开始。
 
 #### 2. 已确认架构事实与治理优先级
 
@@ -1035,7 +1036,8 @@ src/utils/exportPlayerRuntime.ts
 
 1. `src/App.tsx`
    - 审计时约 6279 行，是第 5.5 阶段最高优先级技术债。
-   - 问题不只是文件较长，而是同时承担项目文档与状态所有权、Undo / Redo 与历史事务、项目持久化 / 自动保存、资源生命周期、slide operations、selection / clipboard / shortcuts、动画编辑协调、Timeline / Clip preview / Presentation glue、HTML export coordination、页面和 Panel 组装，以及 `SlideNavigator` / `SortableSlideCard`。
+   - 以下职责混杂描述属于 Batch 2B 前的历史审计结论：当时 App 同时承担项目文档与状态所有权、Undo / Redo 与历史事务、项目持久化 / 自动保存、资源生命周期、slide operations、selection / clipboard / shortcuts、动画编辑协调、Timeline / Clip preview / Presentation glue、HTML export coordination、页面和 Panel 组装，以及 `SlideNavigator` / `SortableSlideCard`。
+   - Batch 2B 后，Project React state、`latestProjectRef`、History stacks、History Group 和核心 mutation transaction 已由 `useProjectDocument` / `projectHistory` 拥有；App 当前保留 Editor/UI orchestration、selection、asset runtime、playback、export 和组件组装等边界。
    - 必须按真实状态和职责所有权渐进提取，禁止一次性大拆或只为缩短文件进行机械搬运。
 
 2. `src/utils/animationCommands.ts`
@@ -1298,7 +1300,7 @@ Batch 2B 最终人工 QA（2026-07-30）：
 - Redo preservation 专项通过：`A → B → Undo(A)` 后执行 `A → C → A`，一次 Ctrl+Y 仍恢复到 B，final no-op Group 没有清空既有 Redo。
 - 最终 History invariant：History max = 60；普通实际 mutation 产生一个 Undo，新实际 mutation 清空 Redo；连续 Group 最多产生一个 Undo；Group 最终回到起始文档时产生零 Undo 并保留 Redo；中间 mutation 不提前清空 Redo；只有 finish 确认真实内容变化后才提交 Undo 并清空 Redo。
 - 内容等价比较只发生在 Group finish，并且只忽略确认属于 bookkeeping 的 `Project.updatedAt` 与 `AnimationScene.revision`；其他实际 Project 内容、对象值和数组顺序继续参与比较。
-- 状态：**已验证完成；manual QA passed；作为稳定 Project Document / History 架构基线。Batch 3 尚未开始。**
+- 状态：**已验证完成；manual QA passed；作为稳定 Project Document / History 架构基线。后续 Batch 3A 也已通过人工 QA。**
 
 Batch 2 当前明确禁止移动：
 
@@ -1327,11 +1329,36 @@ Batch 2 当前明确禁止移动：
 - 页面选择、资源定位和 Presentation 翻页等无历史导航。
 - Timeline、正式放映和 HTML export 基础回归。
 
-##### Batch 3：Animation Command Domains
+##### Batch 3A：Sequence / Click Step Command Domain
+
+状态：**complete；manual QA passed；stable baseline；ready to commit；Batch 3B 尚未开始。**
+
+实现结果：
+
+- 新增 `src/utils/animationSequenceCommands.ts`，独立拥有 Sequence / Click Step 查询、创建、metadata 更新、trigger 更新和 Click Step 顺序移动，以及对应 command types。
+- `src/utils/animationCommands.ts` 继续提供原公开 import path，并通过 compatibility re-export 暴露相同 Sequence command API；现有 App 和 UI 消费者无需修改 import。
+- 新增最小中立层 `src/utils/animationCommandHelpers.ts`，只承载多个 command domain 共享的纯 helper；该模块不依赖 `animationCommands.ts` compatibility barrel，也没有形成通用巨型 helpers 文件。
+- 依赖方向保持单向：`presentation types` / `animationSequence` / `animationCommandHelpers` → `animationSequenceCommands` → `animationCommands` compatibility exports；新 Sequence module 不反向 import barrel。
+- Clip ownership 继续只由 `AnimationSequence.clipIds` 表达；创建或更新 Click Step 时会先解除旧 Sequence 归属，一个 Clip 最多属于一个 Sequence。
+- Clip 跨 Sequence 移动时保留原 `startMs` 数值；没有引入页面绝对时间、触发时间转换或第二套 Sequence 模型。
+- `sequenceOrder`、revision bump、immutable/no-op、无效输入 fallback、空 Sequence 清理和 legacy slide-enter fallback 均保持原实现行为。
+- 本 Batch 没有拆 Clip、Keyframe、element-animation cleanup、batch update、legacy mirror/sync 或复制集成命令，没有修改 Presentation、Timeline、Export、Selection、Asset 或 UI。
+- 不落盘直接断言共 171 项通过，覆盖查询顺序、创建、更新、trigger、重排、唯一 Clip ownership、跨 Sequence `startMs`、无效输入、revision、空/悬空引用和 compatibility barrel；另有 9 项 TypeScript barrel/type contract 断言通过。
+- 相对 import 图检查覆盖 34 个 `src` TypeScript 文件，没有发现 circular import。
+- `npm.cmd run lint`、`npm.cmd run build` 与 `git diff --check` 均通过；项目仍未新增临时 test script 或测试框架。
+- 用户人工 QA 已确认既有 Click Step 顺序、`slide-enter`、Wheel Up / Down、Video / Image 动画和 standalone HTML Sequence 行为正常，未发现 Batch 3A extraction 回归。
+- Batch 3A 没有改变 `sequenceOrder`、Clip ownership、`startMs`，也没有改变 Presentation、Timeline 或 Export 的时间语义。
+
+后续：
+
+- 完成 Batch 3A 独立 Git 闭环后，先单独诊断和修复已记录的 Pending Media Interaction Bug。
+- Pending Media Interaction Bug 处理完成前不开始 Batch 3B；未经用户明确要求，也不提前进入 Stage 6 / 7。
+
+##### Batch 3 后续：其他 Animation Command Domains
 
 目标：
 
-- 按 Sequence / Click Step → Clip → Keyframe → Scene cleanup → Legacy sync 的顺序渐进拆分 `animationCommands.ts`。
+- 在 Batch 3A 完成后，再评估是否按 Clip → Keyframe → Scene cleanup → Legacy sync 的顺序继续渐进拆分 `animationCommands.ts`。
 - 保留 `animationCommands.ts` 作为兼容 barrel / re-export，避免消费者一次全部迁移。
 - 同时评估提取 `animationKeyframeRules.ts`，统一命令层和 Inspector 当前重复的 Keyframe 边界规则。
 
@@ -1397,7 +1424,7 @@ Batch 2 当前明确禁止移动：
 
 - 不与第 5 阶段 HTML Click Step 同步混合开发。
 - 不提前实现第 6 阶段 Click Step 编辑 UI 或第 7 阶段 Timeline V2-C。
-- Batch 1、Batch 2A、Batch 2B 已验证完成；Batch 2 前置只读架构审计已完成；Batch 3、Stage 6 和 Stage 7 尚未开始。
+- Batch 1、Batch 2A、Batch 2B、Batch 3A 已验证完成；Batch 2 前置只读架构审计已完成；Batch 3A 准备完成独立 Git 闭环，Batch 3B、Stage 6 和 Stage 7 尚未开始。
 
 ### 第 6 阶段：Click Step 编辑界面
 
@@ -2042,6 +2069,25 @@ Standalone HTML 重新验证结论：
 
 状态：**Part A 已解决并通过人工 QA；Export 现象当前无法复现；全屏发白记录为环境观察项**
 
+### 14. Pending Media Interaction Bug
+
+现象：
+
+- 编辑器正式 Presentation 和 standalone HTML 均可复现。
+- 尚未出现的 pending Video 虽然视觉上不可见，但 DOM 仍参与 pointer hit-test。
+- 点击该不可见 Video 所在区域会直接播放声音，Video 不会因此出现，同时该点击不会推进下一 Step。
+- 鼠标停留在该区域时，Wheel 输入被媒体抢占，无法推进；鼠标移出 Video 区域后 Wheel 可正常触发下一 Step。
+
+初步分类：
+
+- 视觉 participation 与媒体 pointer / input ownership 不一致。
+- 该问题不是 Batch 3A extraction 引入，不作为 Batch 3A 阻塞项，也不并入 Batch 3A 提交修复。
+- 后续修复不能简单依赖 preset、opacity 或“是否存在未来 Clip”判断。
+- active / completed 状态中真实可交互的媒体不能被错误禁用。
+- 应在 Batch 3A 完成 Git 闭环后、Batch 3B 前作为独立任务读取真实 Presentation / Export DOM 与输入所有权链路后诊断和修复。
+
+状态：**已确认既有 Bug；待 Batch 3A Git 闭环后独立诊断与修复**
+
 ---
 
 ## 十、最近测试状态
@@ -2188,7 +2234,11 @@ GitHub 状态：已 push
 2026-07-30：用户完成 Batch 2B 首轮完整人工 QA，普通 Undo / Redo、连续拖动、Redo invalidation、autosave、资源、Reset、Presentation 和 standalone HTML 均通过
 2026-07-30：最终静态收尾确认原 Group 只记录中间 mutation，不能保证 A → B → A 零 History；已停止 Git 闭环并完成 finish-time 内容等价与事务级 Redo 最小修复，21 项专项断言通过
 2026-07-30：用户完成 Batch 2B 最终专项 QA，确认 B → C → B 不产生隐藏重复 Undo，A → C → A 保留既有 Redo；Batch 2B 正式标记为已验证完成
-当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B 已验证完成；Video Bug Part A 已解决并完成 Git 闭环；Batch 3 尚未开始
+2026-07-30：Initial Selection 独立修复通过人工 QA，并通过 `8a460e3 fix: initialize editor without selection` 完成 Git 闭环
+2026-07-30：Batch 3A 提取 Sequence / Click Step Command Domain，完成 171 项运行时断言、9 项类型契约断言和无循环依赖检查
+2026-07-31：用户完成 Batch 3A 人工 QA，确认 Click Step 顺序、slide-enter、Wheel、Video / Image 动画与 standalone HTML Sequence 行为正常；Batch 3A 标记为已验证完成并准备 Git 闭环
+2026-07-31：确认既有 Pending Media Interaction Bug：pending Video 仍参与 DOM hit-test 并抢占 pointer / wheel 输入；该问题不并入 Batch 3A，安排在 Batch 3B 前独立处理
+当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A 已验证完成；Video Bug Part A 与 Initial Selection 修复已解决并完成 Git 闭环；Batch 3A 准备提交；Pending Media Interaction Bug 待独立处理；Batch 3B 尚未开始
 ```
 
 ---
@@ -2210,8 +2260,8 @@ GitHub 状态：已 push
 - standalone HTML 必须先由用户点击“开始放映”；启动前没有播放状态或媒体 autoplay，启动点击只进入第一页并为后续有声媒体提供浏览器 user activation，该行为已经用户人工验收。
 - Batch 2A 开始基线是 `bbc7f5d2bbf5403dcc2b0ede64014446cd258a3e docs: sync stage 5.5 architecture status`；Batch 2A 已通过 `refactor: extract project persistence` 完成 Git 闭环。
 - 第 5.5 阶段 Batch 1 已完成人工验证、commit 和 push；不再存在“待验证”或“待 Git 闭环”状态。
-- Batch 2 前置只读架构审计已完成。Stage 5.5 Batch 2A“Project persistence adapter”已验证完成并 push；Video Bug Part A 已解决并完成人工 QA / Git 闭环。Export 现象当前无法复现，不启动 speculative repair；Batch 2B“Project document + history transaction”及 final no-op 修复已通过全部人工 QA 并成为稳定架构基线。Batch 3 尚未开始。
-- Stage 6 必须等待 Batch 2 完成和回归结果，并重新评估 Batch 3 最小 Sequence Command Domain 后再决定进入时机。
+- Batch 2 前置只读架构审计已完成。Stage 5.5 Batch 2A“Project persistence adapter”已验证完成并 push；Video Bug Part A 已解决并完成人工 QA / Git 闭环。Export 现象当前无法复现，不启动 speculative repair；Batch 2B“Project document + history transaction”及 final no-op 修复已通过全部人工 QA 并成为稳定架构基线。Batch 3A 最小 Sequence Command Domain 已通过人工 QA 并准备完成独立 Git 闭环；Batch 3B 尚未开始。
+- Batch 3A Git 闭环后，下一项是独立诊断和修复 Pending Media Interaction Bug；完成前不开始 Batch 3B。Stage 6 继续按当前 roadmap 等待。
 - 原暂缓项目已经分配到第 7、9、10、11、12 阶段；不得提前并行开发。
 
 ### 下次第一步：安全检查
@@ -2244,7 +2294,9 @@ git diff --cached
 13. Batch 2A 只抽离 Project JSON 的 localStorage / normalization / legacy source 解析边界，并已验证完成并 push。
 14. Batch 2B 已把 Project React state、`latestProjectRef`、History stacks、grouping、snapshot clone、mutation transaction、Undo / Redo 和跨历史快照 metadata transform 抽入 `useProjectDocument` / `projectHistory`；autosave readiness gate、asset Blob lifecycle、selection、playback 与 Timeline 仍在原职责边界。
 15. Video animation / compositor 生命周期问题与 persistence adapter 和 Batch 2B 无关；Part A Presentation 已修复并通过人工 QA。Export Video animation invisible 当前无法复现且未修改 Export implementation；全屏发白为 environment-specific observation，不增加 workaround。
-16. Batch 2B 已通过完整人工 QA 与 final no-op / Redo preservation 专项 QA，正式标记为已验证完成并作为稳定架构基线；Batch 3 与 Stage 6 均尚未开始。
+16. Batch 2B 已通过完整人工 QA 与 final no-op / Redo preservation 专项 QA，正式标记为已验证完成并作为稳定架构基线。
+17. Batch 3A 已提取独立 Sequence / Click Step Command Domain 并保留 `animationCommands.ts` compatibility barrel；人工 QA 已通过，准备完成独立 Git 闭环，未改变动画时间语义。
+18. Pending Media Interaction Bug 已确认为与 Batch 3A 无关的既有问题；应在 Batch 3A Git 闭环后、Batch 3B 前独立诊断和修复。
 
 ### Git 状态说明
 
@@ -2263,5 +2315,7 @@ git diff --cached
 - Part A 已完成人工验证、commit 和 push；`main` 与 `origin/main` 同步，工作区和暂存区干净。
 - Batch 2B 开始基线：`main`、本地 `origin/main` 均为 `291f1c87d426fcdd8b7eb473046fd4c591cfebdf`，ahead 0、behind 0，开始前工作区和暂存区干净。
 - Batch 2B 最终提交范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/hooks/useProjectDocument.ts`、`src/utils/projectHistory.ts`，提交信息为 `refactor: extract project document history`；本次 Git 闭环不包含 Batch 3。
+- Batch 3A 开始基线：`main`、本地 `origin/main` 均为 `8a460e339a1300bef157faaadeea33f744daebd8`，ahead 0、behind 0，开始前工作区和暂存区干净。
+- Batch 3A 已通过用户人工 QA，当前准备使用提交信息 `refactor: extract animation sequence commands` 完成独立 Git 闭环；预期提交范围仅为 `PROJECT_STATUS.md`、`src/utils/animationCommands.ts`、新增 `src/utils/animationSequenceCommands.ts` 和新增 `src/utils/animationCommandHelpers.ts`。
 
 未经用户允许，不得 commit 或 push。

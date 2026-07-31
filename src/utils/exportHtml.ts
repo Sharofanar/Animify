@@ -979,15 +979,23 @@ ${exportPlayerRuntimeScript}
           HTMLVideoElement
         ) {
           /**
-           * While a video occupies the fullscreen presentation surface, presentation
-           * navigation shortcuts are suspended. The user must leave video fullscreen
-           * before changing slides.
+           * Fullscreen video arrow keys must retain their native seek default action.
+           * Returning here also keeps them out of Presentation navigation.
            */
           if (
             event.key ===
               "ArrowRight" ||
             event.key ===
-              "ArrowLeft" ||
+              "ArrowLeft"
+          ) {
+            return;
+          }
+
+          /**
+           * Other presentation navigation shortcuts stay suspended until the user
+           * leaves video fullscreen.
+           */
+          if (
             event.key ===
               "Enter" ||
             event.key ===

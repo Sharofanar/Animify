@@ -1,9 +1,9 @@
 # Animify 项目状态
 
-> 最后更新：2026-07-31
+> 最后更新：2026-08-01
 > 仓库：`https://github.com/Sharofanar/Animify`  
 > 主分支：`main`  
-> 当前稳定基线：`d68ce742644158f6b90c126c2a0b7d3ad757ba4d refactor: extract animation sequence commands`
+> 本轮修复开始基线：`ba39f48d7db433614c9ffea4195dd18477e15994 fix: sync pending media input ownership`
 
 本文档是 Animify 当前开发状态的长期事实来源。
 
@@ -31,9 +31,10 @@
 
 ### 1. 权威远端基线
 
-当前已知 GitHub `origin/main` 最新提交：
+本轮修复开始时 GitHub `origin/main` 最新提交：
 
 ```text
+ba39f48 fix: sync pending media input ownership
 d68ce74 refactor: extract animation sequence commands
 8a460e3 fix: initialize editor without selection
 9f56c5e refactor: extract project document history
@@ -2107,23 +2108,65 @@ Standalone HTML 重新验证结论：
 
 状态：**实现完成；自动检查通过；manual QA passed；已验证完成；纳入本次独立 Git 闭环**
 
-### 15. Standalone Export Fullscreen Arrow-Key Seeking Bug
+### 15. Standalone Export Fullscreen Arrow-Key Seeking Bug（已解决）
+
+根因：
+
+- standalone HTML 在 `window` capture 阶段注册全局 `keydown`。
+- 全屏元素为 `HTMLVideoElement` 时，旧分支对 `ArrowLeft` / `ArrowRight` 先调用 `preventDefault()` 和 `stopPropagation()`，随后直接返回。
+- 该路径既取消了浏览器原生 Video controls 的 seek 默认动作，也没有显式修改 `currentTime`，因此方向键完全无效。
+
+实现结果（2026-08-01）：
+
+- Fullscreen Video 的 `ArrowLeft` / `ArrowRight` 在任何 `preventDefault()` / `stopPropagation()` 之前直接退出 Presentation handler。
+- 浏览器原生 Video controls 继续负责方向键 seek；该返回路径不会调用 Presentation advance / retreat，也不会切换 Step 或页面。
+- Space 继续由 export Runtime 显式切换一次播放 / 暂停，不推进 Presentation。
+- Enter、PageDown、PageUp 在全屏媒体期间继续阻止 Presentation 推进；本轮没有把 Enter 改为媒体播放 / 暂停。
+- Escape 继续保留浏览器原生全屏退出行为。
+- Fullscreen API 请求目标仍是 `<video>` 本身，`fullscreenchange` 后仍聚焦该 Video。
+- 退出全屏后 Video 保持焦点时，媒体继续拥有方向键和 Enter；这是已确认的合理媒体焦点语义，不强制 blur。用户点击画布空白后，Presentation 键盘输入立即恢复。
+
+人工 QA（2026-08-01）：
+
+- 全屏播放和暂停状态下，左右方向键均可调整 Video 进度；Video 不暂停、不重载，Step 和页码不变化。
+- 长按方向键可连续 seek，不切换 Step / 页面、不退出全屏，且未出现明显双重 seek。
+- Space 每次只切换一次播放 / 暂停，不推进 Presentation。
+- Enter / PageDown / PageUp 在全屏期间均不推进 Presentation，也不退出全屏。
+- Escape 正常退出 Video 全屏；退出后媒体焦点语义和点击空白恢复 Presentation 输入均符合预期。
+
+自动检查：
+
+- standalone fullscreen / generation assertions：31 项通过。
+- 生成后 `keydown` 实际行为 assertions：22 项通过。
+- Presentation interaction ownership assertions：14 项通过。
+- TypeScript relative import graph：35 个文件、87 条相对依赖，无循环。
+- `npm.cmd run lint`、`npm.cmd run build` 与 `git diff --check` 均通过。
+
+状态：**根因确认；实现完成；自动检查通过；manual QA passed；已验证完成。**
+
+### 16. Fullscreen Media Enter-Key Parity
 
 现象：
 
-- 编辑器正式 Presentation 的 Video 全屏时，`ArrowLeft` / `ArrowRight` 可以调整媒体进度。
-- standalone HTML 非全屏时，同一方向键也可以调整媒体进度。
-- standalone HTML 全屏时，Space 可以播放 / 暂停，但 `ArrowLeft` / `ArrowRight` 无法调整进度；方向键也不会误推进 Step 或切换页面。
+- 编辑器正式 Presentation 的 Video 全屏中，Enter 会播放 / 暂停。
+- standalone HTML 的 Video 全屏中，Enter 当前无反应。
+- Space 在两端均可播放 / 暂停。
 
-后续定位：
+后续产品语义建议评估：
 
-- 独立检查 export Runtime 的 fullscreen element、`keydown.preventDefault()` 与媒体键盘路由。
-- RTX HDR 状态提示与该问题无关。
-- 本轮不修复。
+- Space / Enter：播放或暂停。
+- ArrowLeft / ArrowRight：调整媒体进度。
+- Escape：退出媒体全屏。
+- PageUp / PageDown：不操作媒体，也不推进演示。
 
-状态：**已确认独立 Bug；待单独诊断**
+边界：
 
-### 16. Hidden Media Playback Lifecycle Bug
+- 这是独立的媒体键盘一致性 UX，不属于本次 Arrow-Key Seeking 根因修复。
+- 本轮只记录，不实现 Enter parity，也不改变现有 Presentation 状态机或媒体焦点所有权。
+
+状态：**待独立评估 / 开发。**
+
+### 17. Hidden Media Playback Lifecycle Bug
 
 现象与边界：
 
@@ -2137,7 +2180,7 @@ Standalone HTML 重新验证结论：
 
 状态：**已确认独立生命周期 Bug；待开发**
 
-### 17. Presentation Element Click Blocking Bug
+### 18. Presentation Element Click Blocking Bug
 
 现象：
 
@@ -2151,7 +2194,7 @@ Standalone HTML 重新验证结论：
 
 状态：**已确认独立输入路由 Bug；待开发**
 
-### 18. Export Text Cursor UX
+### 19. Export Text Cursor UX
 
 现象：
 
@@ -2316,7 +2359,9 @@ GitHub 状态：已 push
 2026-07-31：确认既有 Pending Media Interaction Bug：pending Video 仍参与 DOM hit-test 并抢占 pointer / wheel 输入；该问题不并入 Batch 3A，安排在 Batch 3B 前独立处理
 2026-07-31：Pending Media Interaction Fix 已完成共享交互语义、Editor / Export owner bridge、pointer / focus gate、fullscreen override 与全部自动检查
 2026-07-31：用户完成 Pending Media Interaction Fix 人工 QA，确认 Video / Audio 的 pending、retreat、startMs、无动画、静态 opacity 0、媒体控件及全屏输入语义正常
-当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A 已验证完成并完成 Git 闭环；Video Bug Part A、Initial Selection 与 Pending Media Interaction Fix 已解决并通过人工 QA；Batch 3B 尚未开始
+2026-08-01：Standalone Export Fullscreen Arrow-Key Seeking 完成最小修复和全部自动检查；用户人工 QA 确认播放 / 暂停 / 长按方向键 seek、Space、页面与 Step 隔离、Escape 和焦点恢复均正常
+2026-08-01：Fullscreen Media Enter-Key Parity 作为独立 UX 记录，本轮不扩大范围实现
+当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A 已验证完成并完成 Git 闭环；Video Bug Part A、Initial Selection、Pending Media Interaction Fix 与 Standalone Export Fullscreen Arrow-Key Seeking Fix 已解决并通过人工 QA；Fullscreen Media Enter-Key Parity 待独立处理；Batch 3B 尚未开始
 ```
 
 ---
@@ -2340,6 +2385,8 @@ GitHub 状态：已 push
 - 第 5.5 阶段 Batch 1 已完成人工验证、commit 和 push；不再存在“待验证”或“待 Git 闭环”状态。
 - Batch 2 前置只读架构审计已完成。Stage 5.5 Batch 2A“Project persistence adapter”已验证完成并 push；Video Bug Part A 已解决并完成人工 QA / Git 闭环。Export 现象当前无法复现，不启动 speculative repair；Batch 2B“Project document + history transaction”及 final no-op 修复已通过全部人工 QA 并成为稳定架构基线。Batch 3A 最小 Sequence Command Domain 已通过人工 QA，并通过 `d68ce74` 完成独立 Git 闭环；Batch 3B 尚未开始。
 - Pending Media Interaction Fix 已完成代码实现、自动检查和人工 QA，并纳入 `fix: sync pending media input ownership` 独立 Git 闭环；Batch 3B 尚未开始。Stage 6 继续按当前 roadmap 等待。
+- Standalone Export Fullscreen Arrow-Key Seeking Fix 已完成根因修复、自动检查和人工 QA；浏览器原生 Video controls 继续负责全屏方向键 seek，Presentation 不消费这些按键。
+- Fullscreen Media Enter-Key Parity 已记录为独立待处理 UX，本轮没有实现；Hidden Media Playback Lifecycle、普通元素点击阻塞、Export 文本选择和 `file://` 资源警告继续保留原状态。
 - 原暂缓项目已经分配到第 7、9、10、11、12 阶段；不得提前并行开发。
 
 ### 下次第一步：安全检查
@@ -2375,6 +2422,7 @@ git diff --cached
 16. Batch 2B 已通过完整人工 QA 与 final no-op / Redo preservation 专项 QA，正式标记为已验证完成并作为稳定架构基线。
 17. Batch 3A 已提取独立 Sequence / Click Step Command Domain 并保留 `animationCommands.ts` compatibility barrel；人工 QA 已通过并通过 `d68ce74` 完成 Git 闭环，未改变动画时间语义。
 18. Pending Media Interaction Fix 已实现 sampled-state input owner、Editor / Export DOM bridge、pointer / focus gate 与 fullscreen override，并通过自动检查和人工 QA；未实现媒体隐藏自动 pause，也未修改 autoplay / currentTime 生命周期；Batch 3B 尚未开始。
+19. Standalone Export Fullscreen Arrow-Key Seeking Fix 已通过最小 export 键盘路由修改恢复浏览器原生 seek，并通过自动检查和人工 QA；Fullscreen Media Enter-Key Parity 单独保留为待处理 UX。
 
 ### Git 状态说明
 

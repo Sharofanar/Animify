@@ -31,6 +31,9 @@ import {
   getPresentationRenderableAnimationSamples,
   type PresentationSequenceSample,
 } from "../../utils/presentationPlayback";
+import {
+  getPresentationInteractionState,
+} from "../../utils/presentationInteraction";
 
 const SLIDE_WIDTH = 1280;
 const SLIDE_HEIGHT = 720;
@@ -1091,7 +1094,46 @@ function SlideElementView({
 
   const [mediaError, setMediaError] = useState(false);
 
+  const [mediaFullscreen, setMediaFullscreen] = useState(false);
+
   const [draftContent, setDraftContent] = useState(element.content);
+
+  const hasPresentationMediaInput =
+    bare &&
+    animationSequenceSamples !== undefined &&
+    ((element.type === "video" &&
+      asset?.type === "video" &&
+      Boolean(assetSource) &&
+      !assetMissing) ||
+      (element.type === "audio" &&
+        asset?.type === "audio" &&
+        Boolean(assetSource) &&
+        !assetMissing));
+
+  const presentationInteractionState = useMemo(
+    () =>
+      hasPresentationMediaInput
+        ? getPresentationInteractionState({
+            staticOpacity: style.opacity,
+            samples: presentationAnimationSamples,
+          })
+        : undefined,
+    [
+      hasPresentationMediaInput,
+      presentationAnimationSamples,
+      style.opacity,
+    ],
+  );
+
+  /**
+   * Browser fullscreen temporarily owns every media input even if Presentation
+   * state changes underneath it. Leaving fullscreen immediately restores the
+   * latest deterministic owner result without rebuilding the media node.
+   */
+  const presentationMediaOwnsInput =
+    presentationInteractionState === undefined
+      ? undefined
+      : mediaFullscreen || presentationInteractionState.ownsInput;
 
   const dragStateRef = useRef<{
     startClientX: number;
@@ -1144,6 +1186,49 @@ function SlideElementView({
 
     mediaNode.volume = mediaVolume;
   }, [assetSource, mediaLoop, mediaMuted, mediaVolume]);
+
+  useEffect(() => {
+    if (!hasPresentationMediaInput) {
+      return;
+    }
+
+    function handleFullscreenChange() {
+      const fullscreenElement = document.fullscreenElement;
+      const elementNode = elementNodeRef.current;
+
+      setMediaFullscreen(
+        Boolean(
+          fullscreenElement &&
+            elementNode &&
+            (fullscreenElement === elementNode ||
+              elementNode.contains(fullscreenElement)),
+        ),
+      );
+    }
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    };
+  }, [hasPresentationMediaInput]);
+
+  useEffect(() => {
+    if (presentationMediaOwnsInput !== false) {
+      return;
+    }
+
+    const elementNode = elementNodeRef.current;
+    const activeElement = document.activeElement;
+
+    if (
+      elementNode &&
+      activeElement instanceof HTMLElement &&
+      elementNode.contains(activeElement)
+    ) {
+      activeElement.blur();
+    }
+  }, [presentationMediaOwnsInput]);
 
   /**
    * Start configured media when the element enters presentation mode.
@@ -1452,6 +1537,8 @@ function SlideElementView({
     height: style.height * scale,
     transform: `rotate(${style.rotate}deg)`,
     opacity: style.opacity,
+    pointerEvents:
+      presentationMediaOwnsInput === false ? "none" : undefined,
   };
 
   const innerStyle: CSSProperties = {
@@ -1460,6 +1547,8 @@ function SlideElementView({
     fontSize: (style.fontSize ?? 16) * scale,
     fontWeight: style.fontWeight ?? 400,
     borderRadius: (style.borderRadius ?? 0) * scale,
+    pointerEvents:
+      presentationMediaOwnsInput === false ? "none" : undefined,
 
     /**
      * The initial V2 frame prevents an entrance-animation flash before useEffect
@@ -1895,7 +1984,12 @@ function SlideElementView({
               height: "100%",
               objectFit: "contain",
               background: "#020617",
-              pointerEvents: bare ? "auto" : "none",
+              pointerEvents:
+                presentationMediaOwnsInput === false
+                  ? "none"
+                  : bare
+                    ? "auto"
+                    : "none",
             }}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => event.stopPropagation()}
@@ -1947,6 +2041,8 @@ function SlideElementView({
               preload="metadata"
               style={{
                 width: "100%",
+                pointerEvents:
+                  presentationMediaOwnsInput === false ? "none" : undefined,
               }}
               onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => event.stopPropagation()}
@@ -2011,6 +2107,12 @@ function SlideElementView({
   return (
     <div
       ref={elementNodeRef}
+      data-presentation-input-owner={
+        presentationMediaOwnsInput === undefined
+          ? undefined
+          : String(presentationMediaOwnsInput)
+      }
+      inert={presentationMediaOwnsInput === false ? true : undefined}
       className={`absolute border-0 bg-transparent p-0 text-center ${
         selected && showTransformControls
           ? "ring-2 ring-violet-500 ring-offset-2"

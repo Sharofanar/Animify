@@ -288,6 +288,227 @@ export function getExportPlayerRuntimeScript() {
       });
     }
 
+    function normalizeExportPositiveNumber(value, fallback) {
+      const numericValue = Number(value);
+
+      return Number.isFinite(numericValue) && numericValue > 0
+        ? numericValue
+        : fallback;
+    }
+
+    function getExportOpacityFrames(animation) {
+      if (!Array.isArray(animation?.keyframes)) {
+        return [];
+      }
+
+      return animation.keyframes
+        .flatMap((frame) => {
+          if (
+            typeof frame?.opacity !== "number" ||
+            !Number.isFinite(frame.opacity)
+          ) {
+            return [];
+          }
+
+          const rawOffset = Number(frame.offset);
+
+          return [
+            {
+              offset: Number.isFinite(rawOffset)
+                ? Math.min(1, Math.max(0, rawOffset))
+                : 0,
+              opacity: frame.opacity,
+            },
+          ];
+        })
+        .sort((left, right) => left.offset - right.offset);
+    }
+
+    function sampleExportOpacityAtProgress(frames, progress) {
+      const normalizedProgress = Math.min(1, Math.max(0, progress));
+      const firstFrame = frames[0];
+      const lastFrame = frames[frames.length - 1];
+
+      if (!firstFrame || !lastFrame) {
+        return undefined;
+      }
+
+      if (normalizedProgress <= firstFrame.offset) {
+        return firstFrame.opacity;
+      }
+
+      if (normalizedProgress >= lastFrame.offset) {
+        return lastFrame.opacity;
+      }
+
+      for (let index = 1; index < frames.length; index += 1) {
+        const rightFrame = frames[index];
+        const leftFrame = frames[index - 1];
+
+        if (
+          !rightFrame ||
+          !leftFrame ||
+          normalizedProgress > rightFrame.offset
+        ) {
+          continue;
+        }
+
+        const segmentLength = rightFrame.offset - leftFrame.offset;
+
+        if (segmentLength <= 0) {
+          return rightFrame.opacity;
+        }
+
+        const segmentProgress =
+          (normalizedProgress - leftFrame.offset) / segmentLength;
+
+        return (
+          leftFrame.opacity +
+          (rightFrame.opacity - leftFrame.opacity) * segmentProgress
+        );
+      }
+
+      return lastFrame.opacity;
+    }
+
+    function getExportDirectedProgress(
+      direction,
+      iterationIndex,
+      simpleProgress,
+    ) {
+      const reversed =
+        direction === "reverse" ||
+        (direction === "alternate" && iterationIndex % 2 === 1) ||
+        (direction === "alternate-reverse" && iterationIndex % 2 === 0);
+
+      return reversed ? 1 - simpleProgress : simpleProgress;
+    }
+
+    function getExportCompletedDirectedProgress(direction, iterationsValue) {
+      const iterations = normalizeExportPositiveNumber(iterationsValue, 1);
+      const completedWholeIterations = Math.floor(iterations);
+      const fractionalIteration = iterations - completedWholeIterations;
+      const hasFractionalIteration = fractionalIteration > 1e-8;
+      const iterationIndex = hasFractionalIteration
+        ? completedWholeIterations
+        : Math.max(0, completedWholeIterations - 1);
+      const simpleProgress = hasFractionalIteration ? fractionalIteration : 1;
+
+      return getExportDirectedProgress(
+        direction,
+        iterationIndex,
+        simpleProgress,
+      );
+    }
+
+    function getExportPresentationInteractionState({
+      staticOpacity,
+      samples,
+    }) {
+      const normalizedStaticOpacity =
+        typeof staticOpacity === "number" && Number.isFinite(staticOpacity)
+          ? staticOpacity
+          : 1;
+      let state =
+        normalizedStaticOpacity > 0
+          ? { ownsInput: true, reason: "static-visible" }
+          : { ownsInput: false, reason: "static-hidden" };
+      let hasAuthoritativeOpacity = false;
+
+      if (!Array.isArray(samples)) {
+        return state;
+      }
+
+      samples.forEach((sample) => {
+        const animation = sample?.compiledAnimation;
+
+        if (!animation) {
+          return;
+        }
+
+        const opacityFrames = getExportOpacityFrames(animation);
+
+        if (opacityFrames.length === 0) {
+          return;
+        }
+
+        const timing = animation.timing || {};
+
+        if (sample.pendingBaseline) {
+          if (hasAuthoritativeOpacity) {
+            return;
+          }
+
+          const opacity = sampleExportOpacityAtProgress(
+            opacityFrames,
+            getExportDirectedProgress(timing.direction, 0, 0),
+          );
+
+          state =
+            opacity !== undefined && opacity > 0
+              ? { ownsInput: true, reason: "pending-opacity-visible" }
+              : { ownsInput: false, reason: "pending-opacity-hidden" };
+          return;
+        }
+
+        const phase = sample.sequenceSample?.phase;
+
+        if (phase === "active") {
+          const localTimeMs = Math.max(
+            0,
+            Number(sample.sequenceSample?.localTimeMs ?? 0),
+          );
+          const startTimeMs = Math.max(0, Number(timing.delay ?? 0));
+          const durationMs = normalizeExportPositiveNumber(timing.duration, 1);
+          const iterations = normalizeExportPositiveNumber(
+            timing.iterations,
+            1,
+          );
+          const playbackRate = normalizeExportPositiveNumber(
+            animation.playbackRate,
+            1,
+          );
+          const sampledAnimationTimeMs =
+            Math.max(0, localTimeMs - startTimeMs) * playbackRate;
+          const reachedEnd =
+            sampledAnimationTimeMs >= durationMs * iterations;
+
+          if (!reachedEnd) {
+            state = { ownsInput: true, reason: "active-opacity" };
+            hasAuthoritativeOpacity = true;
+            return;
+          }
+        } else if (phase !== "completed") {
+          return;
+        }
+
+        const keepsFinalFrame =
+          timing.fill === "forwards" ||
+          timing.fill === "both" ||
+          timing.fill === undefined;
+
+        if (!keepsFinalFrame) {
+          return;
+        }
+
+        const completedOpacity = sampleExportOpacityAtProgress(
+          opacityFrames,
+          getExportCompletedDirectedProgress(
+            timing.direction,
+            timing.iterations,
+          ),
+        );
+
+        state =
+          completedOpacity !== undefined && completedOpacity > 0
+            ? { ownsInput: true, reason: "completed-opacity-visible" }
+            : { ownsInput: false, reason: "completed-opacity-hidden" };
+        hasAuthoritativeOpacity = true;
+      });
+
+      return state;
+    }
+
     function getExportElementAnimations(plan, elementId) {
       return getExportSequenceOrder(plan).flatMap(
         (sequenceId) =>
@@ -375,6 +596,88 @@ export function getExportPlayerRuntimeScript() {
         }));
     }
 
+    function isExportMediaInputFullscreen(mediaInputNode) {
+      const fullscreenElement = document.fullscreenElement;
+
+      return Boolean(
+        fullscreenElement &&
+          (fullscreenElement === mediaInputNode ||
+            mediaInputNode.contains(fullscreenElement)),
+      );
+    }
+
+    function applyExportMediaInputOwner(
+      animationNode,
+      renderableAnimationSamples,
+    ) {
+      const mediaInputNode = animationNode.parentElement;
+
+      if (!mediaInputNode?.classList.contains("element-media")) {
+        return;
+      }
+
+      const staticOpacity = Number(mediaInputNode.style.opacity || 1);
+      const interactionState = getExportPresentationInteractionState({
+        staticOpacity,
+        samples: renderableAnimationSamples,
+      });
+
+      /**
+       * A fullscreen media node is already in the browser's input-owning top
+       * layer. Presentation state may keep changing, but its ancestor must not
+       * become inert until fullscreen exits.
+       */
+      const ownsInput =
+        isExportMediaInputFullscreen(mediaInputNode) ||
+        interactionState.ownsInput;
+      const ownerValue = String(ownsInput);
+
+      if (mediaInputNode.dataset.presentationInputOwner !== ownerValue) {
+        mediaInputNode.dataset.presentationInputOwner = ownerValue;
+        mediaInputNode.inert = !ownsInput;
+        mediaInputNode.style.pointerEvents = ownsInput ? "" : "none";
+      }
+
+      if (
+        !ownsInput &&
+        document.activeElement instanceof HTMLElement &&
+        mediaInputNode.contains(document.activeElement)
+      ) {
+        document.activeElement.blur();
+      }
+    }
+
+    function refreshExportPresentationInteractionOwnership() {
+      if (
+        !exportPlaybackState ||
+        !exportPlaybackPlan ||
+        !exportPlaybackSlideNode
+      ) {
+        return;
+      }
+
+      const samples = getExportSequenceSamples(
+        exportPlaybackState,
+        exportPlaybackPlan,
+      );
+
+      exportPlaybackSlideNode
+        .querySelectorAll("[data-element-id]")
+        .forEach((animationNode) => {
+          const elementAnimations = getExportElementAnimations(
+            exportPlaybackPlan,
+            animationNode.dataset.elementId,
+          );
+          const renderableAnimationSamples =
+            getExportRenderableAnimationSamples(samples, elementAnimations);
+
+          applyExportMediaInputOwner(
+            animationNode,
+            renderableAnimationSamples,
+          );
+        });
+    }
+
     function cancelExportPlaybackFrame() {
       if (!exportPlaybackAnimationFrame) {
         return;
@@ -415,6 +718,11 @@ export function getExportPlayerRuntimeScript() {
         );
         const renderableAnimationSamples =
           getExportRenderableAnimationSamples(samples, elementAnimations);
+
+        applyExportMediaInputOwner(
+          node,
+          renderableAnimationSamples,
+        );
 
         renderableAnimationSamples.forEach(
           ({ compiledAnimation, sequenceSample, pendingBaseline }) => {
@@ -647,14 +955,35 @@ export function getExportPlayerRuntimeScript() {
     }
 
     function isExportPresentationInteractionTarget(target) {
-      return (
-        target instanceof Element &&
-        Boolean(
-          target.closest(
-            "audio, video, button, a, input, select, textarea, " +
-              "[contenteditable='true'], [role='button']",
-          ),
-        )
+      if (!(target instanceof Element)) {
+        return false;
+      }
+
+      const explicitOwner = target.closest(
+        '[data-presentation-input-owner]',
+      );
+
+      if (explicitOwner) {
+        if (isExportMediaInputFullscreen(explicitOwner)) {
+          return true;
+        }
+
+        const ownerValue = explicitOwner.dataset.presentationInputOwner;
+
+        if (ownerValue === "false") {
+          return false;
+        }
+
+        if (ownerValue === "true") {
+          return true;
+        }
+      }
+
+      return Boolean(
+        target.closest(
+          "audio, video, button, a, input, select, textarea, " +
+            "[contenteditable='true'], [role='button']",
+        ),
       );
     }
 

@@ -282,6 +282,11 @@ function createHtmlDocument(project: PortablePresentationProject) {
       background: transparent !important;
     }
 
+    [data-presentation-input-owner="false"],
+    [data-presentation-input-owner="false"] * {
+      pointer-events: none !important;
+    }
+
     .element-media video {
       width: 100%;
       height: 100%;
@@ -459,6 +464,8 @@ function createHtmlDocument(project: PortablePresentationProject) {
 
         const fullscreenElement =
           document.fullscreenElement;
+
+        refreshExportPresentationInteractionOwnership();
 
         /**
          * Give keyboard ownership to a fullscreen video immediately.

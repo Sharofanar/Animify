@@ -86,6 +86,7 @@ import {
   createPresentationSlidePlaybackPlan,
   getPresentationSequenceSamples,
 } from "./utils/presentationPlayback";
+import { PRESENTATION_INPUT_OWNER_ATTRIBUTE } from "./utils/presentationInteraction";
 
 const ANIMATION_WORKSPACE_DISPLAY_MODE_KEY =
   "animify-animation-workspace-display-mode";
@@ -146,13 +147,42 @@ function migratePendingLegacyAssets() {
 type EditorMode = "edit" | "animation" | "present";
 
 function isPresentationInteractionTarget(target: EventTarget | null) {
-  return (
-    target instanceof Element &&
-    Boolean(
-      target.closest(
-        "audio, video, button, a, input, select, textarea, [contenteditable='true'], [role='button']",
-      ),
-    )
+  if (!(target instanceof Element)) {
+    return false;
+  }
+
+  const explicitOwner = target.closest(
+    `[${PRESENTATION_INPUT_OWNER_ATTRIBUTE}]`,
+  );
+
+  if (explicitOwner) {
+    const fullscreenElement = document.fullscreenElement;
+
+    if (
+      fullscreenElement &&
+      (fullscreenElement === explicitOwner ||
+        explicitOwner.contains(fullscreenElement))
+    ) {
+      return true;
+    }
+
+    const ownerValue = explicitOwner.getAttribute(
+      PRESENTATION_INPUT_OWNER_ATTRIBUTE,
+    );
+
+    if (ownerValue === "false") {
+      return false;
+    }
+
+    if (ownerValue === "true") {
+      return true;
+    }
+  }
+
+  return Boolean(
+    target.closest(
+      "audio, video, button, a, input, select, textarea, [contenteditable='true'], [role='button']",
+    ),
   );
 }
 
@@ -1341,7 +1371,10 @@ function App() {
 
   const handlePresentSurfaceClick = useCallback(
     (event: ReactMouseEvent<HTMLElement>) => {
-      if (isPresentationInteractionTarget(event.target)) {
+      if (
+        hasFullscreenMediaElement() ||
+        isPresentationInteractionTarget(event.target)
+      ) {
         return;
       }
 

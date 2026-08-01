@@ -780,7 +780,9 @@ export function SlideCanvas({
             selectionNumber={selectionNumber}
             propertyTargeted={propertyTargeted}
             showTransformControls={!multiSelectionActive && !readOnly}
-            isEditing={!readOnly && element.id === editingElementId}
+            isEditing={
+              !bare && !readOnly && element.id === editingElementId
+            }
             onSelect={onSelectElement}
             onToggleSelect={onToggleElementSelection}
             onOpenContextMenu={readOnly ? undefined : onOpenElementContextMenu}
@@ -789,7 +791,9 @@ export function SlideCanvas({
             onRotate={readOnly ? undefined : onRotateElement}
             onBeginChange={readOnly ? undefined : onBeginElementChange}
             onFinishChange={readOnly ? undefined : onFinishElementChange}
-            onStartEditing={readOnly ? undefined : setEditingElementId}
+            onStartEditing={
+              bare || readOnly ? undefined : setEditingElementId
+            }
             onStopEditing={() => setEditingElementId(null)}
             onUpdateContent={readOnly ? undefined : onUpdateElementContent}
           />
@@ -1541,12 +1545,20 @@ function SlideElementView({
       presentationMediaOwnsInput === false ? "none" : undefined,
   };
 
+  const bareDisplayText =
+    bare &&
+    (element.type === "text" ||
+      element.type === "shape" ||
+      element.type === "svg");
+
   const innerStyle: CSSProperties = {
     color: style.color ?? "#0f172a",
     backgroundColor: style.backgroundColor ?? "transparent",
     fontSize: (style.fontSize ?? 16) * scale,
     fontWeight: style.fontWeight ?? 400,
     borderRadius: (style.borderRadius ?? 0) * scale,
+    userSelect: bareDisplayText ? "none" : undefined,
+    cursor: bareDisplayText ? "default" : undefined,
     pointerEvents:
       presentationMediaOwnsInput === false ? "none" : undefined,
 
@@ -2105,10 +2117,13 @@ function SlideElementView({
   }
 
   /**
-   * Formal Presentation lets ordinary display clicks bubble to the unified
-   * advance route; media controls keep their own inner input handlers.
+   * Bare Presentation is display-only: ordinary clicks bubble to the unified
+   * advance route, while editor double-click and textarea editing stay absent.
    */
   const editorElementClickHandler = bare ? undefined : handleElementClick;
+  const editorElementDoubleClickHandler = bare
+    ? undefined
+    : handleDoubleClick;
 
   return (
     <div
@@ -2127,7 +2142,7 @@ function SlideElementView({
       style={outerStyle}
       onPointerDown={handlePointerDown}
       onContextMenu={handleContextMenu}
-      onDoubleClick={handleDoubleClick}
+      onDoubleClick={editorElementDoubleClickHandler}
       onClick={editorElementClickHandler}
     >
       {isEditing ? (

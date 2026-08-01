@@ -3,7 +3,7 @@
 > 最后更新：2026-08-02
 > 仓库：`https://github.com/Sharofanar/Animify`  
 > 主分支：`main`  
-> 本轮修复开始基线：`85b7bb0cf0392681a5f13131f84a0bb59392a989 fix: restore fullscreen video arrow seeking`
+> 本轮修复开始基线：`93d7a32656c344143d4f67937d7ab935734a5329 fix: allow presentation clicks through elements`
 
 本文档是 Animify 当前开发状态的长期事实来源。
 
@@ -34,6 +34,7 @@
 本轮修复开始时 GitHub `origin/main` 最新提交：
 
 ```text
+93d7a32 fix: allow presentation clicks through elements
 85b7bb0 fix: restore fullscreen video arrow seeking
 ba39f48 fix: sync pending media input ownership
 d68ce74 refactor: extract animation sequence commands
@@ -2215,36 +2216,48 @@ Standalone HTML 重新验证结论：
 
 状态：**根因确认；实现完成；自动检查通过；manual QA passed；已验证完成。**
 
-### 19. Presentation Transient Text Editing / Selection Bug
+### 19. Presentation Transient Text Editing / Selection Bug（已解决）
 
-现象：
+根因：
 
-- 正式 Presentation 中快速双击或连续点击文字时，可能出现蓝色浏览器原生选区。
-- 键盘输入可临时改变当前 DOM 中的文字，但 Project 数据并未更新；再次点击或 React 重渲染后恢复原文。
+- 正式 Presentation 使用 `SlideCanvas bare={true}`，但此前 `isEditing` 没有检查 `bare`，`onStartEditing` 仍可调用 `setEditingElementId`，普通元素 wrapper 也仍挂载编辑器 `onDoubleClick`。
+- 双击 Text、Shape 或 SVG 后实际创建的是受控 `textarea`，不是 `contentEditable` 节点；输入只更新 `SlideElementView` 本地 `draftContent`。Presentation 没有内容更新回调，因此临时文字不会写回 Project，blur、退出编辑或 React remount 后会恢复 Project 原文。
+- bare 展示文字此前允许浏览器原生选择，因此快速双击还会产生蓝色 Selection。
 
-后续目标与边界：
+核心实现（2026-08-02）：
 
-- 正式 Presentation 中普通文本使用 `user-select: none`，`contentEditable` 必须为 false，双击和键盘输入不得改变展示 DOM；单击仍需正常推进 Step。
-- 编辑模式继续保留双击编辑、文字选择和真实数据写回。
-- 本次 click bubbling 修复没有处理或声称解决该问题。
+- `bare=true` 时 `isEditing` 永远不能成立；`bare || readOnly` 时不提供 `onStartEditing`；普通元素 wrapper 不挂载编辑器 `onDoubleClick`。
+- bare 模式下 Text、Shape 和 SVG 展示文字使用 `user-select: none` 与 `cursor: default`，不使用 `contentEditable`，也没有修改 pointer-events。
+- bare 模式普通 `onClick` 继续保持未挂载编辑器选择 handler，click 自然冒泡到 App 的统一 Presentation 推进入口；没有新增 capture 或 pointerdown 推进路径。
+- `bare=false` 的编辑模式继续保留原 textarea：双击进入编辑、focus / Selection、draft 输入、Enter / blur 提交和 Escape 取消语义均未改变。
+- 本轮没有增加 Presentation 入口 `activeElement.blur()` 或 `removeAllRanges()`；它们仅作为未来防御性加固评估，不是本次核心修复的一部分。
 
-状态：**已确认独立 Presentation 文本交互 Bug；待开发**
+自动检查：
 
-### 20. Presentation / Export Text Selection UX
+- bare Presentation text-editing、普通编辑 textarea 与 click / advance 结构语义断言：52 项通过。
+- Presentation media input ownership 断言：8 项通过。
+- standalone export generation / click route 断言：11 项通过；导出实现未修改。
+- TypeScript relative import graph：35 个文件、86 条相对依赖，无循环。
+- `npm.cmd run lint`、`npm.cmd run build` 与 `git diff --check` 均通过。
 
-现象：
+人工 QA（2026-08-02）：
 
-- 正式 Presentation 中双击普通文本或 Shape 内文字可能出现蓝色原生高亮。
-- standalone HTML 的文本区域可能显示 I-beam 并允许原生选择。
-- 编辑模式使用 Shift 多选时，文字也可能被浏览器原生高亮。
+- 正式 Presentation 快速双击 Text、Shape、SVG 均不再出现蓝色选区、textarea 或编辑光标；字母、Backspace 和 Delete 不会改变展示文字，普通单击仍正常单步推进。
+- 动画播放期间快速双击不产生选区或 textarea，不影响动画，也不连续跳过多个 Step。
+- 编辑模式双击 Text 继续正常进入 textarea，光标、选择、输入和 Enter / blur 写回 Project 正常；Escape 正常取消且不提交。
+- 编辑状态直接点击“放映”时，按钮点击先触发现有 textarea blur 并提交内容，Presentation 显示已提交文字；该行为属于正确的现有提交语义，不是编辑状态泄漏。
 
-后续目标与边界：
+状态：**根因确认；核心实现完成；自动检查通过；manual QA passed；已验证完成。**
 
-- 正式 Presentation / standalone export 的展示文字应禁用原生选择并使用合适的展示 cursor。
-- 编辑模式非文本编辑状态应避免误选文字；真正文本编辑状态必须恢复 `user-select` 与 `contentEditable`。
-- 本项包含原“Export Text Cursor UX”，本次不实现。
+### 20. Standalone Export / Editor Text Selection UX
 
-状态：**待优化 UX；待独立设计 / 开发**
+仍待独立处理：
+
+- **Standalone Export Text Selection UX**：standalone HTML 的普通展示文字仍可能显示 I-beam 并允许原生选择；导出端没有 textarea 临时编辑问题。后续应只对展示文字设置 `user-select: none` 与 `cursor: default`，不得影响链接、按钮、表单或媒体控件。
+- **编辑模式 Shift 多选文字高亮 UX**：Shift 多选元素时内部文字仍可能出现浏览器原生蓝色选区，但不会进入真实文本编辑。后续必须区分普通编辑选择状态与 textarea 编辑状态。
+- **Presentation 入口焦点与 Selection 清理**：本轮没有实现 `activeElement.blur()` 或 `removeAllRanges()`；当前核心根因已经修复，入口清理仅保留为未来防御性加固评估，不得标记为已实现。
+
+状态：**三个边界均未在本轮实现；待独立评估 / 开发。**
 
 ### 21. Audio Native Controls Keyboard Shortcut Parity
 
@@ -2416,8 +2429,9 @@ GitHub 状态：已 push
 2026-08-01：Standalone Export Fullscreen Arrow-Key Seeking 完成最小修复和全部自动检查；用户人工 QA 确认播放 / 暂停 / 长按方向键 seek、Space、页面与 Step 隔离、Escape 和焦点恢复均正常
 2026-08-01：Fullscreen Media Enter-Key Parity 作为独立 UX 记录，本轮不扩大范围实现
 2026-08-02：Presentation Element Click Blocking 完成最小事件挂载修复、自动检查和人工 QA；普通 Text / Image / Shape / SVG 点击恢复统一单步推进，编辑模式与媒体输入无回归
-2026-08-02：Presentation Transient Text Editing / Selection、Presentation / Export Text Selection UX 与 Audio Native Controls Keyboard Shortcut Parity 作为三个独立问题记录，本轮不扩大范围修复
-当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A 已验证完成并完成 Git 闭环；Video Bug Part A、Initial Selection、Pending Media Interaction Fix、Standalone Export Fullscreen Arrow-Key Seeking Fix 与 Presentation Element Click Blocking Fix 已解决并通过人工 QA；Fullscreen Media Enter-Key Parity、Hidden Media Playback Lifecycle 与三个新记录的独立文本 / Audio UX 待后续处理；Batch 3B 尚未开始
+2026-08-02：Presentation Transient Text Editing / Selection 完成 bare 文本编辑入口隔离、展示 Selection 禁用、自动检查和人工 QA；确认临时输入来自受控 textarea 路径而非 contentEditable
+2026-08-02：Standalone Export Text Selection、编辑模式 Shift 多选文字高亮、Presentation 入口焦点 / Selection 清理与 Audio Native Controls Keyboard Shortcut Parity 继续作为独立问题，本轮未实现
+当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A 已验证完成并完成 Git 闭环；Video Bug Part A、Initial Selection、Pending Media Interaction Fix、Standalone Export Fullscreen Arrow-Key Seeking Fix、Presentation Element Click Blocking Fix 与 Presentation Transient Text Editing / Selection Fix 已解决并通过人工 QA；Fullscreen Media Enter-Key Parity、Hidden Media Playback Lifecycle、独立文本 Selection UX、Audio keyboard parity 与 `file://` 警告待后续处理；Batch 3B 尚未开始
 ```
 
 ---
@@ -2443,7 +2457,8 @@ GitHub 状态：已 push
 - Pending Media Interaction Fix 已完成代码实现、自动检查和人工 QA，并纳入 `fix: sync pending media input ownership` 独立 Git 闭环；Batch 3B 尚未开始。Stage 6 继续按当前 roadmap 等待。
 - Standalone Export Fullscreen Arrow-Key Seeking Fix 已完成根因修复、自动检查和人工 QA；浏览器原生 Video controls 继续负责全屏方向键 seek，Presentation 不消费这些按键。
 - Presentation Element Click Blocking Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 的普通展示元素 click 现在冒泡到统一推进路由，编辑模式选择与媒体控件输入保持不变。
-- Fullscreen Media Enter-Key Parity、Hidden Media Playback Lifecycle、Presentation Transient Text Editing / Selection、Presentation / Export Text Selection UX、Audio Native Controls Keyboard Shortcut Parity 与 `file://` 资源警告继续作为独立待处理项；本轮未实现这些问题。
+- Presentation Transient Text Editing / Selection Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 不再拥有双击 / textarea 编辑入口，Text / Shape / SVG 展示文字不再产生原生 Selection，编辑模式 textarea 语义保持不变。
+- Fullscreen Media Enter-Key Parity、Hidden Media Playback Lifecycle、Standalone Export Text Selection、编辑模式 Shift 多选文字高亮、Presentation 入口焦点 / Selection 防御性清理、Audio Native Controls Keyboard Shortcut Parity 与 `file://` 资源警告继续作为独立待处理项；本轮未实现这些问题。
 - 原暂缓项目已经分配到第 7、9、10、11、12 阶段；不得提前并行开发。
 
 ### 下次第一步：安全检查
@@ -2480,7 +2495,8 @@ git diff --cached
 17. Batch 3A 已提取独立 Sequence / Click Step Command Domain 并保留 `animationCommands.ts` compatibility barrel；人工 QA 已通过并通过 `d68ce74` 完成 Git 闭环，未改变动画时间语义。
 18. Pending Media Interaction Fix 已实现 sampled-state input owner、Editor / Export DOM bridge、pointer / focus gate 与 fullscreen override，并通过自动检查和人工 QA；未实现媒体隐藏自动 pause，也未修改 autoplay / currentTime 生命周期；Batch 3B 尚未开始。
 19. Standalone Export Fullscreen Arrow-Key Seeking Fix 已通过最小 export 键盘路由修改恢复浏览器原生 seek，并通过自动检查和人工 QA；Fullscreen Media Enter-Key Parity 单独保留为待处理 UX。
-20. Presentation Element Click Blocking Fix 已通过 bare wrapper 条件事件挂载恢复普通展示元素的统一 click 推进，并通过自动检查和人工 QA；文本临时 DOM 编辑 / 原生选择与 Audio controls 键盘一致性分别保留为独立问题。
+20. Presentation Element Click Blocking Fix 已通过 bare wrapper 条件事件挂载恢复普通展示元素的统一 click 推进，并通过自动检查和人工 QA。
+21. Presentation Transient Text Editing / Selection Fix 已从 `isEditing`、`onStartEditing`、`onDoubleClick` 和 bare 展示样式四个边界关闭 Presentation 的 textarea / 原生 Selection 路径，并通过自动检查和人工 QA；standalone export 文字选择、编辑模式 Shift 多选高亮和 Presentation 入口主动 blur / Selection 清理仍是独立待处理项。
 
 ### Git 状态说明
 

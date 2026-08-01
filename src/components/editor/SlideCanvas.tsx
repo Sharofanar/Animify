@@ -2104,6 +2104,12 @@ function SlideElementView({
     return element.content;
   }
 
+  /**
+   * Formal Presentation lets ordinary display clicks bubble to the unified
+   * advance route; media controls keep their own inner input handlers.
+   */
+  const editorElementClickHandler = bare ? undefined : handleElementClick;
+
   return (
     <div
       ref={elementNodeRef}
@@ -2122,7 +2128,7 @@ function SlideElementView({
       onPointerDown={handlePointerDown}
       onContextMenu={handleContextMenu}
       onDoubleClick={handleDoubleClick}
-      onClick={handleElementClick}
+      onClick={editorElementClickHandler}
     >
       {isEditing ? (
         <textarea

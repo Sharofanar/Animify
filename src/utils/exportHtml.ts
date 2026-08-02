@@ -833,6 +833,11 @@ ${exportPlayerRuntimeScript}
             return;
           }
 
+          // Deterministically hidden media must not race the lifecycle adapter.
+          if (isExportMediaPauseRequired(mediaNode)) {
+            return;
+          }
+
           mediaNode
             .play()
             .catch((error) => {

@@ -41,6 +41,25 @@ export type PresentationInteractionState = {
   reason: PresentationInteractionReason;
 };
 
+export const PRESENTATION_MEDIA_DEFINITELY_HIDDEN_REASONS = [
+  "static-hidden",
+  "pending-opacity-hidden",
+  "completed-opacity-hidden",
+] as const satisfies readonly PresentationInteractionReason[];
+
+/**
+ * Report only stable opacity authorities that make media definitely hidden.
+ * Active animation frames and input ownership are intentionally excluded so
+ * transient opacity values cannot pause playback mid-animation.
+ */
+export function isPresentationMediaDefinitelyHidden(
+  state: PresentationInteractionState | undefined,
+) {
+  return PRESENTATION_MEDIA_DEFINITELY_HIDDEN_REASONS.some(
+    (reason) => reason === state?.reason,
+  );
+}
+
 type PresentationInteractionInput = {
   staticOpacity?: number;
   samples?: readonly PresentationInteractionAnimationSample[];

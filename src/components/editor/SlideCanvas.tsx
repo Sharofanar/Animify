@@ -1,5 +1,6 @@
 import { useDroppable } from "@dnd-kit/core";
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -33,6 +34,7 @@ import {
 } from "../../utils/presentationPlayback";
 import {
   getPresentationInteractionState,
+  isPresentationMediaDefinitelyHidden,
 } from "../../utils/presentationInteraction";
 
 const SLIDE_WIDTH = 1280;
@@ -1094,6 +1096,19 @@ function SlideElementView({
 
   const mediaNodeRef = useRef<HTMLMediaElement | null>(null);
 
+  const previousMediaPauseRequiredRef = useRef<boolean | undefined>(undefined);
+
+  const mediaPauseRequiredRef = useRef(false);
+
+  const handleMediaNodeRef = useCallback((node: HTMLMediaElement | null) => {
+    if (mediaNodeRef.current === node) {
+      return;
+    }
+
+    mediaNodeRef.current = node;
+    previousMediaPauseRequiredRef.current = undefined;
+  }, []);
+
   const [mediaPlaying, setMediaPlaying] = useState(false);
 
   const [mediaError, setMediaError] = useState(false);
@@ -1138,6 +1153,11 @@ function SlideElementView({
     presentationInteractionState === undefined
       ? undefined
       : mediaFullscreen || presentationInteractionState.ownsInput;
+
+  const presentationMediaPauseRequired =
+    presentationInteractionState !== undefined &&
+    !mediaFullscreen &&
+    isPresentationMediaDefinitelyHidden(presentationInteractionState);
 
   const dragStateRef = useRef<{
     startClientX: number;
@@ -1235,6 +1255,28 @@ function SlideElementView({
   }, [presentationMediaOwnsInput]);
 
   /**
+   * Pause only when a stable hidden authority first takes effect. The ref keeps
+   * rAF sampling idempotent, while fullscreen temporarily suspends this side
+   * effect without changing the underlying deterministic visual state.
+   */
+  useEffect(() => {
+    const mediaNode = mediaNodeRef.current;
+    const previousPauseRequired = previousMediaPauseRequiredRef.current;
+
+    mediaPauseRequiredRef.current = presentationMediaPauseRequired;
+    previousMediaPauseRequiredRef.current = presentationMediaPauseRequired;
+
+    if (
+      mediaNode &&
+      presentationMediaPauseRequired &&
+      previousPauseRequired !== true &&
+      !mediaNode.paused
+    ) {
+      mediaNode.pause();
+    }
+  });
+
+  /**
    * Start configured media when the element enters presentation mode.
    *
    * Editor preview remains manual so selecting pages and editing properties never
@@ -1250,7 +1292,7 @@ function SlideElementView({
     let cancelled = false;
 
     const timerId = window.setTimeout(() => {
-      if (cancelled) {
+      if (cancelled || mediaPauseRequiredRef.current) {
         return;
       }
 
@@ -1980,9 +2022,7 @@ function SlideElementView({
       return (
         <div className="relative flex h-full w-full items-center justify-center overflow-hidden">
           <video
-            ref={(node) => {
-              mediaNodeRef.current = node;
-            }}
+            ref={handleMediaNodeRef}
             src={assetSource}
             controls={bare}
             loop={mediaLoop}
@@ -2042,9 +2082,7 @@ function SlideElementView({
         return (
           <div className="flex h-full w-full items-center justify-center px-3">
             <audio
-              ref={(node) => {
-                mediaNodeRef.current = node;
-              }}
+              ref={handleMediaNodeRef}
               src={assetSource}
               controls
               loop={mediaLoop}
@@ -2070,9 +2108,7 @@ function SlideElementView({
       return (
         <div className="flex h-full w-full items-center gap-3 rounded-xl border border-slate-200 bg-white px-4 shadow-sm">
           <audio
-            ref={(node) => {
-              mediaNodeRef.current = node;
-            }}
+            ref={handleMediaNodeRef}
             src={assetSource}
             loop={mediaLoop}
             muted={mediaMuted}

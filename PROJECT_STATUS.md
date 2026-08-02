@@ -34,6 +34,7 @@
 本轮修复开始时 GitHub `origin/main` 最新提交：
 
 ```text
+11d1372 fix: disable text editing in presentation
 93d7a32 fix: allow presentation clicks through elements
 85b7bb0 fix: restore fullscreen video arrow seeking
 ba39f48 fix: sync pending media input ownership
@@ -562,7 +563,7 @@ PROJECT_STATUS.md
 
 - 第 4 阶段已经完成用户人工验收，并通过提交 `5391f11` commit / push。
 - 第 5 阶段“HTML 导出 Click Step 同步”已通过用户人工验收。
-- 第 5.5 阶段“渐进式架构拆分维护”已经开始；Batch 1、Batch 2A、Batch 2B、Batch 3A 已验证完成并完成 Git 闭环；Pending Media Interaction Fix 已完成自动检查与人工 QA，纳入本次独立 Git 闭环；Batch 3B 尚未开始。
+- 第 5.5 阶段“渐进式架构拆分维护”已经开始；Batch 1、Batch 2A、Batch 2B、Batch 3A 已验证完成并完成 Git 闭环；Pending Media Interaction Fix 已完成独立 Git 闭环；Hidden Media Playback Lifecycle 已完成自动检查与 Editor / standalone HTML 人工 QA，纳入本次独立 Git 闭环；Batch 3B 尚未开始。
 
 # 已完成前置：第 3 阶段 Click Step 数据与命令层
 
@@ -2168,19 +2169,30 @@ Standalone HTML 重新验证结论：
 
 状态：**待独立评估 / 开发。**
 
-### 17. Hidden Media Playback Lifecycle Bug
+### 17. Hidden Media Playback Lifecycle Bug（已解决）
 
-现象与边界：
+根因：
 
-- Video 从可见变为 `opacity: 0` / pending / hidden 后，本轮已经正确撤销输入所有权。
-- 已经开始播放的 Video 在确定隐藏后仍可能继续发声；本轮没有实现隐藏自动暂停。
+- Editor Presentation 与 standalone HTML 已能从确定性视觉采样判断媒体是否稳定隐藏，但该状态此前只驱动 pointer / inert / focus 等输入所有权，没有驱动 `HTMLMediaElement` 播放生命周期。
+- 同页 Step 不会重建媒体节点，因此已经开始播放的 Audio / Video 在视觉隐藏和输入权撤销后仍会继续运行播放时钟并发声。
 
-后续目标语义：
+实现结果（2026-08-03）：
 
-- 媒体从可见 / 可交互进入确定隐藏状态时自动 pause。
-- 保留 `currentTime`，不归零、不卸载，也不在重新显示时自动恢复播放。
+- 共享纯判定只把 `static-hidden`、`pending-opacity-hidden`、`completed-opacity-hidden` 视为确定稳定隐藏；不使用 `ownsInput === false` 代替视觉生命周期语义。
+- Editor 使用 ref、standalone Runtime 使用 `WeakMap<HTMLMediaElement, boolean>` 记录节点级 `pauseRequired` 转换；初始异常播放且稳定隐藏，或 visible → hidden 时只调用一次 `pause()`。
+- `active-opacity`、transform-only、fullscreen override，以及 earlier completed 仍可见而 future Sequence pending 的状态均不会误暂停；退出动画 active 期间继续播放，只在 completed-hidden 稳定边界暂停。
+- 只调用 `pause()`；同一媒体节点的 `currentTime`、`src`、`volume`、`muted`、`playbackRate` 均保持，未调用 `load()`，也不卸载或重建节点。
+- hidden → visible 只更新生命周期状态，不自动 `play()`；媒体重新显示后保持暂停并保留同页播放进度。
+- Editor autoplay timer 与 Export `playSlideMedia()` 都在执行 `play()` 前读取当前稳定隐藏 gate；隐藏 autoplay 被拦截，可见的合法 `slide-enter` autoplay 保持原行为。
+- fullscreen 期间暂停要求被 override；退出 fullscreen 后立即按底层确定性状态重新判断，若仍稳定隐藏则暂停一次。
+- 页面切换继续使用既有页面生命周期停止并销毁当前页媒体；返回页面会创建新媒体节点，不承诺跨页保留 `currentTime`。
 
-状态：**已确认独立生命周期 Bug；待开发**
+自动检查与人工 QA：
+
+- Hidden Media Lifecycle 专项断言 74 项、既有 interaction regression contracts 16 项、TypeScript import cycle、Lint、Build 与 `git diff --check` 均通过。
+- 用户已在 Editor Presentation 与 standalone HTML 中完成 Audio / Video 人工 QA：稳定隐藏暂停、退出动画期间继续播放、retreat / pending、autoplay、再次显示保持暂停、同页 `currentTime` 保留、fullscreen override / 退出后重判和跨页生命周期均符合预期。
+
+状态：**已解决；自动检查通过；Editor / Standalone HTML 人工 QA 通过。**
 
 ### 18. Presentation Element Click Blocking Bug（已解决）
 
@@ -2431,7 +2443,8 @@ GitHub 状态：已 push
 2026-08-02：Presentation Element Click Blocking 完成最小事件挂载修复、自动检查和人工 QA；普通 Text / Image / Shape / SVG 点击恢复统一单步推进，编辑模式与媒体输入无回归
 2026-08-02：Presentation Transient Text Editing / Selection 完成 bare 文本编辑入口隔离、展示 Selection 禁用、自动检查和人工 QA；确认临时输入来自受控 textarea 路径而非 contentEditable
 2026-08-02：Standalone Export Text Selection、编辑模式 Shift 多选文字高亮、Presentation 入口焦点 / Selection 清理与 Audio Native Controls Keyboard Shortcut Parity 继续作为独立问题，本轮未实现
-当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A 已验证完成并完成 Git 闭环；Video Bug Part A、Initial Selection、Pending Media Interaction Fix、Standalone Export Fullscreen Arrow-Key Seeking Fix、Presentation Element Click Blocking Fix 与 Presentation Transient Text Editing / Selection Fix 已解决并通过人工 QA；Fullscreen Media Enter-Key Parity、Hidden Media Playback Lifecycle、独立文本 Selection UX、Audio keyboard parity 与 `file://` 警告待后续处理；Batch 3B 尚未开始
+2026-08-03：Hidden Media Playback Lifecycle 完成稳定隐藏转换暂停、Editor / Export autoplay gate 与 fullscreen override；74 项专项断言、16 项交互回归断言及 Editor / standalone HTML Audio / Video 人工 QA 全部通过
+当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A 已验证完成并完成 Git 闭环；Video Bug Part A、Initial Selection、Pending Media Interaction Fix、Standalone Export Fullscreen Arrow-Key Seeking Fix、Presentation Element Click Blocking Fix、Presentation Transient Text Editing / Selection Fix 与 Hidden Media Playback Lifecycle 已解决并通过人工 QA；Fullscreen Media Enter-Key Parity、独立文本 Selection UX、Audio keyboard parity 与 `file://` 警告待后续处理；Batch 3B 尚未开始
 ```
 
 ---
@@ -2458,7 +2471,8 @@ GitHub 状态：已 push
 - Standalone Export Fullscreen Arrow-Key Seeking Fix 已完成根因修复、自动检查和人工 QA；浏览器原生 Video controls 继续负责全屏方向键 seek，Presentation 不消费这些按键。
 - Presentation Element Click Blocking Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 的普通展示元素 click 现在冒泡到统一推进路由，编辑模式选择与媒体控件输入保持不变。
 - Presentation Transient Text Editing / Selection Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 不再拥有双击 / textarea 编辑入口，Text / Shape / SVG 展示文字不再产生原生 Selection，编辑模式 textarea 语义保持不变。
-- Fullscreen Media Enter-Key Parity、Hidden Media Playback Lifecycle、Standalone Export Text Selection、编辑模式 Shift 多选文字高亮、Presentation 入口焦点 / Selection 防御性清理、Audio Native Controls Keyboard Shortcut Parity 与 `file://` 资源警告继续作为独立待处理项；本轮未实现这些问题。
+- Hidden Media Playback Lifecycle 已完成根因修复、自动检查和 Editor / standalone HTML Audio / Video 人工 QA；稳定隐藏后 pause，同页重新显示保持暂停并保留 `currentTime`，跨页返回按新页面节点生命周期处理。
+- Fullscreen Media Enter-Key Parity、Standalone Export Text Selection、编辑模式 Shift 多选文字高亮、Presentation 入口焦点 / Selection 防御性清理、Audio Native Controls Keyboard Shortcut Parity 与 `file://` 资源警告继续作为独立待处理项；本轮未实现这些问题。
 - 原暂缓项目已经分配到第 7、9、10、11、12 阶段；不得提前并行开发。
 
 ### 下次第一步：安全检查
@@ -2493,10 +2507,11 @@ git diff --cached
 15. Video animation / compositor 生命周期问题与 persistence adapter 和 Batch 2B 无关；Part A Presentation 已修复并通过人工 QA。Export Video animation invisible 当前无法复现且未修改 Export implementation；全屏发白为 environment-specific observation，不增加 workaround。
 16. Batch 2B 已通过完整人工 QA 与 final no-op / Redo preservation 专项 QA，正式标记为已验证完成并作为稳定架构基线。
 17. Batch 3A 已提取独立 Sequence / Click Step Command Domain 并保留 `animationCommands.ts` compatibility barrel；人工 QA 已通过并通过 `d68ce74` 完成 Git 闭环，未改变动画时间语义。
-18. Pending Media Interaction Fix 已实现 sampled-state input owner、Editor / Export DOM bridge、pointer / focus gate 与 fullscreen override，并通过自动检查和人工 QA；未实现媒体隐藏自动 pause，也未修改 autoplay / currentTime 生命周期；Batch 3B 尚未开始。
+18. Pending Media Interaction Fix 已实现 sampled-state input owner、Editor / Export DOM bridge、pointer / focus gate 与 fullscreen override，并通过自动检查和人工 QA；播放生命周期继续由独立 Hidden Media Playback Lifecycle 边界负责；Batch 3B 尚未开始。
 19. Standalone Export Fullscreen Arrow-Key Seeking Fix 已通过最小 export 键盘路由修改恢复浏览器原生 seek，并通过自动检查和人工 QA；Fullscreen Media Enter-Key Parity 单独保留为待处理 UX。
 20. Presentation Element Click Blocking Fix 已通过 bare wrapper 条件事件挂载恢复普通展示元素的统一 click 推进，并通过自动检查和人工 QA。
 21. Presentation Transient Text Editing / Selection Fix 已从 `isEditing`、`onStartEditing`、`onDoubleClick` 和 bare 展示样式四个边界关闭 Presentation 的 textarea / 原生 Selection 路径，并通过自动检查和人工 QA；standalone export 文字选择、编辑模式 Shift 多选高亮和 Presentation 入口主动 blur / Selection 清理仍是独立待处理项。
+22. Hidden Media Playback Lifecycle 使用共享稳定隐藏 reason、Editor ref 与 Export WeakMap 实现 transition-only pause，并通过 Editor / standalone HTML Audio / Video 人工 QA；同页隐藏 / 显示保留 `currentTime` 且不自动恢复播放，跨页不承诺保留媒体进度。
 
 ### Git 状态说明
 
@@ -2517,5 +2532,6 @@ git diff --cached
 - Batch 2B 最终提交范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/hooks/useProjectDocument.ts`、`src/utils/projectHistory.ts`，提交信息为 `refactor: extract project document history`；本次 Git 闭环不包含 Batch 3。
 - Batch 3A 开始基线：`main`、本地 `origin/main` 均为 `8a460e339a1300bef157faaadeea33f744daebd8`，ahead 0、behind 0，开始前工作区和暂存区干净。
 - Batch 3A 已通过用户人工 QA，并通过 `d68ce742644158f6b90c126c2a0b7d3ad757ba4d refactor: extract animation sequence commands` 完成独立 Git 闭环；`main` 与 `origin/main` 在本轮修复开始前同步。
+- Hidden Media Playback Lifecycle 开始基线：`main`、本地 `origin/main` 均为 `11d1372160f4104642642f69173f4a4b05ee63e4`，ahead 0、behind 0；最终提交范围固定为 `PROJECT_STATUS.md`、`src/components/editor/SlideCanvas.tsx`、`src/utils/exportHtml.ts`、`src/utils/exportPlayerRuntime.ts`、`src/utils/presentationInteraction.ts`，提交信息为 `fix: pause hidden presentation media`。
 
 未经用户允许，不得 commit 或 push。

@@ -1,3 +1,5 @@
+import { PRESENTATION_MEDIA_DEFINITELY_HIDDEN_REASONS } from "./presentationInteraction";
+
 /**
  * Standalone browser runtime injected into exported HTML.
  *
@@ -7,9 +9,16 @@
  * the DOM scheduling needed by the portable player.
  */
 export function getExportPlayerRuntimeScript() {
+  const definitelyHiddenReasons = JSON.stringify(
+    PRESENTATION_MEDIA_DEFINITELY_HIDDEN_REASONS,
+  );
+
   return String.raw`
     const EXPORT_WHEEL_TRIGGER_PX = 24;
     const EXPORT_WHEEL_GESTURE_END_MS = 240;
+    const EXPORT_PRESENTATION_MEDIA_DEFINITELY_HIDDEN_REASONS = new Set(
+      ${definitelyHiddenReasons},
+    );
 
     let exportPresentationStarted = false;
     let exportPlaybackState = null;
@@ -18,6 +27,7 @@ export function getExportPlayerRuntimeScript() {
     let exportPlaybackAnimationFrame = 0;
     let exportPlaybackClockStartedAt = 0;
     let exportPlaybackAnimations = new Map();
+    const exportMediaPauseRequiredByNode = new WeakMap();
     let exportWheelGestureTimer = 0;
     let exportWheelGesture = {
       accumulatedDeltaY: 0,
@@ -509,6 +519,15 @@ export function getExportPlayerRuntimeScript() {
       return state;
     }
 
+    function isExportPresentationMediaDefinitelyHidden(interactionState) {
+      return Boolean(
+        interactionState &&
+          EXPORT_PRESENTATION_MEDIA_DEFINITELY_HIDDEN_REASONS.has(
+            interactionState.reason,
+          ),
+      );
+    }
+
     function getExportElementAnimations(plan, elementId) {
       return getExportSequenceOrder(plan).flatMap(
         (sequenceId) =>
@@ -606,6 +625,30 @@ export function getExportPlayerRuntimeScript() {
       );
     }
 
+    /**
+     * Keep playback lifecycle separate from input ownership while sharing the
+     * same stable visual authority. A WeakMap makes repeated rAF sampling
+     * idempotent without adding private state to exported DOM attributes.
+     */
+    function applyExportMediaPlaybackLifecycle(mediaNode, pauseRequired) {
+      const previousPauseRequired =
+        exportMediaPauseRequiredByNode.get(mediaNode);
+
+      exportMediaPauseRequiredByNode.set(mediaNode, pauseRequired);
+
+      if (
+        pauseRequired &&
+        previousPauseRequired !== true &&
+        !mediaNode.paused
+      ) {
+        mediaNode.pause();
+      }
+    }
+
+    function isExportMediaPauseRequired(mediaNode) {
+      return exportMediaPauseRequiredByNode.get(mediaNode) === true;
+    }
+
     function applyExportMediaInputOwner(
       animationNode,
       renderableAnimationSamples,
@@ -622,14 +665,26 @@ export function getExportPlayerRuntimeScript() {
         samples: renderableAnimationSamples,
       });
 
+      const mediaFullscreen =
+        isExportMediaInputFullscreen(mediaInputNode);
+
+      const mediaNode = mediaInputNode.querySelector("audio, video");
+
+      if (mediaNode instanceof HTMLMediaElement) {
+        applyExportMediaPlaybackLifecycle(
+          mediaNode,
+          !mediaFullscreen &&
+            isExportPresentationMediaDefinitelyHidden(interactionState),
+        );
+      }
+
       /**
        * A fullscreen media node is already in the browser's input-owning top
        * layer. Presentation state may keep changing, but its ancestor must not
        * become inert until fullscreen exits.
        */
       const ownsInput =
-        isExportMediaInputFullscreen(mediaInputNode) ||
-        interactionState.ownsInput;
+        mediaFullscreen || interactionState.ownsInput;
       const ownerValue = String(ownsInput);
 
       if (mediaInputNode.dataset.presentationInputOwner !== ownerValue) {

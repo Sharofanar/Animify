@@ -40,11 +40,9 @@ import {
 import {
   addAnimationClipToSlide,
   addAnimationKeyframeToSlide,
-  applyElementBatchUpdatesToSlide,
   cloneElementAnimationsToInsertedElements,
   deleteAnimationClipFromSlide,
   deleteAnimationKeyframeFromSlide,
-  deleteSlideElementsWithAnimations,
   duplicateAnimationClipInSlide,
   isAnimationClipLiveForElements,
   updateAnimationClipEasingInSlide,
@@ -63,6 +61,14 @@ import {
   type UpdateAnimationKeyframeOffsetCommand,
   type UpdateAnimationKeyframeValueCommand,
 } from "./utils/animationCommands";
+import {
+  deleteElementsInProject,
+  insertElementsInProject,
+  reorderElementsInProject,
+  updateElementInProject,
+  updateElementsInProject,
+  type ElementLayerAction,
+} from "./utils/elementCommands";
 import type {
   AnimationScene,
   PresentationAsset,
@@ -75,6 +81,7 @@ import type {
   ActiveAnimationContext,
   AnimationWorkspaceDisplayMode,
   ElementBatchUpdate,
+  ElementUpdates,
 } from "./types/editor";
 import { useTimelinePlaybackController } from "./hooks/useTimelinePlaybackController";
 import { usePresentationPlaybackController } from "./hooks/usePresentationPlaybackController";
@@ -1797,20 +1804,13 @@ function App() {
       if (event.key === "Delete" || event.key === "Backspace") {
         event.preventDefault();
 
-        commitProjectChange((currentProject) => ({
-          ...currentProject,
-          updatedAt: new Date().toISOString(),
-          slides: currentProject.slides.map((slide) => {
-            if (slide.id !== currentProject.activeSlideId) {
-              return slide;
-            }
-
-            return deleteSlideElementsWithAnimations(
-              slide,
-              selectedElementIds,
-            );
-          }),
-        }));
+        commitProjectChange((currentProject) =>
+          deleteElementsInProject(currentProject, {
+            slideId: currentProject.activeSlideId,
+            elementIds: selectedElementIds,
+            updatedAt: new Date().toISOString(),
+          }).project,
+        );
 
         setSelectedElementId("");
         setSelectedElementIds([]);
@@ -1836,43 +1836,37 @@ function App() {
       event.preventDefault();
 
       commitProjectChange((currentProject) => {
-        let moved = false;
+        const slide = currentProject.slides.find(
+          (item) => item.id === currentProject.activeSlideId,
+        );
 
-        const nextSlides = currentProject.slides.map((slide) => {
-          if (slide.id !== currentProject.activeSlideId) {
-            return slide;
-          }
-
-          return {
-            ...slide,
-            elements: slide.elements.map((element) => {
-              if (!selectedElementIds.includes(element.id)) {
-                return element;
-              }
-
-              moved = true;
-
-              return {
-                ...element,
-                style: {
-                  ...element.style,
-                  x: element.style.x + deltaX,
-                  y: element.style.y + deltaY,
-                },
-              };
-            }),
-          };
-        });
-
-        if (!moved) {
+        if (!slide) {
           return currentProject;
         }
 
-        return {
-          ...currentProject,
+        const updates = selectedElementIds.flatMap((elementId) => {
+          const element = slide.elements.find((item) => item.id === elementId);
+
+          return element
+            ? [
+                {
+                  elementId,
+                  updates: {
+                    style: {
+                      x: element.style.x + deltaX,
+                      y: element.style.y + deltaY,
+                    },
+                  },
+                },
+              ]
+            : [];
+        });
+
+        return updateElementsInProject(currentProject, {
+          slideId: slide.id,
+          updates,
           updatedAt: new Date().toISOString(),
-          slides: nextSlides,
-        };
+        }).project;
       });
     }
 
@@ -2140,20 +2134,13 @@ function App() {
       position,
     );
 
-    commitProjectChange((currentProject) => ({
-      ...currentProject,
-      updatedAt: new Date().toISOString(),
-      slides: currentProject.slides.map((slide) => {
-        if (slide.id !== currentProject.activeSlideId) {
-          return slide;
-        }
-
-        return {
-          ...slide,
-          elements: [...slide.elements, newElement],
-        };
-      }),
-    }));
+    commitProjectChange((currentProject) =>
+      insertElementsInProject(currentProject, {
+        slideId: currentProject.activeSlideId,
+        elements: [newElement],
+        updatedAt: new Date().toISOString(),
+      }).project,
+    );
 
     setSelectedElementId(newElement.id);
     setSelectedElementIds([newElement.id]);
@@ -3357,41 +3344,17 @@ function App() {
 
   function handleUpdateElement(
     elementId: string,
-    updates: Partial<Omit<SlideElement, "style">> & {
-      style?: Partial<SlideElement["style"]>;
-    },
+    updates: ElementUpdates,
     options?: { recordHistory?: boolean },
   ) {
     commitProjectChange(
-      (currentProject) => ({
-        ...currentProject,
-        updatedAt: new Date().toISOString(),
-        slides: currentProject.slides.map((slide) => {
-          if (slide.id !== currentProject.activeSlideId) {
-            return slide;
-          }
-
-          return {
-            ...slide,
-            elements: slide.elements.map((element) => {
-              if (element.id !== elementId) {
-                return element;
-              }
-
-              return {
-                ...element,
-                ...updates,
-                style: updates.style
-                  ? {
-                      ...element.style,
-                      ...updates.style,
-                    }
-                  : element.style,
-              };
-            }),
-          };
-        }),
-      }),
+      (currentProject) =>
+        updateElementInProject(currentProject, {
+          slideId: currentProject.activeSlideId,
+          elementId,
+          updates,
+          updatedAt: new Date().toISOString(),
+        }).project,
       options,
     );
   }
@@ -3411,34 +3374,15 @@ function App() {
       return;
     }
 
-    commitProjectChange((currentProject) => {
-      let changed = false;
-
-      const nextSlides = currentProject.slides.map((slide) => {
-        if (slide.id !== currentProject.activeSlideId) {
-          return slide;
-        }
-
-        const nextSlide = applyElementBatchUpdatesToSlide(slide, batchUpdates);
-
-        if (nextSlide === slide) {
-          return slide;
-        }
-
-        changed = true;
-        return nextSlide;
-      });
-
-      if (!changed) {
-        return currentProject;
-      }
-
-      return {
-        ...currentProject,
-        updatedAt: new Date().toISOString(),
-        slides: nextSlides,
-      };
-    }, options);
+    commitProjectChange(
+      (currentProject) =>
+        updateElementsInProject(currentProject, {
+          slideId: currentProject.activeSlideId,
+          updates: batchUpdates,
+          updatedAt: new Date().toISOString(),
+        }).project,
+      options,
+    );
   }
 
   /**
@@ -3886,60 +3830,44 @@ function App() {
         const activeSelectionIds = selectedElementIds.includes(elementId)
           ? selectedElementIds
           : [elementId];
+        const slide = currentProject.slides.find(
+          (item) => item.id === currentProject.activeSlideId,
+        );
+        const draggedElement = slide?.elements.find(
+          (element) => element.id === elementId,
+        );
 
-        const selectedIdSet = new Set(activeSelectionIds);
-        let moved = false;
-
-        const nextSlides = currentProject.slides.map((slide) => {
-          if (slide.id !== currentProject.activeSlideId) {
-            return slide;
-          }
-
-          const draggedElement = slide.elements.find(
-            (element) => element.id === elementId,
-          );
-
-          if (!draggedElement) {
-            return slide;
-          }
-
-          const deltaX = position.x - draggedElement.style.x;
-          const deltaY = position.y - draggedElement.style.y;
-
-          if (deltaX === 0 && deltaY === 0) {
-            return slide;
-          }
-
-          moved = true;
-
-          return {
-            ...slide,
-            elements: slide.elements.map((element) => {
-              if (!selectedIdSet.has(element.id)) {
-                return element;
-              }
-
-              return {
-                ...element,
-                style: {
-                  ...element.style,
-                  x: element.style.x + deltaX,
-                  y: element.style.y + deltaY,
-                },
-              };
-            }),
-          };
-        });
-
-        if (!moved) {
+        if (!slide || !draggedElement) {
           return currentProject;
         }
 
-        return {
-          ...currentProject,
+        const deltaX = position.x - draggedElement.style.x;
+        const deltaY = position.y - draggedElement.style.y;
+        const updates = activeSelectionIds.flatMap((selectedId) => {
+          const element = slide.elements.find(
+            (item) => item.id === selectedId,
+          );
+
+          return element
+            ? [
+                {
+                  elementId: selectedId,
+                  updates: {
+                    style: {
+                      x: element.style.x + deltaX,
+                      y: element.style.y + deltaY,
+                    },
+                  },
+                },
+              ]
+            : [];
+        });
+
+        return updateElementsInProject(currentProject, {
+          slideId: slide.id,
+          updates,
           updatedAt: new Date().toISOString(),
-          slides: nextSlides,
-        };
+        }).project;
       },
       { recordHistory: false },
     );
@@ -3962,51 +3890,16 @@ function App() {
       return;
     }
 
-    const updatesByElementId = new Map(
-      updates.map((update) => [update.elementId, update.style]),
-    );
-
     commitProjectChange(
-      (currentProject) => {
-        let changed = false;
-
-        const nextSlides = currentProject.slides.map((slide) => {
-          if (slide.id !== currentProject.activeSlideId) {
-            return slide;
-          }
-
-          return {
-            ...slide,
-            elements: slide.elements.map((element) => {
-              const styleUpdate = updatesByElementId.get(element.id);
-
-              if (!styleUpdate) {
-                return element;
-              }
-
-              changed = true;
-
-              return {
-                ...element,
-                style: {
-                  ...element.style,
-                  ...styleUpdate,
-                },
-              };
-            }),
-          };
-        });
-
-        if (!changed) {
-          return currentProject;
-        }
-
-        return {
-          ...currentProject,
+      (currentProject) =>
+        updateElementsInProject(currentProject, {
+          slideId: currentProject.activeSlideId,
+          updates: updates.map((update) => ({
+            elementId: update.elementId,
+            updates: { style: update.style },
+          })),
           updatedAt: new Date().toISOString(),
-          slides: nextSlides,
-        };
-      },
+        }).project,
       { recordHistory: false },
     );
   }
@@ -4472,17 +4365,13 @@ function App() {
   }
 
   function handleDeleteElement(elementId: string) {
-    commitProjectChange((currentProject) => ({
-      ...currentProject,
-      updatedAt: new Date().toISOString(),
-      slides: currentProject.slides.map((slide) => {
-        if (slide.id !== currentProject.activeSlideId) {
-          return slide;
-        }
-
-        return deleteSlideElementsWithAnimations(slide, [elementId]);
-      }),
-    }));
+    commitProjectChange((currentProject) =>
+      deleteElementsInProject(currentProject, {
+        slideId: currentProject.activeSlideId,
+        elementIds: [elementId],
+        updatedAt: new Date().toISOString(),
+      }).project,
+    );
 
     setSelectedElementId("");
     setSelectedElementIds([]);
@@ -4497,11 +4386,7 @@ function App() {
    */
   function handleLayerElement(
     elementId: string,
-    action:
-      | "bring-forward"
-      | "send-backward"
-      | "bring-to-front"
-      | "send-to-back",
+    action: ElementLayerAction,
     explicitTargetElementIds?: string[],
   ) {
     const targetElementIds =
@@ -4512,119 +4397,14 @@ function App() {
           ? selectedElementIds
           : [elementId];
 
-    const targetElementIdSet = new Set(targetElementIds);
-
-    commitProjectChange((currentProject) => {
-      let changed = false;
-
-      const nextSlides = currentProject.slides.map((slide) => {
-        if (slide.id !== currentProject.activeSlideId) {
-          return slide;
-        }
-
-        const hasTargetElement = slide.elements.some((element) =>
-          targetElementIdSet.has(element.id),
-        );
-
-        if (!hasTargetElement) {
-          return slide;
-        }
-
-        let nextElements = [...slide.elements];
-
-        if (action === "bring-forward") {
-          /*
-           * Iterate from top to bottom. A selected element swaps with the first
-           * unselected element directly above it. Consecutive selected elements
-           * therefore move together as one group.
-           */
-          for (let index = nextElements.length - 2; index >= 0; index -= 1) {
-            const currentElement = nextElements[index];
-            const upperElement = nextElements[index + 1];
-
-            if (
-              currentElement &&
-              upperElement &&
-              targetElementIdSet.has(currentElement.id) &&
-              !targetElementIdSet.has(upperElement.id)
-            ) {
-              nextElements[index] = upperElement;
-              nextElements[index + 1] = currentElement;
-            }
-          }
-        }
-
-        if (action === "send-backward") {
-          /*
-           * Iterate from bottom to top so each selected element moves down by
-           * one layer without changing the selected group's internal order.
-           */
-          for (let index = 1; index < nextElements.length; index += 1) {
-            const currentElement = nextElements[index];
-            const lowerElement = nextElements[index - 1];
-
-            if (
-              currentElement &&
-              lowerElement &&
-              targetElementIdSet.has(currentElement.id) &&
-              !targetElementIdSet.has(lowerElement.id)
-            ) {
-              nextElements[index] = lowerElement;
-              nextElements[index - 1] = currentElement;
-            }
-          }
-        }
-
-        if (action === "bring-to-front") {
-          const unselectedElements = nextElements.filter(
-            (element) => !targetElementIdSet.has(element.id),
-          );
-
-          const selectedElements = nextElements.filter((element) =>
-            targetElementIdSet.has(element.id),
-          );
-
-          nextElements = [...unselectedElements, ...selectedElements];
-        }
-
-        if (action === "send-to-back") {
-          const selectedElements = nextElements.filter((element) =>
-            targetElementIdSet.has(element.id),
-          );
-
-          const unselectedElements = nextElements.filter(
-            (element) => !targetElementIdSet.has(element.id),
-          );
-
-          nextElements = [...selectedElements, ...unselectedElements];
-        }
-
-        const orderChanged = slide.elements.some(
-          (element, index) => element.id !== nextElements[index]?.id,
-        );
-
-        if (!orderChanged) {
-          return slide;
-        }
-
-        changed = true;
-
-        return {
-          ...slide,
-          elements: nextElements,
-        };
-      });
-
-      if (!changed) {
-        return currentProject;
-      }
-
-      return {
-        ...currentProject,
+    commitProjectChange((currentProject) =>
+      reorderElementsInProject(currentProject, {
+        slideId: currentProject.activeSlideId,
+        elementIds: targetElementIds,
+        action,
         updatedAt: new Date().toISOString(),
-        slides: nextSlides,
-      };
-    });
+      }).project,
+    );
   }
 
   async function handleExportHtml() {

@@ -563,7 +563,7 @@ PROJECT_STATUS.md
 
 - 第 4 阶段已经完成用户人工验收，并通过提交 `5391f11` commit / push。
 - 第 5 阶段“HTML 导出 Click Step 同步”已通过用户人工验收。
-- 第 5.5 阶段“渐进式架构拆分维护”已经开始；Batch 1、Batch 2A、Batch 2B、Batch 3A 已验证完成并完成 Git 闭环；Pending Media Interaction Fix 已完成独立 Git 闭环；Hidden Media Playback Lifecycle 已完成自动检查与 Editor / standalone HTML 人工 QA，纳入本次独立 Git 闭环；Batch 3B 尚未开始。
+- 第 5.5 阶段“渐进式架构拆分维护”正在进行；Batch 1、Batch 2A、Batch 2B、Batch 3A 与 Batch 3B-1 已验证完成并完成各自 Git 闭环；Pending Media Interaction Fix 与 Hidden Media Playback Lifecycle 也已完成独立 Git 闭环；Batch 3B-2 尚未开始。
 
 # 已完成前置：第 3 阶段 Click Step 数据与命令层
 
@@ -1021,7 +1021,7 @@ src/utils/exportPlayerRuntime.ts
 
 ### 第 5.5 阶段：渐进式架构拆分维护
 
-状态：**正在进行（Batch 1、Batch 2A、Batch 2B、Batch 3A 已验证完成并完成 Git 闭环；Pending Media Interaction Fix 已完成自动检查与人工 QA；Batch 3B 尚未开始）**
+状态：**正在进行（Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1 已验证完成并完成 Git 闭环；Pending Media Interaction Fix 已完成自动检查与人工 QA；Batch 3B-2 尚未开始）**
 
 #### 1. 阶段位置与总体原则
 
@@ -1033,7 +1033,7 @@ src/utils/exportPlayerRuntime.ts
 - 每个 Batch 必须独立完成：开发 → lint → build → `git diff --check` → 对应人工回归 → 独立 commit → 独立 push。
 - 禁止一次完成全部第 5.5 阶段重构；每个 Batch 验收并完成 Git 闭环后，才能进入下一 Batch。
 - 第 5.5 阶段已于 2026-07-28 开始；Batch 1 首轮人工验收发现的页面复制关键帧问题已修复，用户复测确认全部通过；Batch 1 已通过提交 `23e4901 refactor: extract low risk editor boundaries` 完成 commit / push。
-- Batch 2 前置只读架构审计已完成；Batch 2A 已按审计边界完成实现、用户人工验证和 Git 闭环；Batch 2B 已按规划完成 Project Document / History 生命周期边界抽离及 final no-op 最小修复，并通过全部人工 QA，作为后续工作的稳定架构基线。Batch 3A 已通过人工 QA，并通过 `d68ce74 refactor: extract animation sequence commands` 完成 Git 闭环；Batch 3B 尚未开始。
+- Batch 2 前置只读架构审计已完成；Batch 2A 已按审计边界完成实现、用户人工验证和 Git 闭环；Batch 2B 已按规划完成 Project Document / History 生命周期边界抽离及 final no-op 最小修复，并通过全部人工 QA，作为后续工作的稳定架构基线。Batch 3A 已通过人工 QA，并通过 `d68ce74 refactor: extract animation sequence commands` 完成 Git 闭环；Batch 3B-1 已完成人工 QA 并通过 `refactor: extract basic element commands` 完成独立 Git 闭环，Batch 3B-2 尚未开始。
 
 #### 2. 已确认架构事实与治理优先级
 
@@ -1336,7 +1336,7 @@ Batch 2 当前明确禁止移动：
 
 ##### Batch 3A：Sequence / Click Step Command Domain
 
-状态：**complete；manual QA passed；stable baseline；已通过 `d68ce74` commit / push；Batch 3B 尚未开始。**
+状态：**complete；manual QA passed；stable baseline；已通过 `d68ce74` commit / push；后续 Batch 3B-1 也已完成，Batch 3B-2 尚未开始。**
 
 实现结果：
 
@@ -1357,7 +1357,40 @@ Batch 2 当前明确禁止移动：
 后续：
 
 - Batch 3A 独立 Git 闭环后已完成 Pending Media Interaction Bug 独立修复、自动检查和人工 QA。
-- Pending Media Interaction Fix 纳入本次独立 Git 闭环；Batch 3B 仍未开始。未经用户明确要求，也不提前进入 Stage 6 / 7。
+- Pending Media Interaction Fix 已完成独立 Git 闭环；其后 Batch 3B-1 也已完成。Batch 3B-2 尚未开始，未经用户明确要求也不提前进入 Stage 6 / 7。
+
+##### Batch 3B-1：Pure Element Command Facade — Basic Mutations
+
+状态：**complete；manual QA passed；stable basic element command baseline；已纳入 `refactor: extract basic element commands` Git 闭环；Batch 3B-2 尚未开始。**
+
+实现结果：
+
+- 新增 Project 级纯命令 Facade `src/utils/elementCommands.ts`，公开 `insertElementsInProject`、`updateElementInProject`、`updateElementsInProject`、`reorderElementsInProject` 和 `deleteElementsInProject`。
+- Facade 只接收调用方显式提供的 `PresentationProject`、`slideId`、`updatedAt`、已构造元素或精确 patch，并返回新 Project 与受影响元素 ID；无效 slide、无效 element、相同基础字段 / style 值和图层边界 no-op 尽量保持原 Project 引用。
+- 已迁移普通元素插入、单元素更新、批量更新、键盘移动、Canvas 多选移动、Resize / Rotate 精确 style patch、`bring-forward` / `send-backward` / `bring-to-front` / `send-to-back` 四种图层操作，以及单元素 / 批量删除的 Project Document 变换。
+- 单元素更新委托统一批量更新核心；元素更新完整复用 `applyElementBatchUpdatesToSlide`，继续保持 style 浅合并及 legacy animation / Animation Scene V2 同步。
+- 元素删除完整复用 `deleteSlideElementsWithAnimations`，继续保持 Clip target、`Sequence.clipIds`、空 Sequence、`sequenceOrder`、trigger target 与 Scene revision 的完整清理语义；共享 Asset metadata 和 Blob 生命周期不属于该命令。
+- 图层继续只由 `slide.elements` 数组顺序表达；没有新增 `zIndex`，多选内部顺序和未选元素相对顺序保持不变。
+- App 继续拥有 `commitProjectChange`、History options / Group、Selection、Pointer / Keyboard orchestration、Clipboard、Context Menu、单 Clip preview 清理、Asset / Blob / Object URL / IndexedDB 生命周期和 UI 瞬态状态；Facade 不访问 React state、DOM、Presentation 或 Timeline，也不调用任何隐式时间源。
+- Copy / Paste / Duplicate、clipboard snapshot、element / Clip / Track / Keyframe ID remap、跨页 Sequence 复制和 Asset 导入流程没有进入本 Batch，继续归属 Batch 3B-2。
+- 本轮没有修改 Animation Schema、Sequence-local time、Presentation / Export Runtime、Hidden Media Playback Lifecycle、Timeline 架构、Stage 6 或 Stage 7。
+
+自动检查：
+
+- Element Commands 不落盘运行时断言 66 项通过，覆盖纯度 / 引用、插入、单 / 批量更新、精确 move / resize / rotate patch、四种图层操作、完整动画删除清理、legacy / V2 同步和结果 ID。
+- App / Facade 结构契约断言 25 项、Presentation interaction regression 断言 16 项通过；历史 Animation Commands / Hidden Media Lifecycle 专项脚本未落盘，本轮使用当前可执行的 Facade 集成与共享 interaction 纯逻辑断言覆盖相关回归边界。
+- TypeScript relative import graph 覆盖 36 个模块，无循环依赖。
+- `npm.cmd run lint`、`npm.cmd run build`、`git diff --check` 和 staged diff check 均通过；Build 只保留项目已有的 500 kB chunk warning。
+
+人工 QA：
+
+- 用户已确认普通元素新增、属性更新、Move / Resize / Rotate、Undo / Redo、四种图层操作、单删 / 批量删除及动画引用清理正常。
+- Presentation 与 standalone HTML 冒烟正常；Copy / Paste / Duplicate 冒烟正常，确认未因 3B-1 Facade 抽取发生回归。
+- Timeline 当前显示全部元素仍是既有 Timeline V2-B 结构；未来按动画元素 / AnimationSequence 组织属于 Stage 7，不是 Batch 3B-1 Bug，也没有在本轮实现或解决。
+
+后续：
+
+- Batch 3B-2 尚未开始；其范围仍是 Copy / Paste / Duplicate Facade、clipboard snapshot 与动画 ID remap 等高风险复制语义，必须等待用户明确要求。
 
 ##### Batch 3 后续：其他 Animation Command Domains
 
@@ -1429,7 +1462,7 @@ Batch 2 当前明确禁止移动：
 
 - 不与第 5 阶段 HTML Click Step 同步混合开发。
 - 不提前实现第 6 阶段 Click Step 编辑 UI 或第 7 阶段 Timeline V2-C。
-- Batch 1、Batch 2A、Batch 2B、Batch 3A 已验证完成并完成 Git 闭环；Batch 2 前置只读架构审计已完成；Pending Media Interaction Fix 已通过自动检查和人工 QA，Batch 3B、Stage 6 和 Stage 7 尚未开始。
+- Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1 已验证完成并完成 Git 闭环；Batch 2 前置只读架构审计已完成；Pending Media Interaction Fix 已通过自动检查和人工 QA，Batch 3B-2、Stage 6 和 Stage 7 尚未开始。
 
 ### 第 6 阶段：Click Step 编辑界面
 
@@ -2107,7 +2140,7 @@ Standalone HTML 重新验证结论：
   - 静态 `opacity: 0` 媒体不会形成隐形可交互控件。
   - 正 `startMs` 延迟期间媒体不参与输入，Wheel 仍只跨一个动画边界。
   - 编辑器与 standalone HTML 的全屏媒体输入保护、退出全屏后的 Presentation 输入恢复和播放进度保持均正常。
-- Batch 3B 尚未开始。
+- 当时 Batch 3B 尚未开始；其后的 Batch 3B-1 现已完成，Batch 3B-2 仍未开始。
 
 状态：**实现完成；自动检查通过；manual QA passed；已验证完成；纳入本次独立 Git 闭环**
 
@@ -2286,6 +2319,22 @@ Standalone HTML 重新验证结论：
 
 状态：**待独立评估的媒体键盘一致性 UX**
 
+### 22. Selected Element Adorner Layering
+
+现象：
+
+- 下层元素被选中时，其 resize handles 可能被上层元素覆盖。
+- pointer 命中上层元素后显示移动光标，而不是下层已选元素的 resize 光标。
+- 将被选元素置顶后，resize handles 与光标行为恢复正常。
+
+分类与边界：
+
+- 属于 Canvas selection adorner stacking / hit-testing UX，不是 Batch 3B-1 Project Command Facade 的数据变换问题。
+- 后续需要独立检查 selection overlay、transform handles 的渲染层与 pointer 命中顺序；不得借此改变 `slide.elements` 的真实文档图层顺序。
+- 本轮只记录，不修改 `SlideCanvas`、Pointer 路由或 Timeline。
+
+状态：**已确认独立 UX；待后续诊断 / 修复，本轮未解决。**
+
 ---
 
 ## 十、最近测试状态
@@ -2444,7 +2493,8 @@ GitHub 状态：已 push
 2026-08-02：Presentation Transient Text Editing / Selection 完成 bare 文本编辑入口隔离、展示 Selection 禁用、自动检查和人工 QA；确认临时输入来自受控 textarea 路径而非 contentEditable
 2026-08-02：Standalone Export Text Selection、编辑模式 Shift 多选文字高亮、Presentation 入口焦点 / Selection 清理与 Audio Native Controls Keyboard Shortcut Parity 继续作为独立问题，本轮未实现
 2026-08-03：Hidden Media Playback Lifecycle 完成稳定隐藏转换暂停、Editor / Export autoplay gate 与 fullscreen override；74 项专项断言、16 项交互回归断言及 Editor / standalone HTML Audio / Video 人工 QA 全部通过
-当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A 已验证完成并完成 Git 闭环；Video Bug Part A、Initial Selection、Pending Media Interaction Fix、Standalone Export Fullscreen Arrow-Key Seeking Fix、Presentation Element Click Blocking Fix、Presentation Transient Text Editing / Selection Fix 与 Hidden Media Playback Lifecycle 已解决并通过人工 QA；Fullscreen Media Enter-Key Parity、独立文本 Selection UX、Audio keyboard parity 与 `file://` 警告待后续处理；Batch 3B 尚未开始
+2026-08-04：Batch 3B-1 新增 Project 级 Pure Element Command Facade，迁移基础元素插入、更新、移动 patch、图层与删除纯变换；自动检查和用户人工 QA 全部通过
+当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1 已验证完成并完成 Git 闭环；Video Bug Part A、Initial Selection、Pending Media Interaction Fix、Standalone Export Fullscreen Arrow-Key Seeking Fix、Presentation Element Click Blocking Fix、Presentation Transient Text Editing / Selection Fix 与 Hidden Media Playback Lifecycle 已解决并通过人工 QA；Selected Element Adorner Layering、Fullscreen Media Enter-Key Parity、独立文本 Selection UX、Audio keyboard parity 与 `file://` 警告待后续处理；Batch 3B-2 尚未开始
 ```
 
 ---
@@ -2466,8 +2516,8 @@ GitHub 状态：已 push
 - standalone HTML 必须先由用户点击“开始放映”；启动前没有播放状态或媒体 autoplay，启动点击只进入第一页并为后续有声媒体提供浏览器 user activation，该行为已经用户人工验收。
 - Batch 2A 开始基线是 `bbc7f5d2bbf5403dcc2b0ede64014446cd258a3e docs: sync stage 5.5 architecture status`；Batch 2A 已通过 `refactor: extract project persistence` 完成 Git 闭环。
 - 第 5.5 阶段 Batch 1 已完成人工验证、commit 和 push；不再存在“待验证”或“待 Git 闭环”状态。
-- Batch 2 前置只读架构审计已完成。Stage 5.5 Batch 2A“Project persistence adapter”已验证完成并 push；Video Bug Part A 已解决并完成人工 QA / Git 闭环。Export 现象当前无法复现，不启动 speculative repair；Batch 2B“Project document + history transaction”及 final no-op 修复已通过全部人工 QA 并成为稳定架构基线。Batch 3A 最小 Sequence Command Domain 已通过人工 QA，并通过 `d68ce74` 完成独立 Git 闭环；Batch 3B 尚未开始。
-- Pending Media Interaction Fix 已完成代码实现、自动检查和人工 QA，并纳入 `fix: sync pending media input ownership` 独立 Git 闭环；Batch 3B 尚未开始。Stage 6 继续按当前 roadmap 等待。
+- Batch 2 前置只读架构审计已完成。Stage 5.5 Batch 2A“Project persistence adapter”已验证完成并 push；Video Bug Part A 已解决并完成人工 QA / Git 闭环。Export 现象当前无法复现，不启动 speculative repair；Batch 2B“Project document + history transaction”及 final no-op 修复已通过全部人工 QA 并成为稳定架构基线。Batch 3A 最小 Sequence Command Domain 已通过人工 QA，并通过 `d68ce74` 完成独立 Git 闭环；Batch 3B-1 Pure Element Command Facade 已完成自动检查、人工 QA 与独立 Git 闭环。
+- Pending Media Interaction Fix 已完成代码实现、自动检查和人工 QA，并纳入 `fix: sync pending media input ownership` 独立 Git 闭环；Batch 3B-2 尚未开始。Stage 6 继续按当前 roadmap 等待。
 - Standalone Export Fullscreen Arrow-Key Seeking Fix 已完成根因修复、自动检查和人工 QA；浏览器原生 Video controls 继续负责全屏方向键 seek，Presentation 不消费这些按键。
 - Presentation Element Click Blocking Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 的普通展示元素 click 现在冒泡到统一推进路由，编辑模式选择与媒体控件输入保持不变。
 - Presentation Transient Text Editing / Selection Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 不再拥有双击 / textarea 编辑入口，Text / Shape / SVG 展示文字不再产生原生 Selection，编辑模式 textarea 语义保持不变。
@@ -2507,11 +2557,12 @@ git diff --cached
 15. Video animation / compositor 生命周期问题与 persistence adapter 和 Batch 2B 无关；Part A Presentation 已修复并通过人工 QA。Export Video animation invisible 当前无法复现且未修改 Export implementation；全屏发白为 environment-specific observation，不增加 workaround。
 16. Batch 2B 已通过完整人工 QA 与 final no-op / Redo preservation 专项 QA，正式标记为已验证完成并作为稳定架构基线。
 17. Batch 3A 已提取独立 Sequence / Click Step Command Domain 并保留 `animationCommands.ts` compatibility barrel；人工 QA 已通过并通过 `d68ce74` 完成 Git 闭环，未改变动画时间语义。
-18. Pending Media Interaction Fix 已实现 sampled-state input owner、Editor / Export DOM bridge、pointer / focus gate 与 fullscreen override，并通过自动检查和人工 QA；播放生命周期继续由独立 Hidden Media Playback Lifecycle 边界负责；Batch 3B 尚未开始。
+18. Pending Media Interaction Fix 已实现 sampled-state input owner、Editor / Export DOM bridge、pointer / focus gate 与 fullscreen override，并通过自动检查和人工 QA；播放生命周期继续由独立 Hidden Media Playback Lifecycle 边界负责。
 19. Standalone Export Fullscreen Arrow-Key Seeking Fix 已通过最小 export 键盘路由修改恢复浏览器原生 seek，并通过自动检查和人工 QA；Fullscreen Media Enter-Key Parity 单独保留为待处理 UX。
 20. Presentation Element Click Blocking Fix 已通过 bare wrapper 条件事件挂载恢复普通展示元素的统一 click 推进，并通过自动检查和人工 QA。
 21. Presentation Transient Text Editing / Selection Fix 已从 `isEditing`、`onStartEditing`、`onDoubleClick` 和 bare 展示样式四个边界关闭 Presentation 的 textarea / 原生 Selection 路径，并通过自动检查和人工 QA；standalone export 文字选择、编辑模式 Shift 多选高亮和 Presentation 入口主动 blur / Selection 清理仍是独立待处理项。
 22. Hidden Media Playback Lifecycle 使用共享稳定隐藏 reason、Editor ref 与 Export WeakMap 实现 transition-only pause，并通过 Editor / standalone HTML Audio / Video 人工 QA；同页隐藏 / 显示保留 `currentTime` 且不自动恢复播放，跨页不承诺保留媒体进度。
+23. Batch 3B-1 已新增 Project 级 Pure Element Command Facade 并迁移基础插入、更新、精确 style patch、图层和删除变换；App 继续拥有 History、Selection、交互与 Asset 生命周期，Batch 3B-2 的 Copy / Paste / Duplicate 和动画 ID remap 尚未开始。
 
 ### Git 状态说明
 
@@ -2533,5 +2584,6 @@ git diff --cached
 - Batch 3A 开始基线：`main`、本地 `origin/main` 均为 `8a460e339a1300bef157faaadeea33f744daebd8`，ahead 0、behind 0，开始前工作区和暂存区干净。
 - Batch 3A 已通过用户人工 QA，并通过 `d68ce742644158f6b90c126c2a0b7d3ad757ba4d refactor: extract animation sequence commands` 完成独立 Git 闭环；`main` 与 `origin/main` 在本轮修复开始前同步。
 - Hidden Media Playback Lifecycle 开始基线：`main`、本地 `origin/main` 均为 `11d1372160f4104642642f69173f4a4b05ee63e4`，ahead 0、behind 0；最终提交范围固定为 `PROJECT_STATUS.md`、`src/components/editor/SlideCanvas.tsx`、`src/utils/exportHtml.ts`、`src/utils/exportPlayerRuntime.ts`、`src/utils/presentationInteraction.ts`，提交信息为 `fix: pause hidden presentation media`。
+- Batch 3B-1 开始基线：`main`、本地 `origin/main` 均为 `5b1197cb71763ed28f788a7253bcb4e7885730b5`，ahead 0、behind 0，开始前工作区与暂存区干净；最终提交范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/utils/elementCommands.ts`，提交信息为 `refactor: extract basic element commands`。
 
 未经用户允许，不得 commit 或 push。

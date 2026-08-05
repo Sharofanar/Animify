@@ -40,7 +40,6 @@ import {
 import {
   addAnimationClipToSlide,
   addAnimationKeyframeToSlide,
-  cloneElementAnimationsToInsertedElements,
   deleteAnimationClipFromSlide,
   deleteAnimationKeyframeFromSlide,
   duplicateAnimationClipInSlide,
@@ -69,8 +68,13 @@ import {
   updateElementsInProject,
   type ElementLayerAction,
 } from "./utils/elementCommands";
+import {
+  createElementCopySnapshot,
+  duplicateElementInProject,
+  pasteElementSnapshotInProject,
+  type ElementCopySnapshot,
+} from "./utils/elementCloneCommands";
 import type {
-  AnimationScene,
   PresentationAsset,
   PresentationAssetType,
   PresentationProject,
@@ -288,12 +292,6 @@ type CanvasContextMenuState = {
   slideX: number;
   slideY: number;
 } | null;
-
-type CopiedElementClipboard = {
-  sourceSlideId: string;
-  elements: SlideElement[];
-  animationScene: AnimationScene;
-};
 
 /**
  * Temporary editor-only state for one isolated Clip preview.
@@ -514,48 +512,6 @@ function loadProjectForEditor(): PresentationProject {
   }
 
   return project;
-}
-
-/**
- * Clone an element for duplicate or paste operations.
- *
- * The copied element keeps assetId, so images reuse the same asset record
- * instead of duplicating large image data.
- */
-function cloneSlideElementForInsert(
-  sourceElement: SlideElement,
-  newElementId: string,
-  now: number,
-  nameSuffix: string,
-): SlideElement {
-  return {
-    ...sourceElement,
-    id: newElementId,
-    name: `${sourceElement.name} ${nameSuffix}`,
-
-    media: sourceElement.media
-      ? {
-          ...sourceElement.media,
-        }
-      : undefined,
-
-    style: {
-      ...sourceElement.style,
-      x: sourceElement.style.x + 32,
-      y: sourceElement.style.y + 32,
-    },
-    animations: sourceElement.animations.map((animation, animationIndex) => ({
-      ...animation,
-      id: `${animation.id}-${nameSuffix}-${now}-${animationIndex}`,
-    })),
-  };
-}
-
-/**
- * Deep-clone an Animation Schema V2 scene before clipboard operations modify it.
- */
-function cloneAnimationSceneSnapshot(scene: AnimationScene) {
-  return JSON.parse(JSON.stringify(scene)) as AnimationScene;
 }
 
 /**
@@ -863,7 +819,7 @@ function App() {
    * The clipboard stores one or more slide elements. Image elements keep assetId,
    * so pasted images reuse the same asset record instead of duplicating image data.
    */
-  const copiedElementsRef = useRef<CopiedElementClipboard | null>(null);
+  const copiedElementsRef = useRef<ElementCopySnapshot | null>(null);
 
   /**
    * Reflect whether the internal element clipboard contains usable content.
@@ -1631,43 +1587,26 @@ function App() {
           return;
         }
 
-        const now = Date.now();
-        const pastedElementIds = copiedElements.map(
-          (element, index) => `${element.id}-paste-${now}-${index}`,
-        );
+        const operationId = `paste-${Date.now()}`;
+        const updatedAt = new Date().toISOString();
+        let pastedElementIds: string[] = [];
 
-        const pastedElements = copiedElements.map((copiedElement, index) =>
-          cloneSlideElementForInsert(
-            copiedElement,
-            pastedElementIds[index],
-            now,
-            "粘贴",
-          ),
-        );
+        commitProjectChange((currentProject) => {
+          const result = pasteElementSnapshotInProject(currentProject, {
+            targetSlideId: currentProject.activeSlideId,
+            snapshot: clipboard,
+            placement: {
+              type: "offset",
+              deltaX: 32,
+              deltaY: 32,
+            },
+            operationId,
+            updatedAt,
+          });
 
-        commitProjectChange((currentProject) => ({
-          ...currentProject,
-          updatedAt: new Date().toISOString(),
-          slides: currentProject.slides.map((slide) => {
-            if (slide.id !== currentProject.activeSlideId) {
-              return slide;
-            }
-
-            const nextSlide = {
-              ...slide,
-              elements: [...slide.elements, ...pastedElements],
-            };
-
-            return cloneElementAnimationsToInsertedElements(
-              nextSlide,
-              clipboard.animationScene,
-              clipboard.sourceSlideId,
-              copiedElements,
-              pastedElements,
-              `paste-${now}`,
-            );
-          }),
-        }));
+          pastedElementIds = result.insertedElementIds;
+          return result.project;
+        });
 
         setSelectedElementId(pastedElementIds.at(-1) ?? "");
         setSelectedElementIds(pastedElementIds);
@@ -1683,35 +1622,16 @@ function App() {
         event.preventDefault();
 
         const currentProject = latestProjectRef.current;
-        const currentSlide = currentProject.slides.find(
-          (slide) => slide.id === currentProject.activeSlideId,
-        );
+        const snapshot = createElementCopySnapshot(currentProject, {
+          slideId: currentProject.activeSlideId,
+          elementIds: selectedElementIds,
+        });
 
-        if (!currentSlide) {
+        if (!snapshot) {
           return;
         }
 
-        const selectedIdSet = new Set(selectedElementIds);
-        const copiedElements = currentSlide.elements.filter((element) =>
-          selectedIdSet.has(element.id),
-        );
-
-        if (copiedElements.length === 0) {
-          return;
-        }
-
-        // Deep clone the copied elements so later edits to the original elements
-        // will not mutate the internal clipboard copy.
-        copiedElementsRef.current = {
-          sourceSlideId: currentSlide.id,
-          elements: JSON.parse(
-            JSON.stringify(copiedElements),
-          ) as SlideElement[],
-          animationScene: cloneAnimationSceneSnapshot(
-            currentSlide.animationScene,
-          ),
-        };
-
+        copiedElementsRef.current = snapshot;
         setHasCopiedElements(true);
         return;
       }
@@ -1719,83 +1639,24 @@ function App() {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") {
         event.preventDefault();
 
-        const now = Date.now();
-        const duplicateElementId = `${selectedElementId}-copy-${now}`;
-        let duplicated = false;
+        const operationId = `copy-${Date.now()}`;
+        const updatedAt = new Date().toISOString();
+        let duplicatedElementId: string | undefined;
 
         commitProjectChange((currentProject) => {
-          const nextSlides = currentProject.slides.map((slide) => {
-            if (slide.id !== currentProject.activeSlideId) {
-              return slide;
-            }
-
-            const sourceElementIndex = slide.elements.findIndex(
-              (element) => element.id === selectedElementId,
-            );
-
-            if (sourceElementIndex === -1) {
-              return slide;
-            }
-
-            const sourceElement = slide.elements[sourceElementIndex];
-
-            duplicated = true;
-
-            const duplicateElement: SlideElement = {
-              ...sourceElement,
-              id: duplicateElementId,
-              name: `${sourceElement.name} 副本`,
-              style: {
-                ...sourceElement.style,
-                x: sourceElement.style.x + 32,
-                y: sourceElement.style.y + 32,
-              },
-              animations: sourceElement.animations.map(
-                (animation, animationIndex) => ({
-                  ...animation,
-                  id: `${animation.id}-copy-${now}-${animationIndex}`,
-                }),
-              ),
-            };
-
-            const nextElements = [
-              ...slide.elements.slice(0, sourceElementIndex + 1),
-              duplicateElement,
-              ...slide.elements.slice(sourceElementIndex + 1),
-            ];
-
-            const nextSlide = {
-              ...slide,
-              elements: nextElements,
-            };
-
-            /**
-             * Ctrl + D duplicates both the visual element and every exact V2 Clip targeting
-             * it. The original timing is preserved and the new Clips target only the copy.
-             */
-            return cloneElementAnimationsToInsertedElements(
-              nextSlide,
-              slide.animationScene,
-              slide.id,
-              [sourceElement],
-              [duplicateElement],
-              `duplicate-${now}`,
-            );
+          const result = duplicateElementInProject(currentProject, {
+            slideId: currentProject.activeSlideId,
+            elementId: selectedElementId,
+            operationId,
+            updatedAt,
           });
 
-          if (!duplicated) {
-            return currentProject;
-          }
-
-          return {
-            ...currentProject,
-            updatedAt: new Date().toISOString(),
-            slides: nextSlides,
-          };
+          duplicatedElementId = result.duplicatedElementId;
+          return result.project;
         });
 
-        if (duplicated) {
-          setSelectedElementId(duplicateElementId);
+        if (duplicatedElementId) {
+          setSelectedElementId(duplicatedElementId);
         }
 
         return;
@@ -3980,15 +3841,6 @@ function App() {
 
     if (action === "copy") {
       const currentProject = latestProjectRef.current;
-      const currentSlide = currentProject.slides.find(
-        (slide) => slide.id === currentProject.activeSlideId,
-      );
-
-      if (!currentSlide) {
-        setElementContextMenu(null);
-        return;
-      }
-
       const shouldCopyCurrentSelection = selectedElementIds.includes(
         menuState.elementId,
       );
@@ -3998,22 +3850,13 @@ function App() {
           ? selectedElementIds
           : [menuState.elementId];
 
-      const selectedIdSet = new Set(idsToCopy);
-      const copiedElements = currentSlide.elements.filter((element) =>
-        selectedIdSet.has(element.id),
-      );
+      const snapshot = createElementCopySnapshot(currentProject, {
+        slideId: currentProject.activeSlideId,
+        elementIds: idsToCopy,
+      });
 
-      if (copiedElements.length > 0) {
-        copiedElementsRef.current = {
-          sourceSlideId: currentSlide.id,
-          elements: JSON.parse(
-            JSON.stringify(copiedElements),
-          ) as SlideElement[],
-          animationScene: cloneAnimationSceneSnapshot(
-            currentSlide.animationScene,
-          ),
-        };
-
+      if (snapshot) {
+        copiedElementsRef.current = snapshot;
         setHasCopiedElements(true);
       }
 
@@ -4031,53 +3874,25 @@ function App() {
         return;
       }
 
+      const operationId = `paste-${Date.now()}`;
+      const updatedAt = new Date().toISOString();
       let pastedElementIds: string[] = [];
 
-      /**
-       * Generate operation IDs inside the event-triggered project transaction.
-       *
-       * This prevents an impure Date.now() call from being evaluated in the
-       * component's render scope.
-       */
       commitProjectChange((currentProject) => {
-        const now = Date.now();
+        const result = pasteElementSnapshotInProject(currentProject, {
+          targetSlideId: currentProject.activeSlideId,
+          snapshot: clipboard,
+          placement: {
+            type: "offset",
+            deltaX: 32,
+            deltaY: 32,
+          },
+          operationId,
+          updatedAt,
+        });
 
-        pastedElementIds = copiedElements.map(
-          (element, index) => `${element.id}-paste-${now}-${index}`,
-        );
-
-        const pastedElements = copiedElements.map((copiedElement, index) =>
-          cloneSlideElementForInsert(
-            copiedElement,
-            pastedElementIds[index],
-            now,
-            "粘贴",
-          ),
-        );
-
-        return {
-          ...currentProject,
-          updatedAt: new Date().toISOString(),
-          slides: currentProject.slides.map((slide) => {
-            if (slide.id !== currentProject.activeSlideId) {
-              return slide;
-            }
-
-            const nextSlide = {
-              ...slide,
-              elements: [...slide.elements, ...pastedElements],
-            };
-
-            return cloneElementAnimationsToInsertedElements(
-              nextSlide,
-              clipboard.animationScene,
-              clipboard.sourceSlideId,
-              copiedElements,
-              pastedElements,
-              `paste-${now}`,
-            );
-          }),
-        };
+        pastedElementIds = result.insertedElementIds;
+        return result.project;
       });
 
       setSelectedElementId(pastedElementIds.at(-1) ?? "");
@@ -4089,76 +3904,24 @@ function App() {
     }
 
     if (action === "duplicate") {
-      let duplicateElementId = "";
+      const operationId = `copy-${Date.now()}`;
+      const updatedAt = new Date().toISOString();
+      let duplicatedElementId: string | undefined;
 
       commitProjectChange((currentProject) => {
-        let duplicated = false;
-        const now = Date.now();
-
-        const nextSlides = currentProject.slides.map((slide) => {
-          if (slide.id !== currentProject.activeSlideId) {
-            return slide;
-          }
-
-          const sourceElementIndex = slide.elements.findIndex(
-            (element) => element.id === menuState.elementId,
-          );
-
-          if (sourceElementIndex === -1) {
-            return slide;
-          }
-
-          const sourceElement = slide.elements[sourceElementIndex];
-
-          if (!sourceElement) {
-            return slide;
-          }
-
-          duplicateElementId = `${sourceElement.id}-copy-${now}`;
-
-          const duplicateElement = cloneSlideElementForInsert(
-            sourceElement,
-            duplicateElementId,
-            now,
-            "副本",
-          );
-
-          duplicated = true;
-
-          const nextElements = [
-            ...slide.elements.slice(0, sourceElementIndex + 1),
-            duplicateElement,
-            ...slide.elements.slice(sourceElementIndex + 1),
-          ];
-
-          const nextSlide = {
-            ...slide,
-            elements: nextElements,
-          };
-
-          return cloneElementAnimationsToInsertedElements(
-            nextSlide,
-            slide.animationScene,
-            slide.id,
-            [sourceElement],
-            [duplicateElement],
-            `duplicate-${now}`,
-          );
+        const result = duplicateElementInProject(currentProject, {
+          slideId: currentProject.activeSlideId,
+          elementId: menuState.elementId,
+          operationId,
+          updatedAt,
         });
 
-        if (!duplicated) {
-          return currentProject;
-        }
-
-        return {
-          ...currentProject,
-          updatedAt: new Date().toISOString(),
-          slides: nextSlides,
-        };
+        duplicatedElementId = result.duplicatedElementId;
+        return result.project;
       });
 
-      if (duplicateElementId) {
-        setSelectedElementId(duplicateElementId);
+      if (duplicatedElementId) {
+        setSelectedElementId(duplicatedElementId);
       }
 
       setElementContextMenu(null);
@@ -4216,71 +3979,30 @@ function App() {
 
     const clipboard = copiedElementsRef.current;
 
-    const copiedElements = clipboard?.elements ?? [];
-
-    if (!clipboard || copiedElements.length === 0) {
+    if (!clipboard || clipboard.elements.length === 0) {
       setCanvasContextMenu(null);
       return;
     }
 
+    const operationId = `paste-${Date.now()}`;
+    const updatedAt = new Date().toISOString();
     let pastedElementIds: string[] = [];
 
     commitProjectChange((currentProject) => {
-      const now = Date.now();
-
-      const sourceLeft = Math.min(
-        ...copiedElements.map((element) => element.style.x),
-      );
-
-      const sourceTop = Math.min(
-        ...copiedElements.map((element) => element.style.y),
-      );
-
-      pastedElementIds = copiedElements.map(
-        (element, index) => `${element.id}-paste-${now}-${index}`,
-      );
-
-      const pastedElements = copiedElements.map((copiedElement, index) => {
-        const pastedElement = cloneSlideElementForInsert(
-          copiedElement,
-          pastedElementIds[index],
-          now,
-          "粘贴",
-        );
-
-        return {
-          ...pastedElement,
-          style: {
-            ...pastedElement.style,
-            x: menuState.slideX + (copiedElement.style.x - sourceLeft),
-            y: menuState.slideY + (copiedElement.style.y - sourceTop),
-          },
-        };
+      const result = pasteElementSnapshotInProject(currentProject, {
+        targetSlideId: currentProject.activeSlideId,
+        snapshot: clipboard,
+        placement: {
+          type: "slide-anchor",
+          x: menuState.slideX,
+          y: menuState.slideY,
+        },
+        operationId,
+        updatedAt,
       });
 
-      return {
-        ...currentProject,
-        updatedAt: new Date().toISOString(),
-        slides: currentProject.slides.map((slide) => {
-          if (slide.id !== currentProject.activeSlideId) {
-            return slide;
-          }
-
-          const nextSlide = {
-            ...slide,
-            elements: [...slide.elements, ...pastedElements],
-          };
-
-          return cloneElementAnimationsToInsertedElements(
-            nextSlide,
-            clipboard.animationScene,
-            clipboard.sourceSlideId,
-            copiedElements,
-            pastedElements,
-            `paste-${now}`,
-          );
-        }),
-      };
+      pastedElementIds = result.insertedElementIds;
+      return result.project;
     });
 
     setSelectedElementId(pastedElementIds.at(-1) ?? "");

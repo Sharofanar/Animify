@@ -3,7 +3,7 @@
 > 最后更新：2026-08-05
 > 仓库：`https://github.com/Sharofanar/Animify`  
 > 主分支：`main`  
-> 本轮 Batch 3B-2A 开始基线：`3aab46ef212b2b59210f146d30d2a11e47db8770 refactor: extract basic element commands`
+> 本轮 Batch 3B-2B 开始基线：`ace9b08ec7507706c36728433553399bb75454f1 refactor: extract animation element clone kernel`
 
 本文档是 Animify 当前开发状态的长期事实来源。
 
@@ -31,9 +31,12 @@
 
 ### 1. 权威远端基线
 
-本轮修复开始时 GitHub `origin/main` 最新提交：
+本轮 Batch 3B-2B 开始时 GitHub `origin/main` 最新提交：
 
 ```text
+ace9b08 refactor: extract animation element clone kernel
+3aab46e refactor: extract basic element commands
+5b1197c fix: pause hidden presentation media
 11d1372 fix: disable text editing in presentation
 93d7a32 fix: allow presentation clicks through elements
 85b7bb0 fix: restore fullscreen video arrow seeking
@@ -563,7 +566,7 @@ PROJECT_STATUS.md
 
 - 第 4 阶段已经完成用户人工验收，并通过提交 `5391f11` commit / push。
 - 第 5 阶段“HTML 导出 Click Step 同步”已通过用户人工验收。
-- 第 5.5 阶段“渐进式架构拆分维护”正在进行；Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1 与 Batch 3B-2A 已验证完成；Pending Media Interaction Fix 与 Hidden Media Playback Lifecycle 也已完成独立 Git 闭环；Batch 3B-2B 尚未开始。
+- 第 5.5 阶段“渐进式架构拆分维护”正在进行；Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A 与 Batch 3B-2B 已验证完成；Pending Media Interaction Fix 与 Hidden Media Playback Lifecycle 也已完成独立 Git 闭环；后续其他 Animation Command Domain、Batch 4 与 Batch 5 仍未开始。
 
 # 已完成前置：第 3 阶段 Click Step 数据与命令层
 
@@ -1021,7 +1024,7 @@ src/utils/exportPlayerRuntime.ts
 
 ### 第 5.5 阶段：渐进式架构拆分维护
 
-状态：**正在进行（Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1 与 Batch 3B-2A 已完成 Git 闭环；Batch 3B-2B 尚未开始）**
+状态：**正在进行（Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A 与 Batch 3B-2B 已验证完成；后续其他 Animation Command Domain、Batch 4 与 Batch 5 尚未开始）**
 
 #### 1. 阶段位置与总体原则
 
@@ -1033,7 +1036,7 @@ src/utils/exportPlayerRuntime.ts
 - 每个 Batch 必须独立完成：开发 → lint → build → `git diff --check` → 对应人工回归 → 独立 commit → 独立 push。
 - 禁止一次完成全部第 5.5 阶段重构；每个 Batch 验收并完成 Git 闭环后，才能进入下一 Batch。
 - 第 5.5 阶段已于 2026-07-28 开始；Batch 1 首轮人工验收发现的页面复制关键帧问题已修复，用户复测确认全部通过；Batch 1 已通过提交 `23e4901 refactor: extract low risk editor boundaries` 完成 commit / push。
-- Batch 2 前置只读架构审计已完成；Batch 2A 已按审计边界完成实现、用户人工验证和 Git 闭环；Batch 2B 已按规划完成 Project Document / History 生命周期边界抽离及 final no-op 最小修复，并通过全部人工 QA，作为后续工作的稳定架构基线。Batch 3A 已通过人工 QA，并通过 `d68ce74 refactor: extract animation sequence commands` 完成 Git 闭环；Batch 3B-1 已完成人工 QA 并通过 `refactor: extract basic element commands` 完成独立 Git 闭环；Batch 3B-2A 已完成人工 QA，Batch 3B-2B 尚未开始。
+- Batch 2 前置只读架构审计已完成；Batch 2A 已按审计边界完成实现、用户人工验证和 Git 闭环；Batch 2B 已按规划完成 Project Document / History 生命周期边界抽离及 final no-op 最小修复，并通过全部人工 QA，作为后续工作的稳定架构基线。Batch 3A 已通过人工 QA，并通过 `d68ce74 refactor: extract animation sequence commands` 完成 Git 闭环；Batch 3B-1、Batch 3B-2A 与 Batch 3B-2B 也已完成实现和人工 QA。本轮完成 Batch 3B-2B Git 闭环后，Stage 5.5 仍因后续其他 Animation Command Domain、Batch 4 与 Batch 5 未开始而保持进行中。
 
 #### 2. 已确认架构事实与治理优先级
 
@@ -1336,7 +1339,7 @@ Batch 2 当前明确禁止移动：
 
 ##### Batch 3A：Sequence / Click Step Command Domain
 
-状态：**complete；manual QA passed；stable baseline；已通过 `d68ce74` commit / push；后续 Batch 3B-1 与 Batch 3B-2A 也已完成，Batch 3B-2B 尚未开始。**
+状态：**complete；manual QA passed；stable baseline；已通过 `d68ce74` commit / push；后续 Batch 3B-1、Batch 3B-2A 与 Batch 3B-2B 也已完成。**
 
 实现结果：
 
@@ -1357,11 +1360,11 @@ Batch 2 当前明确禁止移动：
 后续：
 
 - Batch 3A 独立 Git 闭环后已完成 Pending Media Interaction Bug 独立修复、自动检查和人工 QA。
-- Pending Media Interaction Fix 已完成独立 Git 闭环；其后 Batch 3B-1 与 Batch 3B-2A 也已完成。Batch 3B-2B 尚未开始，未经用户明确要求也不提前进入 Stage 6 / 7。
+- Pending Media Interaction Fix 已完成独立 Git 闭环；其后 Batch 3B-1、Batch 3B-2A 与 Batch 3B-2B 也已完成。未经用户明确要求不提前进入后续 Stage 5.5 Batch、Stage 6 或 Stage 7。
 
 ##### Batch 3B-1：Pure Element Command Facade — Basic Mutations
 
-状态：**complete；manual QA passed；stable basic element command baseline；已纳入 `refactor: extract basic element commands` Git 闭环；后续 Batch 3B-2A 已完成，Batch 3B-2B 尚未开始。**
+状态：**complete；manual QA passed；stable basic element command baseline；已纳入 `refactor: extract basic element commands` Git 闭环；后续 Batch 3B-2A 与 Batch 3B-2B 已完成。**
 
 实现结果：
 
@@ -1372,7 +1375,7 @@ Batch 2 当前明确禁止移动：
 - 元素删除完整复用 `deleteSlideElementsWithAnimations`，继续保持 Clip target、`Sequence.clipIds`、空 Sequence、`sequenceOrder`、trigger target 与 Scene revision 的完整清理语义；共享 Asset metadata 和 Blob 生命周期不属于该命令。
 - 图层继续只由 `slide.elements` 数组顺序表达；没有新增 `zIndex`，多选内部顺序和未选元素相对顺序保持不变。
 - App 继续拥有 `commitProjectChange`、History options / Group、Selection、Pointer / Keyboard orchestration、Clipboard、Context Menu、单 Clip preview 清理、Asset / Blob / Object URL / IndexedDB 生命周期和 UI 瞬态状态；Facade 不访问 React state、DOM、Presentation 或 Timeline，也不调用任何隐式时间源。
-- Copy / Paste / Duplicate、clipboard snapshot、element / legacy ID 创建、App 路由统一和 Asset 导入流程没有进入本 Batch；其中纯动画克隆已由 Batch 3B-2A 完成，其余 Facade 与路由职责继续归属 Batch 3B-2B。
+- Copy / Paste / Duplicate、clipboard snapshot、element / legacy ID 创建、App 路由统一和 Asset 导入流程没有进入本 Batch；其中纯动画克隆后来由 Batch 3B-2A 完成，纯 Element Clone Facade 与 App 路由后来由 Batch 3B-2B 完成，Asset 导入仍不属于这两个 Batch。
 - 本轮没有修改 Animation Schema、Sequence-local time、Presentation / Export Runtime、Hidden Media Playback Lifecycle、Timeline 架构、Stage 6 或 Stage 7。
 
 自动检查：
@@ -1390,11 +1393,11 @@ Batch 2 当前明确禁止移动：
 
 后续：
 
-- Batch 3B-2A 已完成纯动画元素克隆内核；Batch 3B-2B 尚未开始，其范围仍是 Element Clone Facade、Copy / Paste / Duplicate 路由统一、clipboard snapshot 与 App 编排，必须等待用户明确要求。
+- Batch 3B-2A 已完成纯动画元素克隆内核；Batch 3B-2B 也已完成 Element Clone Facade、Copy / Paste / Duplicate 路由统一、clipboard snapshot 与 App 编排。
 
 ##### Batch 3B-2A：Pure Animation Element Clone Kernel
 
-状态：**complete；manual QA passed；已验证完成；已通过 `refactor: extract animation element clone kernel` 完成 Git 闭环；Batch 3B-2B 尚未开始。**
+状态：**complete；manual QA passed；已验证完成；已通过 `refactor: extract animation element clone kernel` 完成 Git 闭环；后续 Batch 3B-2B 也已完成。**
 
 实现结果：
 
@@ -1410,7 +1413,7 @@ Batch 2 当前明确禁止移动：
 - `metadata.legacyAnimationId` 继续按 source / inserted elements 的 legacy animation 索引映射到副本；找不到有效映射时不保留源页面的无效 mirror ID，legacy / V2 Schema 未改变。
 - 无相关 Clip 时返回原 Slide 引用、不创建 Sequence、不增加 revision；至少克隆一个 Clip 时 Scene revision 只按 `max(1, previous + 1)` 增加一次。paths、markers、非相关 Clip / Sequence 和源 Scene 不变。
 - 历史异常数据中同一 Clip 被重复写入一个或多个 Sequence 时，只认首个有序归属并只克隆一次，用于维护“一 Clip 一 Sequence”不变量，不改变正常数据语义。
-- App 的 Copy / Paste / Duplicate 路由、`cloneSlideElementForInsert`、clipboard ref、History、Selection 和 element / legacy ID 创建均未迁移；这些职责继续留给 Batch 3B-2B。
+- 在 Batch 3B-2A 完成时，App 的 Copy / Paste / Duplicate 路由、`cloneSlideElementForInsert`、clipboard ref、History、Selection 和 element / legacy ID 创建尚未迁移；其中纯文档克隆与 App 路由现已由 Batch 3B-2B 完成，clipboard ref、History 和 Selection 仍保留在 App。
 
 自动检查：
 
@@ -1428,8 +1431,49 @@ Batch 2 当前明确禁止移动：
 
 后续：
 
-- Batch 3B-2B 尚未开始；Element Clone Facade、App Copy / Paste / Duplicate 路由统一、clipboard snapshot、History / Selection 编排仍待后续独立实现和验收。
+- Batch 3B-2B 已完成 Element Clone Facade、App Copy / Paste / Duplicate 路由统一与 clipboard snapshot，并通过独立人工验收；History / Selection 仍由 App 编排，没有迁入 Facade。
 - 未开始 Stage 6 或 Stage 7，也未处理 Duplicate Selection、连续 Paste、Canvas Paste 边界、Selected Element Adorner Layering、Timeline 或其他独立问题。
+
+##### Batch 3B-2B：Element Clone Facade + App Routing
+
+状态：**complete；manual QA passed；已验证完成；通过本次 `refactor: extract element clone facade` 完成 Git 闭环。**
+
+实现结果：
+
+- 新增纯 Project Document Facade `src/utils/elementCloneCommands.ts`，公开 `ElementCopySnapshot`、`ElementPastePlacement`、`createElementCopySnapshot`、`pasteElementSnapshotInProject`、`duplicateElementInProject` 及对应 Command / Result 类型。
+- Copy snapshot 按源页面 `slide.elements` 图层顺序保存选中元素，不生成 ID、不修改 Project；Element、style、media、legacy animations、AnimationScene、Clip、Track、Keyframe、value、easing 与 metadata 均完整深隔离。
+- snapshot 只保留元素既有 `assetId`，不复制 PresentationAsset metadata、Blob、Object URL、IndexedDB 或 Asset Store 数据。
+- 普通 Paste 固定按原 snapshot 偏移 `+32px / +32px` 并整组追加到目标页面末尾；连续 Paste 仍基于原 snapshot，不累积偏移。
+- Canvas Paste 接收 App 已换算的 slide-space 坐标，以复制组 `min(x) / min(y)` 为锚点保持相对位置，不计算旋转包围盒、不进行页面边界限制，并追加到目标页面末尾。
+- Duplicate 继续只复制一个元素，偏移 `+32px / +32px`，并插入源元素后一位。
+- Element 与 legacy animation ID 由显式 `operationId`、源 ID 和稳定索引确定性生成；目标 Project 已存在候选时使用稳定递增后缀，同一 operationId 重复执行仍不会冲突。Facade 不调用时间、随机数或 DOM API。
+- V2 动画复制只委托 Batch 3B-2A 的 `cloneElementAnimationsForInsertedElements`；没有建立第二套 Clip / Sequence / Track / Keyframe 克隆算法，Sequence-local `startMs`、同页 Sequence 复用、跨页 trigger 与 `slide-enter` 合并语义保持不变。
+- Keyboard Copy / Paste / Duplicate、元素右键 Copy / Paste / Duplicate、画布右键定位 Paste 均已统一接入 Facade。
+- App 内本地 `CopiedElementClipboard` 类型、`cloneSlideElementForInsert`、`cloneAnimationSceneSnapshot` 以及重复 element / legacy / Scene clone 与数组插入实现已删除。
+- App 继续拥有 `copiedElementsRef`、`hasCopiedElements`、History transaction、Selection、Property Panel 状态、Keyboard / Context Menu 路由、Canvas 坐标换算、operationId / updatedAt、Asset 删除后的 clipboard 失效、Asset / Blob 生命周期、单 Clip preview 清理、autosave gate 和 UI 副作用。
+- Duplicate 后 `selectedElementId` / `selectedElementIds` 可能不一致、Keyboard / Context Paste Property Panel 差异、连续 Paste 重叠、Canvas Paste 无边界限制和既有 Selection 行为均按本轮重构边界保留，未顺手修改。
+
+自动检查：
+
+- Element Clone / App routing / animation integration 不落盘直接断言 105 项通过。
+- Animation deletion / legacy-V2 回归不落盘直接断言 12 项通过；本轮实际执行合计 117 项。
+- 最终 Git 收尾前另以当前源码重新执行 94 项整合断言，覆盖 snapshot、Paste / Canvas Paste / Duplicate、动画内核、Element Commands 删除同步、Presentation interaction、Hidden Media Lifecycle 与 App routing contract，全部通过。
+- Element Commands、Presentation interaction 与 Hidden Media Lifecycle 相关回归包含在上述当前可执行集成断言中；未虚报未落盘的历史临时脚本。
+- TypeScript relative import graph 覆盖 38 个模块、94 条依赖，0 cycle。
+- `npm.cmd run lint`、`npm.cmd run build`、`git diff --check` 与 staged diff check 均通过；Build 只保留项目已有的 500 kB chunk warning。
+- 所有不落盘断言脚本和生成文件执行后均已删除，没有进入最终 diff。
+
+人工 QA（2026-08-05）：
+
+1. Keyboard 综合通过：多选 Copy / Paste、单元素 Duplicate、带动画元素及 Undo / Redo 正常。
+2. Context Menu 综合通过：元素右键 Copy / Paste / Duplicate、画布右键定位 Paste、不同 zoom 和带动画元素正常。
+3. 跨页综合通过：`slide-enter`、Click Step、Presentation、保存刷新恢复及 Undo / Redo 正常。
+
+阶段判断：
+
+- Batch 3B-2B 已完成，但 Stage 5.5 尚未整体完成。
+- 原路线仍明确保留 Batch 3 后续其他 Animation Command Domains、Batch 4 面板 UI 边界和 Batch 5 App 动画编辑协调，均尚未开始；不得跳过这些工作而直接把 Stage 5.5 标记 complete。
+- Stage 6 与 Stage 7 仍为计划开发、尚未开始。
 
 ##### Batch 3 后续：其他 Animation Command Domains
 
@@ -1501,7 +1545,7 @@ Batch 2 当前明确禁止移动：
 
 - 不与第 5 阶段 HTML Click Step 同步混合开发。
 - 不提前实现第 6 阶段 Click Step 编辑 UI 或第 7 阶段 Timeline V2-C。
-- Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1 与 Batch 3B-2A 已验证完成并完成 Git 闭环；Batch 2 前置只读架构审计已完成；Pending Media Interaction Fix 已通过自动检查和人工 QA，Batch 3B-2B、Stage 6 和 Stage 7 尚未开始。
+- Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A 与 Batch 3B-2B 已验证完成；Batch 2 前置只读架构审计已完成；Pending Media Interaction Fix 已通过自动检查和人工 QA。后续其他 Animation Command Domain、Batch 4 与 Batch 5 尚未开始，Stage 6 和 Stage 7 也未开始。
 
 ### 第 6 阶段：Click Step 编辑界面
 
@@ -2179,7 +2223,7 @@ Standalone HTML 重新验证结论：
   - 静态 `opacity: 0` 媒体不会形成隐形可交互控件。
   - 正 `startMs` 延迟期间媒体不参与输入，Wheel 仍只跨一个动画边界。
   - 编辑器与 standalone HTML 的全屏媒体输入保护、退出全屏后的 Presentation 输入恢复和播放进度保持均正常。
-- 当时 Batch 3B 尚未开始；其后的 Batch 3B-1 与 Batch 3B-2A 现已完成，Batch 3B-2B 仍未开始。
+- 当时 Batch 3B 尚未开始；其后的 Batch 3B-1、Batch 3B-2A 与 Batch 3B-2B 现均已完成。
 
 状态：**实现完成；自动检查通过；manual QA passed；已验证完成；纳入本次独立 Git 闭环**
 
@@ -2534,7 +2578,8 @@ GitHub 状态：已 push
 2026-08-03：Hidden Media Playback Lifecycle 完成稳定隐藏转换暂停、Editor / Export autoplay gate 与 fullscreen override；74 项专项断言、16 项交互回归断言及 Editor / standalone HTML Audio / Video 人工 QA 全部通过
 2026-08-04：Batch 3B-1 新增 Project 级 Pure Element Command Facade，迁移基础元素插入、更新、移动 patch、图层与删除纯变换；自动检查和用户人工 QA 全部通过
 2026-08-05：Batch 3B-2A 新增 Pure Animation Element Clone Kernel，完成确定性 ID、深复制、跨页 trigger / slide-enter 规则、123 项有效自动断言和必要人工 QA
-当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1 与 Batch 3B-2A 已验证完成并完成 Git 闭环；Video Bug Part A、Initial Selection、Pending Media Interaction Fix、Standalone Export Fullscreen Arrow-Key Seeking Fix、Presentation Element Click Blocking Fix、Presentation Transient Text Editing / Selection Fix 与 Hidden Media Playback Lifecycle 已解决并通过人工 QA；Selected Element Adorner Layering、Fullscreen Media Enter-Key Parity、独立文本 Selection UX、Audio keyboard parity 与 `file://` 警告待后续处理；Batch 3B-2B 尚未开始
+2026-08-05：Batch 3B-2B 新增 Pure Element Clone Facade，统一 Keyboard、元素右键和画布右键的 Copy / Paste / Duplicate 文档变换路由；117 项当前可执行断言和三个综合人工 QA 路径通过
+当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A 与 Batch 3B-2B 已验证完成；Video Bug Part A、Initial Selection、Pending Media Interaction Fix、Standalone Export Fullscreen Arrow-Key Seeking Fix、Presentation Element Click Blocking Fix、Presentation Transient Text Editing / Selection Fix 与 Hidden Media Playback Lifecycle 已解决并通过人工 QA；Selected Element Adorner Layering、Fullscreen Media Enter-Key Parity、独立文本 Selection UX、Audio keyboard parity 与 `file://` 警告待后续处理；Stage 5.5 因其他 Animation Command Domain、Batch 4 与 Batch 5 尚未开始而继续进行中
 ```
 
 ---
@@ -2557,7 +2602,7 @@ GitHub 状态：已 push
 - Batch 2A 开始基线是 `bbc7f5d2bbf5403dcc2b0ede64014446cd258a3e docs: sync stage 5.5 architecture status`；Batch 2A 已通过 `refactor: extract project persistence` 完成 Git 闭环。
 - 第 5.5 阶段 Batch 1 已完成人工验证、commit 和 push；不再存在“待验证”或“待 Git 闭环”状态。
 - Batch 2 前置只读架构审计已完成。Stage 5.5 Batch 2A“Project persistence adapter”已验证完成并 push；Video Bug Part A 已解决并完成人工 QA / Git 闭环。Export 现象当前无法复现，不启动 speculative repair；Batch 2B“Project document + history transaction”及 final no-op 修复已通过全部人工 QA 并成为稳定架构基线。Batch 3A 最小 Sequence Command Domain 已通过人工 QA，并通过 `d68ce74` 完成独立 Git 闭环；Batch 3B-1 Pure Element Command Facade 已完成自动检查、人工 QA 与独立 Git 闭环。
-- Pending Media Interaction Fix 已完成代码实现、自动检查和人工 QA，并纳入 `fix: sync pending media input ownership` 独立 Git 闭环；Batch 3B-2A 已验证完成，Batch 3B-2B 尚未开始。Stage 6 继续按当前 roadmap 等待。
+- Pending Media Interaction Fix 已完成代码实现、自动检查和人工 QA，并纳入 `fix: sync pending media input ownership` 独立 Git 闭环；Batch 3B-2A 与 Batch 3B-2B 已验证完成。Stage 5.5 其余明确批次仍待后续独立评估，Stage 6 继续按当前 roadmap 等待。
 - Standalone Export Fullscreen Arrow-Key Seeking Fix 已完成根因修复、自动检查和人工 QA；浏览器原生 Video controls 继续负责全屏方向键 seek，Presentation 不消费这些按键。
 - Presentation Element Click Blocking Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 的普通展示元素 click 现在冒泡到统一推进路由，编辑模式选择与媒体控件输入保持不变。
 - Presentation Transient Text Editing / Selection Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 不再拥有双击 / textarea 编辑入口，Text / Shape / SVG 展示文字不再产生原生 Selection，编辑模式 textarea 语义保持不变。
@@ -2603,7 +2648,8 @@ git diff --cached
 21. Presentation Transient Text Editing / Selection Fix 已从 `isEditing`、`onStartEditing`、`onDoubleClick` 和 bare 展示样式四个边界关闭 Presentation 的 textarea / 原生 Selection 路径，并通过自动检查和人工 QA；standalone export 文字选择、编辑模式 Shift 多选高亮和 Presentation 入口主动 blur / Selection 清理仍是独立待处理项。
 22. Hidden Media Playback Lifecycle 使用共享稳定隐藏 reason、Editor ref 与 Export WeakMap 实现 transition-only pause，并通过 Editor / standalone HTML Audio / Video 人工 QA；同页隐藏 / 显示保留 `currentTime` 且不自动恢复播放，跨页不承诺保留媒体进度。
 23. Batch 3B-1 已新增 Project 级 Pure Element Command Facade 并迁移基础插入、更新、精确 style patch、图层和删除变换；App 继续拥有 History、Selection、交互与 Asset 生命周期。
-24. Batch 3B-2A 已新增 Pure Animation Element Clone Kernel；旧元素动画复制 API 已委托该内核，确定性 ID、深复制、跨页 trigger 与 `slide-enter` 合并语义已经用户 QA 和自动断言确认。Batch 3B-2B 的 Element Clone Facade、App 路由统一、clipboard / History / Selection 编排尚未开始。
+24. Batch 3B-2A 已新增 Pure Animation Element Clone Kernel；旧元素动画复制 API 已委托该内核，确定性 ID、深复制、跨页 trigger 与 `slide-enter` 合并语义已经用户 QA 和自动断言确认。
+25. Batch 3B-2B 已新增 Pure Element Clone Facade，并统一 Keyboard、元素右键和画布右键的 Copy / Paste / Duplicate 文档变换路由；clipboard ref、History、Selection、坐标换算、Asset 生命周期和 UI orchestration 继续由 App 拥有。
 
 ### Git 状态说明
 
@@ -2627,5 +2673,6 @@ git diff --cached
 - Hidden Media Playback Lifecycle 开始基线：`main`、本地 `origin/main` 均为 `11d1372160f4104642642f69173f4a4b05ee63e4`，ahead 0、behind 0；最终提交范围固定为 `PROJECT_STATUS.md`、`src/components/editor/SlideCanvas.tsx`、`src/utils/exportHtml.ts`、`src/utils/exportPlayerRuntime.ts`、`src/utils/presentationInteraction.ts`，提交信息为 `fix: pause hidden presentation media`。
 - Batch 3B-1 开始基线：`main`、本地 `origin/main` 均为 `5b1197cb71763ed28f788a7253bcb4e7885730b5`，ahead 0、behind 0，开始前工作区与暂存区干净；最终提交范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/utils/elementCommands.ts`，提交信息为 `refactor: extract basic element commands`。
 - Batch 3B-2A 开始基线：`main`、本地 `origin/main` 均为 `3aab46ef212b2b59210f146d30d2a11e47db8770`，ahead 0、behind 0，开始前工作区与暂存区干净；最终提交范围固定为 `PROJECT_STATUS.md`、`src/utils/animationCommands.ts`、`src/utils/animationElementClone.ts`，提交信息为 `refactor: extract animation element clone kernel`。
+- Batch 3B-2B 开始基线：`main`、本地 `origin/main` 均为 `ace9b08ec7507706c36728433553399bb75454f1`，ahead 0、behind 0，开始前工作区与暂存区干净；最终提交范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/utils/elementCloneCommands.ts`，提交信息为 `refactor: extract element clone facade`。
 
 未经用户允许，不得 commit 或 push。

@@ -11,7 +11,7 @@ import type {
 import type { AnimationScene, SlideElement } from "../../types/presentation";
 import type {
   AddAnimationClipCommand,
-  AddAnimationKeyframeCommand,
+  AddAnimationKeyframeRequest,
   DeleteAnimationClipCommand,
   DeleteAnimationKeyframeCommand,
   DuplicateAnimationClipCommand,
@@ -76,7 +76,7 @@ type AnimationFloatingPanelProps = {
     command: UpdateAnimationKeyframeOffsetCommand,
     options?: AnimationEditOptions,
   ) => void;
-  onAddKeyframe?: (command: AddAnimationKeyframeCommand) => void;
+  onAddKeyframe?: (command: AddAnimationKeyframeRequest) => void;
   onDeleteKeyframe?: (command: DeleteAnimationKeyframeCommand) => void;
   onBeginChange?: () => void;
   onFinishChange?: () => void;

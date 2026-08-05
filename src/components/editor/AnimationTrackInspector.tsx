@@ -9,7 +9,7 @@ import type {
 } from "../../types/presentation";
 import type {
   AddAnimationClipCommand,
-  AddAnimationKeyframeCommand,
+  AddAnimationKeyframeRequest,
   DeleteAnimationClipCommand,
   DeleteAnimationKeyframeCommand,
   DuplicateAnimationClipCommand,
@@ -19,11 +19,13 @@ import type {
   UpdateAnimationKeyframeValueCommand,
 } from "../../utils/animationCommands";
 import { animationPresets } from "../../utils/animationPresets";
-
-/**
- * Keep the inspector's input limits consistent with the V2 command layer.
- */
-const MINIMUM_KEYFRAME_OFFSET_GAP = 0.001;
+import {
+  canAddAnimationKeyframe,
+  canDeleteAnimationKeyframe,
+  canEditAnimationKeyframeEasing,
+  getAnimationKeyframeOffsetBounds,
+  sortAnimationKeyframes,
+} from "../../utils/animationKeyframeRules";
 
 const CSS_EASING_OPTIONS = [
   {
@@ -85,7 +87,7 @@ type AnimationTrackInspectorProps = {
     command: UpdateAnimationKeyframeOffsetCommand,
     options?: InspectorUpdateOptions,
   ) => void;
-  onAddKeyframe?: (command: AddAnimationKeyframeCommand) => void;
+  onAddKeyframe?: (command: AddAnimationKeyframeRequest) => void;
   onDeleteKeyframe?: (command: DeleteAnimationKeyframeCommand) => void;
   onBeginChange?: () => void;
   onFinishChange?: () => void;
@@ -353,7 +355,7 @@ function AnimationClipCard({
     command: UpdateAnimationKeyframeOffsetCommand,
     options?: InspectorUpdateOptions,
   ) => void;
-  onAddKeyframe?: (command: AddAnimationKeyframeCommand) => void;
+  onAddKeyframe?: (command: AddAnimationKeyframeRequest) => void;
   onDeleteKeyframe?: (command: DeleteAnimationKeyframeCommand) => void;
   onBeginChange?: () => void;
   onFinishChange?: () => void;
@@ -766,26 +768,23 @@ function AnimationTrackCard({
     command: UpdateAnimationKeyframeOffsetCommand,
     options?: InspectorUpdateOptions,
   ) => void;
-  onAddKeyframe?: (command: AddAnimationKeyframeCommand) => void;
+  onAddKeyframe?: (command: AddAnimationKeyframeRequest) => void;
   onDeleteKeyframe?: (command: DeleteAnimationKeyframeCommand) => void;
   onBeginChange?: () => void;
   onFinishChange?: () => void;
 }) {
-  const sortedKeyframes = [...track.keyframes].sort(
-    (left, right) =>
-      left.offset - right.offset || left.id.localeCompare(right.id),
-  );
+  const sortedKeyframes = sortAnimationKeyframes(track.keyframes);
 
   /**
    * A keyframe can be inserted only when at least one adjacent gap has enough
    * room to preserve the minimum separation on both sides.
    */
-  const canAddKeyframe = hasAvailableKeyframeGap(sortedKeyframes);
+  const canAddKeyframe = canAddAnimationKeyframe(sortedKeyframes);
 
   /**
    * Basic mode always keeps at least two keyframes on every animation track.
    */
-  const canDeleteKeyframe = sortedKeyframes.length > 2;
+  const canDeleteKeyframe = canDeleteAnimationKeyframe(sortedKeyframes);
 
   return (
     <section
@@ -836,6 +835,10 @@ function AnimationTrackCard({
       <div className="mt-3 space-y-2">
         {sortedKeyframes.map((keyframe, keyframeIndex) => {
           const followingKeyframe = sortedKeyframes[keyframeIndex + 1];
+          const canEditEasing = canEditAnimationKeyframeEasing(
+            sortedKeyframes,
+            keyframe.id,
+          );
 
           return (
             <div
@@ -844,7 +847,7 @@ function AnimationTrackCard({
             >
               <KeyframeOffsetInput
                 value={keyframe.offset}
-                offsetBounds={getKeyframeOffsetBounds(
+                offsetBounds={getAnimationKeyframeOffsetBounds(
                   sortedKeyframes,
                   keyframe.id,
                 )}
@@ -899,7 +902,7 @@ function AnimationTrackCard({
                   </button>
                 </div>
 
-                {followingKeyframe ? (
+                {canEditEasing && followingKeyframe ? (
                   <KeyframeEasingEditor
                     easing={keyframe.easing}
                     nextOffset={followingKeyframe.offset}
@@ -1523,76 +1526,6 @@ function NumericKeyframeInput({
       </span>
     </div>
   );
-}
-
-/**
- * Check whether at least one adjacent-keyframe gap can contain another frame
- * while preserving the minimum basic-mode separation on both sides.
- */
-function hasAvailableKeyframeGap(keyframes: AnimationTrack["keyframes"]) {
-  if (keyframes.length < 2) {
-    return false;
-  }
-
-  for (let index = 0; index < keyframes.length - 1; index += 1) {
-    const gap = keyframes[index + 1].offset - keyframes[index].offset;
-
-    if (gap > MINIMUM_KEYFRAME_OFFSET_GAP * 2) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-/**
- * Calculate the editable range for one keyframe in basic timeline mode.
- *
- * Neighboring keyframes cannot be crossed and retain a 0.1% separation.
- */
-function getKeyframeOffsetBounds(
-  keyframes: AnimationTrack["keyframes"],
-  keyframeId: string,
-) {
-  const sortedKeyframes = [...keyframes].sort(
-    (left, right) =>
-      left.offset - right.offset || left.id.localeCompare(right.id),
-  );
-
-  const keyframeIndex = sortedKeyframes.findIndex(
-    (keyframe) => keyframe.id === keyframeId,
-  );
-
-  if (keyframeIndex < 0) {
-    return {
-      minimumOffset: 0,
-      maximumOffset: 1,
-    };
-  }
-
-  const currentKeyframe = sortedKeyframes[keyframeIndex];
-  const previousKeyframe = sortedKeyframes[keyframeIndex - 1];
-  const followingKeyframe = sortedKeyframes[keyframeIndex + 1];
-
-  const minimumOffset = previousKeyframe
-    ? Math.min(1, previousKeyframe.offset + MINIMUM_KEYFRAME_OFFSET_GAP)
-    : 0;
-
-  const maximumOffset = followingKeyframe
-    ? Math.max(0, followingKeyframe.offset - MINIMUM_KEYFRAME_OFFSET_GAP)
-    : 1;
-
-  if (minimumOffset > maximumOffset) {
-    return {
-      minimumOffset: currentKeyframe.offset,
-      maximumOffset: currentKeyframe.offset,
-    };
-  }
-
-  return {
-    minimumOffset,
-    maximumOffset,
-  };
 }
 
 function KeyframePositionBar({

@@ -50,7 +50,7 @@ import {
   updateAnimationKeyframeOffsetInSlide,
   updateAnimationKeyframeValueInSlide,
   type AddAnimationClipCommand,
-  type AddAnimationKeyframeCommand,
+  type AddAnimationKeyframeRequest,
   type DeleteAnimationClipCommand,
   type DeleteAnimationKeyframeCommand,
   type DuplicateAnimationClipCommand,
@@ -3505,7 +3505,10 @@ function App() {
    * Button actions are discrete changes, so every click creates exactly one undo
    * snapshot without opening a continuous property-editing history group.
    */
-  function handleAddAnimationKeyframe(command: AddAnimationKeyframeCommand) {
+  function handleAddAnimationKeyframe(command: AddAnimationKeyframeRequest) {
+    // Generate once outside the updater so React retries receive the same ID input.
+    const operationId = `keyframe-add-${Date.now()}`;
+
     commitProjectChange((currentProject) => {
       let changed = false;
 
@@ -3514,7 +3517,10 @@ function App() {
           return slide;
         }
 
-        const nextSlide = addAnimationKeyframeToSlide(slide, command);
+        const nextSlide = addAnimationKeyframeToSlide(slide, {
+          ...command,
+          operationId,
+        }).slide;
 
         if (nextSlide === slide) {
           return slide;

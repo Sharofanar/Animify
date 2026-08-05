@@ -1,9 +1,9 @@
 # Animify 项目状态
 
-> 最后更新：2026-08-05
+> 最后更新：2026-08-06
 > 仓库：`https://github.com/Sharofanar/Animify`  
 > 主分支：`main`  
-> 本轮 Batch 3B-2B 开始基线：`ace9b08ec7507706c36728433553399bb75454f1 refactor: extract animation element clone kernel`
+> 本轮 Batch 3C-1 开始基线：`cc015fc22fc4aff5bf228c40b2b2742f1b78db48 refactor: extract element clone facade`
 
 本文档是 Animify 当前开发状态的长期事实来源。
 
@@ -31,9 +31,10 @@
 
 ### 1. 权威远端基线
 
-本轮 Batch 3B-2B 开始时 GitHub `origin/main` 最新提交：
+本轮 Batch 3C-1 开始时 GitHub `origin/main` 最新提交：
 
 ```text
+cc015fc refactor: extract element clone facade
 ace9b08 refactor: extract animation element clone kernel
 3aab46e refactor: extract basic element commands
 5b1197c fix: pause hidden presentation media
@@ -566,7 +567,7 @@ PROJECT_STATUS.md
 
 - 第 4 阶段已经完成用户人工验收，并通过提交 `5391f11` commit / push。
 - 第 5 阶段“HTML 导出 Click Step 同步”已通过用户人工验收。
-- 第 5.5 阶段“渐进式架构拆分维护”正在进行；Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A 与 Batch 3B-2B 已验证完成；Pending Media Interaction Fix 与 Hidden Media Playback Lifecycle 也已完成独立 Git 闭环；后续其他 Animation Command Domain、Batch 4 与 Batch 5 仍未开始。
+- 第 5.5 阶段“渐进式架构拆分维护”正在进行；Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B 与 Batch 3C-1 已验证完成；Pending Media Interaction Fix 与 Hidden Media Playback Lifecycle 也已完成独立 Git 闭环；Batch 3C-2、Batch 3C-3、Batch 4 与 Batch 5 仍未开始。
 
 # 已完成前置：第 3 阶段 Click Step 数据与命令层
 
@@ -1024,7 +1025,7 @@ src/utils/exportPlayerRuntime.ts
 
 ### 第 5.5 阶段：渐进式架构拆分维护
 
-状态：**正在进行（Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A 与 Batch 3B-2B 已验证完成；后续其他 Animation Command Domain、Batch 4 与 Batch 5 尚未开始）**
+状态：**正在进行（Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B 与 Batch 3C-1 已验证完成；Batch 3C-2、Batch 3C-3、Batch 4 与 Batch 5 尚未开始）**
 
 #### 1. 阶段位置与总体原则
 
@@ -1036,7 +1037,7 @@ src/utils/exportPlayerRuntime.ts
 - 每个 Batch 必须独立完成：开发 → lint → build → `git diff --check` → 对应人工回归 → 独立 commit → 独立 push。
 - 禁止一次完成全部第 5.5 阶段重构；每个 Batch 验收并完成 Git 闭环后，才能进入下一 Batch。
 - 第 5.5 阶段已于 2026-07-28 开始；Batch 1 首轮人工验收发现的页面复制关键帧问题已修复，用户复测确认全部通过；Batch 1 已通过提交 `23e4901 refactor: extract low risk editor boundaries` 完成 commit / push。
-- Batch 2 前置只读架构审计已完成；Batch 2A 已按审计边界完成实现、用户人工验证和 Git 闭环；Batch 2B 已按规划完成 Project Document / History 生命周期边界抽离及 final no-op 最小修复，并通过全部人工 QA，作为后续工作的稳定架构基线。Batch 3A 已通过人工 QA，并通过 `d68ce74 refactor: extract animation sequence commands` 完成 Git 闭环；Batch 3B-1、Batch 3B-2A 与 Batch 3B-2B 也已完成实现和人工 QA。本轮完成 Batch 3B-2B Git 闭环后，Stage 5.5 仍因后续其他 Animation Command Domain、Batch 4 与 Batch 5 未开始而保持进行中。
+- Batch 2 前置只读架构审计已完成；Batch 2A 已按审计边界完成实现、用户人工验证和 Git 闭环；Batch 2B 已按规划完成 Project Document / History 生命周期边界抽离及 final no-op 最小修复，并通过全部人工 QA，作为后续工作的稳定架构基线。Batch 3A 已通过人工 QA，并通过 `d68ce74 refactor: extract animation sequence commands` 完成 Git 闭环；Batch 3B-1、Batch 3B-2A、Batch 3B-2B 与 Batch 3C-1 也已完成实现和人工 QA。Stage 5.5 仍因 Batch 3C-2、Batch 3C-3、Batch 4 与 Batch 5 未开始而保持进行中。
 
 #### 2. 已确认架构事实与治理优先级
 
@@ -1472,26 +1473,60 @@ Batch 2 当前明确禁止移动：
 阶段判断：
 
 - Batch 3B-2B 已完成，但 Stage 5.5 尚未整体完成。
-- 原路线仍明确保留 Batch 3 后续其他 Animation Command Domains、Batch 4 面板 UI 边界和 Batch 5 App 动画编辑协调，均尚未开始；不得跳过这些工作而直接把 Stage 5.5 标记 complete。
+- 原路线中的 Keyframe Command Domain 已由 Batch 3C-1 完成；Batch 3C-2、Batch 3C-3、Batch 4 面板 UI 边界和 Batch 5 App 动画编辑协调仍尚未开始，不得跳过这些工作而直接把 Stage 5.5 标记 complete。
 - Stage 6 与 Stage 7 仍为计划开发、尚未开始。
 
-##### Batch 3 后续：其他 Animation Command Domains
+##### Batch 3C-1：Keyframe Commands + Shared Rules
+
+状态：**complete；manual QA passed；已验证完成；作为后续 Animation Command Domain 的稳定基线。**
+
+实现结果：
+
+- 新增 `src/utils/animationKeyframeRules.ts`，集中管理 Keyframe 排序、相邻间隔、可编辑 offset 边界、最大空隙插入、可新增 / 可删除 / 可编辑 easing 判定、easing normalization / equality、AnimationValue 插值，以及 value / easing 深复制规则。
+- 新增纯 V2 文档命令模块 `src/utils/animationKeyframeCommands.ts`，公开 `updateAnimationKeyframeValueInSlide`、`updateAnimationKeyframeOffsetInSlide`、`updateAnimationKeyframeEasingInSlide`、`addAnimationKeyframeToSlide`、`deleteAnimationKeyframeFromSlide`。
+- `animationCommands.ts` 继续作为 compatibility barrel，re-export 上述五个命令和公开类型；既有 import path 保持兼容，新命令模块不反向依赖 compatibility barrel。
+- `AnimationTrackInspector.tsx` 已复用共享排序、边界、插入可用性、删除可用性和 easing 可编辑性规则，不再维护第二套重复 Keyframe 边界逻辑。
+- 新增 Keyframe 命令已移除内部 `Date.now()`；App 在 React updater 外显式创建一次 `operationId`，命令依据 track ID、operation ID、稳定 insertion index 和冲突后缀生成确定性 Keyframe ID。
+- 命令写入的 AnimationValue、AnimationEasing 与 custom curve 数据均进行深复制；跨属性 Track 的同步 easing 也各自拥有隔离对象。
+- 命令仅处理 Animation Schema V2；没有修改 legacy animation mirror、Sequence、`sequenceOrder`、Clip ownership、Sequence-local `startMs`、Timeline、Marker、Presentation 或 HTML Export 时间语义。
+- 只有实际内容变化才递增 `AnimationScene.revision` 并标记 `metadata.customized = true`；无效目标、无效数值、相同值、不可编辑末帧、无可用插入空隙和删除后不足两帧均返回原 Slide 引用。
+- App 继续拥有 History transaction、Project `updatedAt`、Selection、Preview cleanup、operation ID 和 UI orchestration；Keyframe command / rules 不拥有 React state、History、DOM 或副作用。
+
+自动检查：
+
+- 当前可执行 Keyframe / shared rules / compatibility / regression 直接断言共 97 项通过。
+- `npm.cmd run lint`、`npm.cmd run build`、`git diff --check` 与 staged diff check 通过；Build 只保留项目已有的 500 kB chunk warning。
+- TypeScript relative import graph 覆盖 40 个模块、100 条依赖，0 cycle。
+- 临时断言脚本和输出在检查后删除，没有进入最终 diff。
+
+人工 QA（2026-08-06）：
+
+1. Keyframe value、offset、easing 编辑正常；Undo / Redo、排序、最小间隔、动画结果均正常。
+2. Keyframe 新增 / 删除正常；Undo / Redo、保存刷新恢复和正式 Presentation 均正常。
+
+阶段判断：
+
+- Batch 3C-1 已完成，但 Stage 5.5 尚未整体完成。
+- Batch 3C-2“Legacy / V2 Compatibility + Scene Cleanup”、Batch 3C-3“Clip / Preset / Timing”、Batch 4“面板 UI 边界”和 Batch 5“App 动画编辑协调”仍未开始。
+- Stage 6 与 Stage 7 仍为计划开发、尚未开始。
+
+##### Batch 3C-2：Legacy / V2 Compatibility + Scene Cleanup
+
+状态：**计划开发，尚未开始。**
 
 目标：
 
-- 在 Batch 3A 完成后，再评估是否按 Clip → Keyframe → Scene cleanup → Legacy sync 的顺序继续渐进拆分 `animationCommands.ts`。
-- 保留 `animationCommands.ts` 作为兼容 barrel / re-export，避免消费者一次全部迁移。
-- 同时评估提取 `animationKeyframeRules.ts`，统一命令层和 Inspector 当前重复的 Keyframe 边界规则。
+- 在不改变既有 Animation Schema、Sequence-local time 或兼容行为的前提下，再独立审计和提取 legacy / V2 compatibility 与 Scene cleanup 边界。
+- 继续保留 `animationCommands.ts` compatibility barrel，避免消费者一次性迁移。
 
-回归重点：
+##### Batch 3C-3：Clip / Preset / Timing
 
-- Click Step 创建、修改和排序。
-- Clip 唯一 Sequence 归属，以及 Clip 新增、复制和删除。
-- Keyframe 编辑。
-- 元素删除后的引用清理。
-- Legacy 项目兼容。
-- Sequence-local time。
-- Undo / Redo 和保存恢复。
+状态：**计划开发，尚未开始。**
+
+目标：
+
+- 在 Batch 3C-2 完成并独立回归后，再处理 Clip、Preset 与 Timing 命令职责。
+- 必须继续复用现有 Sequence-local `startMs`、Clip 唯一 Sequence 归属和公共 Sequence 时长规则。
 
 ##### Batch 4：面板 UI 边界
 
@@ -1545,7 +1580,7 @@ Batch 2 当前明确禁止移动：
 
 - 不与第 5 阶段 HTML Click Step 同步混合开发。
 - 不提前实现第 6 阶段 Click Step 编辑 UI 或第 7 阶段 Timeline V2-C。
-- Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A 与 Batch 3B-2B 已验证完成；Batch 2 前置只读架构审计已完成；Pending Media Interaction Fix 已通过自动检查和人工 QA。后续其他 Animation Command Domain、Batch 4 与 Batch 5 尚未开始，Stage 6 和 Stage 7 也未开始。
+- Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B 与 Batch 3C-1 已验证完成；Batch 2 前置只读架构审计已完成；Pending Media Interaction Fix 已通过自动检查和人工 QA。Batch 3C-2、Batch 3C-3、Batch 4 与 Batch 5 尚未开始，Stage 6 和 Stage 7 也未开始。
 
 ### 第 6 阶段：Click Step 编辑界面
 
@@ -1806,15 +1841,16 @@ Step 3 及以后：保持未执行状态
 
 现状：
 
-- 关键帧排序、边界、插值和间隔规则可能分散在检查器、命令层和编译器中。
+- Batch 3C-1 已新增 `animationKeyframeRules.ts`，Keyframe 排序、相邻间隔、offset 边界、最大空隙插入、可新增 / 删除 / 编辑 easing 判定、easing normalization / equality、AnimationValue 插值和深复制规则已由 Inspector 与 Keyframe Command Domain 共同复用。
+- 编译器的播放采样职责保持不变；本轮没有借规则抽离修改 animation compiler、Presentation 或 Export Runtime。
 
-优化目标：
+后续原则：
 
-- 使用统一工具函数。
-- UI、命令层和编译器采用相同边界规则。
-- 防止出现 UI 允许但命令拒绝，或预览与导出结果不同。
+- 后续 Keyframe UI 和命令必须继续复用统一工具函数，不得重新建立平行边界规则。
+- Timeline V2-C 的关键帧拖动与高级编辑必须在该共享规则层上渐进扩展，并保持 Sequence-local time。
+- 防止出现 UI 允许但命令拒绝，或编辑、预览与导出语义不一致。
 
-适合插入阶段：
+后续扩展阶段：
 
 - Timeline V2-C
 - 关键帧拖动
@@ -2579,7 +2615,8 @@ GitHub 状态：已 push
 2026-08-04：Batch 3B-1 新增 Project 级 Pure Element Command Facade，迁移基础元素插入、更新、移动 patch、图层与删除纯变换；自动检查和用户人工 QA 全部通过
 2026-08-05：Batch 3B-2A 新增 Pure Animation Element Clone Kernel，完成确定性 ID、深复制、跨页 trigger / slide-enter 规则、123 项有效自动断言和必要人工 QA
 2026-08-05：Batch 3B-2B 新增 Pure Element Clone Facade，统一 Keyboard、元素右键和画布右键的 Copy / Paste / Duplicate 文档变换路由；117 项当前可执行断言和三个综合人工 QA 路径通过
-当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A 与 Batch 3B-2B 已验证完成；Video Bug Part A、Initial Selection、Pending Media Interaction Fix、Standalone Export Fullscreen Arrow-Key Seeking Fix、Presentation Element Click Blocking Fix、Presentation Transient Text Editing / Selection Fix 与 Hidden Media Playback Lifecycle 已解决并通过人工 QA；Selected Element Adorner Layering、Fullscreen Media Enter-Key Parity、独立文本 Selection UX、Audio keyboard parity 与 `file://` 警告待后续处理；Stage 5.5 因其他 Animation Command Domain、Batch 4 与 Batch 5 尚未开始而继续进行中
+2026-08-06：Batch 3C-1 新增 Keyframe Commands 与 Shared Rules，五个 V2 Keyframe 命令完成纯职责抽离，Inspector 统一复用排序 / 边界 / 插入 / easing 可用性规则；97 项当前可执行断言和 Keyframe 编辑、新增、删除、Undo / Redo、保存恢复、Presentation 人工 QA 通过
+当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B 与 Batch 3C-1 已验证完成；Video Bug Part A、Initial Selection、Pending Media Interaction Fix、Standalone Export Fullscreen Arrow-Key Seeking Fix、Presentation Element Click Blocking Fix、Presentation Transient Text Editing / Selection Fix 与 Hidden Media Playback Lifecycle 已解决并通过人工 QA；Selected Element Adorner Layering、Fullscreen Media Enter-Key Parity、独立文本 Selection UX、Audio keyboard parity 与 `file://` 警告待后续处理；Stage 5.5 因 Batch 3C-2、Batch 3C-3、Batch 4 与 Batch 5 尚未开始而继续进行中
 ```
 
 ---
@@ -2602,7 +2639,7 @@ GitHub 状态：已 push
 - Batch 2A 开始基线是 `bbc7f5d2bbf5403dcc2b0ede64014446cd258a3e docs: sync stage 5.5 architecture status`；Batch 2A 已通过 `refactor: extract project persistence` 完成 Git 闭环。
 - 第 5.5 阶段 Batch 1 已完成人工验证、commit 和 push；不再存在“待验证”或“待 Git 闭环”状态。
 - Batch 2 前置只读架构审计已完成。Stage 5.5 Batch 2A“Project persistence adapter”已验证完成并 push；Video Bug Part A 已解决并完成人工 QA / Git 闭环。Export 现象当前无法复现，不启动 speculative repair；Batch 2B“Project document + history transaction”及 final no-op 修复已通过全部人工 QA 并成为稳定架构基线。Batch 3A 最小 Sequence Command Domain 已通过人工 QA，并通过 `d68ce74` 完成独立 Git 闭环；Batch 3B-1 Pure Element Command Facade 已完成自动检查、人工 QA 与独立 Git 闭环。
-- Pending Media Interaction Fix 已完成代码实现、自动检查和人工 QA，并纳入 `fix: sync pending media input ownership` 独立 Git 闭环；Batch 3B-2A 与 Batch 3B-2B 已验证完成。Stage 5.5 其余明确批次仍待后续独立评估，Stage 6 继续按当前 roadmap 等待。
+- Pending Media Interaction Fix 已完成代码实现、自动检查和人工 QA，并纳入 `fix: sync pending media input ownership` 独立 Git 闭环；Batch 3B-2A、Batch 3B-2B 与 Batch 3C-1 已验证完成。下一项 Animation Command Domain 是 Batch 3C-2“Legacy / V2 Compatibility + Scene Cleanup”，尚未开始；Stage 6 继续按当前 roadmap 等待。
 - Standalone Export Fullscreen Arrow-Key Seeking Fix 已完成根因修复、自动检查和人工 QA；浏览器原生 Video controls 继续负责全屏方向键 seek，Presentation 不消费这些按键。
 - Presentation Element Click Blocking Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 的普通展示元素 click 现在冒泡到统一推进路由，编辑模式选择与媒体控件输入保持不变。
 - Presentation Transient Text Editing / Selection Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 不再拥有双击 / textarea 编辑入口，Text / Shape / SVG 展示文字不再产生原生 Selection，编辑模式 textarea 语义保持不变。
@@ -2650,6 +2687,7 @@ git diff --cached
 23. Batch 3B-1 已新增 Project 级 Pure Element Command Facade 并迁移基础插入、更新、精确 style patch、图层和删除变换；App 继续拥有 History、Selection、交互与 Asset 生命周期。
 24. Batch 3B-2A 已新增 Pure Animation Element Clone Kernel；旧元素动画复制 API 已委托该内核，确定性 ID、深复制、跨页 trigger 与 `slide-enter` 合并语义已经用户 QA 和自动断言确认。
 25. Batch 3B-2B 已新增 Pure Element Clone Facade，并统一 Keyboard、元素右键和画布右键的 Copy / Paste / Duplicate 文档变换路由；clipboard ref、History、Selection、坐标换算、Asset 生命周期和 UI orchestration 继续由 App 拥有。
+26. Batch 3C-1 已新增纯 Keyframe Command Domain 与 Shared Rules；五个 V2 Keyframe 命令、Inspector 边界规则、确定性 operation ID、深复制及 no-op / revision 语义已通过自动断言和人工 QA，legacy / V2 compatibility、Scene cleanup、Clip / Preset / Timing 仍留给后续独立 Batch。
 
 ### Git 状态说明
 
@@ -2674,5 +2712,6 @@ git diff --cached
 - Batch 3B-1 开始基线：`main`、本地 `origin/main` 均为 `5b1197cb71763ed28f788a7253bcb4e7885730b5`，ahead 0、behind 0，开始前工作区与暂存区干净；最终提交范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/utils/elementCommands.ts`，提交信息为 `refactor: extract basic element commands`。
 - Batch 3B-2A 开始基线：`main`、本地 `origin/main` 均为 `3aab46ef212b2b59210f146d30d2a11e47db8770`，ahead 0、behind 0，开始前工作区与暂存区干净；最终提交范围固定为 `PROJECT_STATUS.md`、`src/utils/animationCommands.ts`、`src/utils/animationElementClone.ts`，提交信息为 `refactor: extract animation element clone kernel`。
 - Batch 3B-2B 开始基线：`main`、本地 `origin/main` 均为 `ace9b08ec7507706c36728433553399bb75454f1`，ahead 0、behind 0，开始前工作区与暂存区干净；最终提交范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/utils/elementCloneCommands.ts`，提交信息为 `refactor: extract element clone facade`。
+- Batch 3C-1 开始基线：`main`、本地 `origin/main` 均为 `cc015fc22fc4aff5bf228c40b2b2742f1b78db48`，ahead 0、behind 0，开始前工作区与暂存区干净；最终提交范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/AnimationFloatingPanel.tsx`、`src/components/editor/AnimationTrackInspector.tsx`、`src/utils/animationCommands.ts`、`src/utils/animationKeyframeCommands.ts`、`src/utils/animationKeyframeRules.ts`，提交信息为 `refactor: extract keyframe commands`。
 
 未经用户允许，不得 commit 或 push。

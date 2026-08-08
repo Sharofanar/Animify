@@ -1,6 +1,6 @@
 # Animify 长期开发规则
 
-> 最后更新：2026-07-24  
+> 最后更新：2026-08-09
 > 适用范围：Animify 的 Work 规划、Codex 本地开发、用户测试与 GitHub 维护
 
 本文档是 Animify 长期开发规则。
@@ -1007,3 +1007,150 @@ Build 和 Lint 已通过
 23. 每次开始必须读取项目状态。
 24. 编辑器、放映和 HTML 导出必须尽量共用同一规则。
 25. 任何重要架构决定必须进入长期维护文件。
+
+---
+
+## 十五、重大实现前的 Ownership 检查
+
+开始 substantial implementation 前，Codex 必须：
+
+1. 完整读取 `PROJECT_STATUS.md` 和 `DEVELOPMENT_RULES.md`。
+2. 先读取相关真实代码，确认真正拥有该行为的数据或 domain。
+3. 判断当前工作属于纯 Document mutation、React UI state，还是 App / runtime orchestration。
+4. 检查是否已经存在对应 command、rules、facade、controller 或 service 边界，并优先复用。
+5. 检查新依赖是否会造成 reverse dependency 或 import cycle。
+6. 确认任务是否碰到 `PROJECT_STATUS.md` 中明确 deferred 的架构债务；不得因为看见 deferred 项就自动开始重构。
+
+不得仅因为调用点离 `App.tsx`、`animationCommands.ts`、Timeline、Presentation runtime 或某个大型 Panel 最近，就把新的 substantial logic 堆入这些高层文件。已有 domain 边界必须使用；确需例外时，应在实现说明中记录原因和风险。
+
+---
+
+## 十六、模块边界与依赖方向
+
+### 1. 新代码进入最窄的真实职责模块
+
+- 纯 Project / Slide / AnimationScene 变换进入对应 command 或 domain module。
+- React UI 组件拥有 JSX、local UI state、draft、focus / blur、展开状态、menu 和 semantic callbacks。
+- App / orchestration 拥有 UI → command → Project 的路由，以及 History、Selection、Preview、active slide / Clip context、transaction、Project `updatedAt` 和 UI 副作用。
+- 纯 command 不得拥有 History、Selection、Preview、React state、DOM、Asset Blob / Object URL runtime 或 UI toast。
+- `App.tsx` 可以协调 UI、command、History、Selection、Preview 和 persistence，但不应新增大段 `slides.map` 数据变换、AnimationScene reconstruction、Clip / Track / Keyframe mutation、clone algorithm 或 Sequence ownership algorithm。
+- Panel / Inspector / Timeline 应发出 `add animation`、`update timing`、`delete clip`、`change keyframe`、`create click step` 等 semantic request；通常不得直接构造完整 Project、AnimationScene、Sequence、Clip、Track 或 Keyframe。必要例外必须是 deliberate 并说明原因。
+
+### 2. Shared Rule 必须保持单一来源
+
+UI 和 command 同时依赖的 bounds、limits、sorting、validation、normalization、equality、insertion 或 timing 规则，必须优先集中到纯 shared rules/helper，禁止长期维护两套。`animationKeyframeRules.ts` 是当前范例。
+
+不得把互不相关逻辑继续堆入宽泛的 `utils.ts`、`helpers.ts`、`animationUtils.ts` 或 `editorUtils.ts`。Helper 必须有明确 domain；只有真正被多个同层或高层模块共享、并代表低层 invariant 时才提取。
+
+### 3. 依赖必须保持单向
+
+- 低层 domain 不得反向依赖高层 compatibility barrel。
+- Compatibility barrel 是稳定 import surface，不是内部依赖中心。
+- Domain implementation 迁出后，barrel 可以 re-export，但旧 implementation 必须删除；禁止同功能双实现并存。
+- TypeScript relative import graph 必须保持 0 cycle。
+
+推荐方向：
+
+```text
+App / UI
+  ↓
+public domain API / compatibility barrel
+  ↓
+domain command
+  ↓
+lower-level rules / helper
+```
+
+### 4. Pure Document Command 必须确定且不可变
+
+Pure document command 原则上不得直接读取：
+
+```text
+Date.now()
+new Date()
+Math.random()
+crypto.randomUUID()
+React state
+DOM state
+```
+
+需要 operation identity 时，由 orchestration 显式传入 `operationId`；Project `updatedAt` 也由 App / orchestration 管理。固定输入在合理范围内应得到固定 document output。
+
+Command 不得 mutate input。Object-valued Keyframe value、easing、custom curve points、metadata、Track / Clip snapshot 和其他 mutable nested data 必须按 ownership 深隔离。无实际内容变化的 command 应尽量返回原 reference。
+
+### 5. 禁止机械拆文件
+
+不得采用“一函数一文件”“一概念一文件”或“超过某行数就必须拆”的机械规则。File size 是信号，不是唯一判断标准。
+
+只有在以下情况才优先拆分：
+
+- 一个文件拥有多个独立 domain；
+- 依赖方向明显不同；
+- UI 与 document mutation 混合；
+- 同一规则已经重复；
+- 子系统可以独立测试；
+- 生命周期或 ownership 明确不同；
+- 新功能会显著扩大不相关职责。
+
+当现有边界已经可维护、可测试、不阻塞功能且依赖方向合理时，应停止重构并继续产品开发。Deferred refactor 只在阻塞新功能、导致重复 Bug、明显降低开发速度、职责再次失控或时间允许时恢复。
+
+**Architecture supports product development; it does not replace product development.**
+
+---
+
+## 十七、当前已建立的 Architecture Boundaries
+
+后续代码应优先复用以下已建立边界：
+
+| 职责 | 权威模块 |
+| --- | --- |
+| Element document mutations | `src/utils/elementCommands.ts` |
+| Element copy / paste / duplicate facade | `src/utils/elementCloneCommands.ts` |
+| Animation element clone kernel | `src/utils/animationElementClone.ts` |
+| Sequence / Click Step document commands | `src/utils/animationSequenceCommands.ts` |
+| Keyframe document commands | `src/utils/animationKeyframeCommands.ts` |
+| Keyframe shared invariants | `src/utils/animationKeyframeRules.ts` |
+| Legacy / V2 compatibility 与 element animation cleanup | `src/utils/animationLegacyCompatibility.ts` |
+| Low-level animation command shared helpers | `src/utils/animationCommandHelpers.ts` |
+| Animation command compatibility import surface | `src/utils/animationCommands.ts` |
+
+`animationCommands.ts` 当前仍暂时保留 Clip、Preset 与 Timing 相关实现。这是已知 deferred architecture debt，不是后续 Codex 见到后必须自动拆分的任务。只有新功能需要修改这些领域且提取能明显降低风险时，才评估是否恢复 Stage 5.5 Batch 3C-3。
+
+---
+
+## 十八、当前动画 Architecture Locks
+
+以下约束是当前已验证架构，不得因 editor refactor 或就近实现而改变：
+
+1. `AnimationScene` 结构保持 `{ sequenceOrder, sequences, clips }`。
+2. Clip ownership 只由 `AnimationSequence.clipIds` 表达，不新增 `Clip.sequenceId`。
+3. `AnimationClip.startMs` 始终是所属 Sequence-local 0ms 的偏移；trigger runtime state 不写入 `startMs`。
+4. `slide-enter` 与 Click Step 属于不同 Sequence；一个 click Sequence 等于一个 Click Step。
+5. Marker 当前保持 Scene-level；不得把 Stage 7 的最终 Marker / Timeline 方案写成已完成。
+6. Presentation 保持 completed / active / pending 语义；不得因 editor refactor 随意重写已验证的 Presentation state machine。
+7. Hidden Media Playback Lifecycle 与 Animation Element Clone Kernel 的已验证语义保持锁定。
+8. Keyframe Commands 只处理纯 V2 document mutation；History、Preview 和 UI state 由 orchestration 拥有。
+9. Legacy compatibility mirror 不能表达全部 V2 信息；无关 legacy 更新不得覆盖 advanced easing、customized Track、V2-only playback、Sequence ownership 或其他 V2-only data。
+
+---
+
+## 十九、精简 QA 与 Touched-scope 注释规则
+
+### 1. QA 分工
+
+- 底层 invariant 优先由 automatic assertions 覆盖，包括 deterministic IDs、deep clone、ownership、cleanup、fallback、no-op 和 purity。
+- UI 当前没有入口的底层 fixture 不强迫用户人工构造，也不得虚报 manual QA passed。
+- 每个小 Batch 通常只安排 2～4 条必要、可触达的 manual user path。
+- Presentation、Export、save-refresh 等 common smoke 应尽量合并；未修改的 runtime 不重复进行无边界的大量回归。
+- Manual QA 主要验证用户真实操作、History、persistence 和 Presentation / runtime integration。
+- 自动检查通过仍不等于用户验证通过；不得把本节理解为降低人工验收状态标准。
+
+### 2. 注释范围
+
+修改代码时：
+
+- 只修正 touched scope 内过时或误导的注释；
+- 对关键 invariant、ownership 或生命周期保留简短 WHY；
+- 删除只复述代码行为的 trivial comment；
+- 不做 repo-wide comment sweep；
+- 不制造无关 comment-only diff。

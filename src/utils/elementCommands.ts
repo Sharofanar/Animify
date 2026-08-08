@@ -9,7 +9,7 @@ import type {
 import {
   applyElementBatchUpdatesToSlide,
   deleteSlideElementsWithAnimations,
-} from "./animationCommands";
+} from "./animationLegacyCompatibility";
 
 export type ElementPatch = ElementUpdates;
 export type ElementBatchPatch = ElementBatchUpdate;
@@ -150,8 +150,8 @@ export function insertElementsInProject(
 }
 
 /**
- * Apply exact element patches while delegating legacy-animation synchronization
- * to the existing animation command domain.
+ * Apply exact element patches while delegating legacy/V2 synchronization to
+ * the lower-level compatibility domain. History and Selection remain here.
  */
 export function updateElementsInProject(
   project: PresentationProject,

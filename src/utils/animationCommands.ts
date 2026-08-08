@@ -8,12 +8,17 @@ import type {
 } from "../types/presentation";
 import {
   cloneAnimationScene,
+  ensureClipInLegacySequence,
+  getLegacyAnimationId,
   getLegacySequenceId,
-  removeEmptySequences,
+  removeAnimationClipsAndDirectEmptySequences,
 } from "./animationCommandHelpers";
 import {
   cloneElementAnimationsForInsertedElements,
 } from "./animationElementClone";
+import {
+  applyElementBatchUpdatesToSlide,
+} from "./animationLegacyCompatibility";
 import { createAnimationSceneFromLegacyElements } from "./animationSchema";
 import {
   getAnimationSequenceForClip,
@@ -63,16 +68,19 @@ export type {
   UpdateAnimationKeyframeValueCommand,
 } from "./animationKeyframeCommands";
 
-export type AnimationCommandElementUpdates = Partial<
-  Omit<SlideElement, "style">
-> & {
-  style?: Partial<SlideElement["style"]>;
-};
-
-export type AnimationCommandBatchUpdate = {
-  elementId: string;
-  updates: AnimationCommandElementUpdates;
-};
+/**
+ * Preserve the original public import path while legacy/V2 synchronization and
+ * Scene cleanup live below this compatibility barrel.
+ */
+export {
+  applyElementBatchUpdatesToSlide,
+  deleteSlideElementsWithAnimations,
+  isAnimationClipLiveForElements,
+} from "./animationLegacyCompatibility";
+export type {
+  AnimationCommandBatchUpdate,
+  AnimationCommandElementUpdates,
+} from "./animationLegacyCompatibility";
 
 export type AddAnimationClipCommand = {
   elementId: string;
@@ -90,156 +98,6 @@ export type DuplicateAnimationClipCommand = {
 export type DeleteAnimationClipCommand = {
   clipId: string;
 };
-
-/**
- * Delete slide elements and repair every animation reference in the same
- * transaction. Multi-target Clips keep their remaining targets; targetless Clips
- * and empty Sequences are removed.
- */
-export function deleteSlideElementsWithAnimations(
-  slide: Slide,
-  elementIds: string[],
-): Slide {
-  const requestedElementIds = new Set(elementIds);
-  const deletedElementIds = new Set(
-    slide.elements
-      .filter((element) => requestedElementIds.has(element.id))
-      .map((element) => element.id),
-  );
-
-  if (deletedElementIds.size === 0) {
-    return slide;
-  }
-
-  const nextElements = slide.elements.filter(
-    (element) => !deletedElementIds.has(element.id),
-  );
-  const scene = slide.animationScene;
-
-  if (!scene || scene.schemaVersion !== 2) {
-    return {
-      ...slide,
-      elements: nextElements,
-    };
-  }
-
-  const nextScene = cloneAnimationScene(scene);
-  let animationChanged = false;
-
-  for (const clip of Object.values(scene.clips)) {
-    const nextTargets = clip.targets.filter(
-      (target) => !deletedElementIds.has(target.elementId),
-    );
-
-    if (nextTargets.length === clip.targets.length) {
-      continue;
-    }
-
-    animationChanged = true;
-
-    if (nextTargets.length === 0) {
-      removeClipFromScene(nextScene, clip.id);
-      continue;
-    }
-
-    nextScene.clips[clip.id] = {
-      ...clip,
-      targets: nextTargets,
-    };
-  }
-
-  for (const [sequenceId, sequence] of Object.entries(nextScene.sequences)) {
-    const trigger = sequence.trigger;
-
-    if (
-      trigger.type !== "click" &&
-      trigger.type !== "hover"
-    ) {
-      continue;
-    }
-
-    if (
-      !trigger.targetElementId ||
-      !deletedElementIds.has(trigger.targetElementId)
-    ) {
-      continue;
-    }
-
-    animationChanged = true;
-    nextScene.sequences[sequenceId] = {
-      ...sequence,
-
-      // Page-click remains valid; hover falls back to explicit manual playback.
-      trigger: trigger.type === "click" ? { type: "click" } : { type: "manual" },
-    };
-  }
-
-  if (animationChanged) {
-    removeEmptySequences(nextScene);
-    nextScene.revision = Math.max(1, scene.revision + 1);
-  }
-
-  return {
-    ...slide,
-    elements: nextElements,
-    animationScene: animationChanged ? nextScene : scene,
-  };
-}
-
-/**
- * Check whether one Clip still belongs to live slide elements.
- *
- * Pure V2 Clips only need a valid target element. Legacy-compatible Clips must
- * additionally keep their matching element.animations entry; otherwise they are
- * stale migration records and must not appear in current editor views.
- */
-export function isAnimationClipLiveForElements(
-  clip: AnimationClip,
-  elements: SlideElement[],
-) {
-  const targetElements =
-    clip.targets.flatMap(
-      (target) => {
-        const element =
-          elements.find(
-            (item) =>
-              item.id ===
-              target.elementId,
-          );
-
-        return element
-          ? [element]
-          : [];
-      },
-    );
-
-  if (
-    targetElements.length === 0
-  ) {
-    return false;
-  }
-
-  const legacyAnimationId =
-    getLegacyAnimationId(
-      clip,
-    );
-
-  /**
-   * Native V2 Clips do not require the temporary legacy compatibility mirror.
-   */
-  if (!legacyAnimationId) {
-    return true;
-  }
-
-  return targetElements.some(
-    (element) =>
-      element.animations.some(
-        (animation) =>
-          animation.id ===
-          legacyAnimationId,
-      ),
-  );
-}
 
 export type UpdateAnimationClipTimingCommand = {
   clipId: string;
@@ -260,78 +118,6 @@ export type UpdateAnimationClipEasingCommand = {
    */
   easing?: AnimationEasing;
 };
-
-/**
- * Apply a batch of element updates to one slide.
- *
- * Legacy element animation edits are synchronized into Animation Schema V2
- * incrementally. Timing changes preserve customized tracks and keyframes,
- * while choosing a different preset intentionally replaces that preset Clip.
- */
-export function applyElementBatchUpdatesToSlide(
-  slide: Slide,
-  batchUpdates: AnimationCommandBatchUpdate[],
-): Slide {
-  if (batchUpdates.length === 0) {
-    return slide;
-  }
-
-  const updatesByElementId = new Map(
-    batchUpdates.map((item) => [item.elementId, item.updates]),
-  );
-
-  const animationChangedElementIds = new Set<string>();
-  let changed = false;
-
-  const nextElements = slide.elements.map((element) => {
-    const updates = updatesByElementId.get(element.id);
-
-    if (!updates) {
-      return element;
-    }
-
-    changed = true;
-
-    /**
-     * An empty animations array still represents an animation change.
-     */
-    if (Object.prototype.hasOwnProperty.call(updates, "animations")) {
-      animationChangedElementIds.add(element.id);
-    }
-
-    return {
-      ...element,
-      ...updates,
-      style: updates.style
-        ? {
-            ...element.style,
-            ...updates.style,
-          }
-        : element.style,
-    };
-  });
-
-  if (!changed) {
-    return slide;
-  }
-
-  if (animationChangedElementIds.size === 0) {
-    return {
-      ...slide,
-      elements: nextElements,
-    };
-  }
-
-  return {
-    ...slide,
-    elements: nextElements,
-    animationScene: synchronizeLegacyAnimationsToScene(
-      slide,
-      nextElements,
-      animationChangedElementIds,
-    ),
-  };
-}
 
 /**
  * Add one preset-based Clip to an element.
@@ -537,8 +323,10 @@ export function deleteAnimationClipFromSlide(
   );
   const nextScene = cloneAnimationScene(scene);
 
-  removeClipFromScene(nextScene, clip.id);
-  removeEmptySequences(nextScene);
+  removeAnimationClipsAndDirectEmptySequences(
+    nextScene,
+    new Set([clip.id]),
+  );
   nextScene.revision = Math.max(1, scene.revision + 1);
 
   let elementsChanged = false;
@@ -972,270 +760,6 @@ function animationEasingToLegacyString(
     case "custom-curve":
       return undefined;
   }
-}
-
-/**
- * Synchronize only the legacy animations belonging to changed elements.
- *
- * Unlike rebuilding the entire scene, this preserves customized tracks on
- * every other element. Duration and delay changes also preserve customized
- * tracks on the same Clip.
- */
-function synchronizeLegacyAnimationsToScene(
-  slide: Slide,
-  nextElements: SlideElement[],
-  changedElementIds: Set<string>,
-): AnimationScene {
-  if (!slide.animationScene || slide.animationScene.schemaVersion !== 2) {
-    const rebuiltScene = createAnimationSceneFromLegacyElements(
-      slide.id,
-      nextElements,
-    );
-
-    return {
-      ...rebuiltScene,
-      revision: Math.max(1, (slide.animationScene?.revision ?? 0) + 1),
-    };
-  }
-
-  const nextScene = cloneAnimationScene(slide.animationScene);
-
-  for (const elementId of changedElementIds) {
-    const nextElement = nextElements.find(
-      (element) => element.id === elementId,
-    );
-
-    if (!nextElement) {
-      continue;
-    }
-
-    synchronizeOneElementLegacyAnimations(nextScene, slide.id, nextElement);
-  }
-
-  removeEmptyLegacySequence(nextScene, slide.id);
-
-  return {
-    ...nextScene,
-    revision: Math.max(1, slide.animationScene.revision + 1),
-  };
-}
-
-/**
- * Synchronize every legacy animation belonging to one element.
- */
-function synchronizeOneElementLegacyAnimations(
-  scene: AnimationScene,
-  slideId: string,
-  element: SlideElement,
-) {
-  const nextLegacyAnimationIds = new Set(
-    element.animations.map((animation) => animation.id),
-  );
-
-  /**
-   * Remove legacy-origin Clips that no longer exist on the element.
-   * Custom Clips without legacyAnimationId are intentionally preserved.
-   */
-  for (const clip of Object.values(scene.clips)) {
-    const legacyAnimationId = getLegacyAnimationId(clip);
-
-    if (
-      !legacyAnimationId ||
-      !clipTargetsElement(clip, element.id) ||
-      nextLegacyAnimationIds.has(legacyAnimationId)
-    ) {
-      continue;
-    }
-
-    removeClipFromScene(scene, clip.id);
-  }
-
-  for (const animation of element.animations) {
-    synchronizeOneLegacyAnimation(scene, slideId, element, animation);
-  }
-}
-
-/**
- * Synchronize one old element animation into its corresponding V2 Clip.
- */
-function synchronizeOneLegacyAnimation(
-  scene: AnimationScene,
-  slideId: string,
-  element: SlideElement,
-  animation: SlideElementAnimation,
-) {
-  const existingClip = findLegacyClip(scene, element.id, animation.id);
-
-  /**
-   * Duration, delay, name, and easing compatibility changes do not require
-   * rebuilding tracks when the source preset remains the same.
-   */
-  if (
-    existingClip &&
-    existingClip.sourcePreset?.presetId === animation.keyframes
-  ) {
-    scene.clips[existingClip.id] = {
-      ...existingClip,
-      name: animation.name,
-      category: animation.type,
-      startMs: Math.max(0, animation.delay),
-      durationMs: Math.max(1, animation.duration),
-      sourcePreset: {
-        presetId: animation.keyframes,
-        presetVersion: existingClip.sourcePreset?.presetVersion ?? 1,
-      },
-      metadata: {
-        ...existingClip.metadata,
-        legacyAnimationId: animation.id,
-        legacyKeyframes: animation.keyframes,
-      },
-    };
-
-    ensureClipInLegacySequence(scene, slideId, existingClip.id);
-
-    return;
-  }
-
-  /**
-   * Choosing another preset intentionally replaces the old preset tracks.
-   */
-  if (existingClip) {
-    removeClipFromScene(scene, existingClip.id);
-  }
-
-  const generatedScene = createAnimationSceneFromLegacyElements(slideId, [
-    {
-      ...element,
-      animations: [animation],
-    },
-  ]);
-
-  const generatedClip = Object.values(generatedScene.clips)[0];
-
-  if (!generatedClip) {
-    return;
-  }
-
-  scene.clips[generatedClip.id] = generatedClip;
-
-  ensureClipInLegacySequence(scene, slideId, generatedClip.id);
-}
-
-function findLegacyClip(
-  scene: AnimationScene,
-  elementId: string,
-  legacyAnimationId: string,
-) {
-  return Object.values(scene.clips).find(
-    (clip) =>
-      getLegacyAnimationId(clip) === legacyAnimationId &&
-      clipTargetsElement(clip, elementId),
-  );
-}
-
-function getLegacyAnimationId(clip: AnimationClip) {
-  const value = clip.metadata?.legacyAnimationId;
-
-  return typeof value === "string" ? value : undefined;
-}
-
-function clipTargetsElement(clip: AnimationClip, elementId: string) {
-  return clip.targets.some((target) => target.elementId === elementId);
-}
-
-function ensureClipInLegacySequence(
-  scene: AnimationScene,
-  slideId: string,
-  clipId: string,
-) {
-  /**
-   * A legacy-backed Clip may have been moved into a Click Step. Preserve that
-   * explicit ownership instead of silently adding a second trigger Sequence.
-   */
-  if (
-    Object.values(scene.sequences).some((sequence) =>
-      sequence.clipIds.includes(clipId),
-    )
-  ) {
-    return;
-  }
-
-  const sequenceId = getLegacySequenceId(slideId);
-  const oldSequence = scene.sequences[sequenceId];
-
-  if (!oldSequence) {
-    scene.sequences[sequenceId] = {
-      id: sequenceId,
-      name: "旧版页面进入动画",
-      trigger: {
-        type: "slide-enter",
-      },
-      clipIds: [clipId],
-      durationMode: "auto",
-      playback: {
-        repeat: 1,
-        direction: "normal",
-        playbackRate: 1,
-      },
-    };
-
-    if (!scene.sequenceOrder.includes(sequenceId)) {
-      scene.sequenceOrder.push(sequenceId);
-    }
-
-    return;
-  }
-
-  if (oldSequence.clipIds.includes(clipId)) {
-    return;
-  }
-
-  scene.sequences[sequenceId] = {
-    ...oldSequence,
-    clipIds: [...oldSequence.clipIds, clipId],
-  };
-}
-
-function removeClipFromScene(scene: AnimationScene, clipId: string) {
-  const nextClips = {
-    ...scene.clips,
-  };
-
-  delete nextClips[clipId];
-  scene.clips = nextClips;
-
-  for (const [sequenceId, sequence] of Object.entries(scene.sequences)) {
-    if (!sequence.clipIds.includes(clipId)) {
-      continue;
-    }
-
-    scene.sequences[sequenceId] = {
-      ...sequence,
-      clipIds: sequence.clipIds.filter(
-        (currentClipId) => currentClipId !== clipId,
-      ),
-    };
-  }
-}
-
-function removeEmptyLegacySequence(scene: AnimationScene, slideId: string) {
-  const sequenceId = getLegacySequenceId(slideId);
-  const sequence = scene.sequences[sequenceId];
-
-  if (!sequence || sequence.clipIds.length > 0) {
-    return;
-  }
-
-  const nextSequences = {
-    ...scene.sequences,
-  };
-
-  delete nextSequences[sequenceId];
-
-  scene.sequences = nextSequences;
-  scene.sequenceOrder = scene.sequenceOrder.filter(
-    (currentSequenceId) => currentSequenceId !== sequenceId,
-  );
 }
 
 function createUniqueLegacyAnimationId(slide: Slide, elementId: string) {

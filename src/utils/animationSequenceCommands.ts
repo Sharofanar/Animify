@@ -26,14 +26,40 @@ export type UpdateAnimationClickStepCommand = {
   clipIds?: string[];
 };
 
+export type AnimationEditorTriggerType = Extract<
+  AnimationSequence["trigger"]["type"],
+  "slide-enter" | "click"
+>;
+
 export type SetAnimationSequenceTriggerCommand = {
   sequenceId: string;
 
-  /** Phase 3 intentionally exposes only slide-enter and page-click behavior. */
-  triggerType: Extract<
-    AnimationSequence["trigger"]["type"],
-    "slide-enter" | "click"
-  >;
+  /** V1 exposes only slide-enter and page-click; advanced triggers stay intact. */
+  triggerType: AnimationEditorTriggerType;
+};
+
+export type SetAnimationClipTriggerCommand = {
+  clipId: string;
+  triggerType: AnimationEditorTriggerType;
+
+  /** Supplied once by orchestration so Click Step ID allocation is deterministic. */
+  operationId: string;
+};
+
+export type SetAnimationClipTriggerRequest = Omit<
+  SetAnimationClipTriggerCommand,
+  "operationId"
+>;
+
+export type AnimationClipSequenceContext = {
+  sequenceId: string;
+  sequenceName: string;
+  sequenceClipCount: number;
+  triggerType: AnimationSequence["trigger"]["type"];
+  isPageClickStep: boolean;
+
+  /** One-based position among page-level Click Steps. */
+  clickStepNumber?: number;
 };
 
 export type MoveAnimationClickStepCommand = {
@@ -57,6 +83,118 @@ export function getAnimationClickSteps(
   return getOrderedAnimationSequences(scene).filter(
     (sequence) => sequence.trigger.type === "click",
   );
+}
+
+/**
+ * Resolve the persisted Sequence and user-facing page Click Step number for one
+ * Clip. Targeted click triggers remain outside the Stage 6 page-click editor.
+ */
+export function getAnimationClipSequenceContext(
+  scene: AnimationScene | undefined,
+  clipId: string,
+): AnimationClipSequenceContext | undefined {
+  if (!scene || scene.schemaVersion !== 2 || !scene.clips[clipId]) {
+    return undefined;
+  }
+
+  const orderedSequences = getOrderedAnimationSequences(scene);
+  const sequence = orderedSequences.find((currentSequence) =>
+    currentSequence.clipIds.includes(clipId),
+  );
+
+  if (!sequence) {
+    return undefined;
+  }
+
+  const isPageClickStep =
+    sequence.trigger.type === "click" &&
+    sequence.trigger.targetElementId === undefined;
+  const pageClickSteps = orderedSequences.filter(
+    (currentSequence) =>
+      currentSequence.trigger.type === "click" &&
+      currentSequence.trigger.targetElementId === undefined,
+  );
+  const clickStepIndex = isPageClickStep
+    ? pageClickSteps.findIndex(
+        (currentSequence) => currentSequence.id === sequence.id,
+      )
+    : -1;
+
+  return {
+    sequenceId: sequence.id,
+    sequenceName: sequence.name,
+    sequenceClipCount: getUniqueExistingClipIds(
+      scene,
+      sequence.clipIds,
+    ).length,
+    triggerType: sequence.trigger.type,
+    isPageClickStep,
+    clickStepNumber: clickStepIndex >= 0 ? clickStepIndex + 1 : undefined,
+  };
+}
+
+/**
+ * Move one Clip between automatic page entry and a page Click Step.
+ *
+ * The Clip keeps its Sequence-local startMs. Moving to click creates a new Step;
+ * moving back to automatic playback joins the existing slide-enter Sequence and
+ * removes the source Step only when it becomes empty.
+ */
+export function setAnimationClipTriggerInSlide(
+  slide: Slide,
+  command: SetAnimationClipTriggerCommand,
+): Slide {
+  const scene = slide.animationScene;
+  const clip = scene?.clips[command.clipId];
+  const operationId = command.operationId.trim();
+
+  if (!scene || scene.schemaVersion !== 2 || !clip || !operationId) {
+    return slide;
+  }
+
+  const sequence = getOrderedAnimationSequences(scene).find(
+    (currentSequence) => currentSequence.clipIds.includes(clip.id),
+  );
+
+  if (!sequence) {
+    return slide;
+  }
+
+  const currentTriggerType =
+    sequence.trigger.type === "slide-enter"
+      ? "slide-enter"
+      : sequence.trigger.type === "click" &&
+          sequence.trigger.targetElementId === undefined
+        ? "click"
+        : undefined;
+
+  if (!currentTriggerType || currentTriggerType === command.triggerType) {
+    return slide;
+  }
+
+  if (command.triggerType === "click") {
+    return createAnimationClickStepInSlide(slide, {
+      sequenceId: createDeterministicClickStepSequenceId(
+        scene,
+        slide.id,
+        clip.id,
+        operationId,
+      ),
+      clipIds: [clip.id],
+    });
+  }
+
+  const nextScene = cloneAnimationScene(scene);
+
+  removeClipIdsFromSequences(nextScene, new Set([clip.id]));
+  removeEmptySequences(nextScene);
+  ensureClipsInSlideEnterSequence(nextScene, slide.id, [clip.id]);
+  nextScene.revision = Math.max(1, scene.revision + 1);
+
+  return {
+    ...slide,
+    animationScene: nextScene,
+  };
 }
 
 /**
@@ -190,8 +328,8 @@ export function updateAnimationClickStepInSlide(
 
 /**
  * Switch one existing Sequence between automatic slide entry and a page Click
- * Step. The command is immutable so one document mutation remains one Undo/Redo
- * transaction when the Phase 6 editor invokes it.
+ * Step. The command stays immutable so orchestration can record the document
+ * mutation as one Undo/Redo transaction.
  */
 export function setAnimationSequenceTriggerInSlide(
   slide: Slide,
@@ -303,6 +441,24 @@ function getUniqueExistingClipIds(
     seenClipIds.add(clipId);
     return true;
   });
+}
+
+function createDeterministicClickStepSequenceId(
+  scene: AnimationScene,
+  slideId: string,
+  clipId: string,
+  operationId: string,
+) {
+  const baseId = `sequence-${slideId}-click-${clipId}-${operationId}`;
+  let candidateId = baseId;
+  let suffix = 1;
+
+  while (scene.sequences[candidateId]) {
+    candidateId = `${baseId}-${suffix}`;
+    suffix += 1;
+  }
+
+  return candidateId;
 }
 
 function removeClipIdsFromSequences(

@@ -1,9 +1,9 @@
 # Animify 项目状态
 
-> 最后更新：2026-08-09
+> 最后更新：2026-08-10
 > 仓库：`https://github.com/Sharofanar/Animify`  
 > 主分支：`main`  
-> 本轮 Batch 3C-2 开始基线：`76f35fcdcc36fa49471f9f9271b37a6b166d789f refactor: extract keyframe commands`
+> Stage 6 第一 Batch 开始基线：`e11453d8de06c678f8820394f6a668d2884bf5e8 docs: define module boundary rules`
 
 本文档是 Animify 当前开发状态的长期事实来源。
 
@@ -1610,11 +1610,80 @@ Batch 2 当前明确禁止移动：
 
 - 不与第 5 阶段 HTML Click Step 同步混合开发。
 - 不提前实现第 6 阶段 Click Step 编辑 UI 或第 7 阶段 Timeline V2-C。
-- Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成；Batch 2 前置只读架构审计已完成；Pending Media Interaction Fix 已通过自动检查和人工 QA。Batch 3C-3、Batch 4 与 Batch 5 暂缓，Stage 6 是下一开发入口但尚未开始，Stage 7 也未开始。
+- Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成；Batch 2 前置只读架构审计已完成；Pending Media Interaction Fix 已通过自动检查和人工 QA。Batch 3C-3、Batch 4 与 Batch 5 暂缓；Stage 6 已正式开始且第一 Batch 已验证完成，Stage 7 仍未开始。
 
 ### 第 6 阶段：Click Step 编辑界面
 
-状态：**计划开发，尚未开始**
+状态：**已正式开始；第一 Batch 已验证完成；Stage 6 整体未完成**
+
+#### 第一 Batch：Click Trigger Editing — Single Clip Trigger + Step Number
+
+状态：**COMPLETE；MANUAL QA PASSED（2026-08-10）**
+
+本 Batch 实现：
+
+- Clip 卡片显示真实触发方式：`页面进入 · 自动播放` 或 `点击播放 · Step N`。
+- 单个 Clip 可在 `slide-enter` 与页面级 page-click Click Step 之间切换。
+- 自动播放 → 点击播放时，为当前 Clip 追加一个新的 Click Step。
+- 点击播放 → 自动播放时，当前 Clip 合并进既有 `slide-enter` Sequence；没有该 Sequence 时使用确定性 fallback 创建。
+- 每次切换只移动当前 Clip，同一 Click Step 中其他 Clip 的归属和 `startMs` 不变。
+- `AnimationClip.startMs` 数值始终保持为所属 Sequence 的局部偏移，不写入 trigger runtime time，也不新增 `Clip.sequenceId`。
+- 当前操作产生的空 Sequence 自动清理，`sequenceOrder` 同步删除失效引用。
+- 删除较早 page Click Step 后，后续 Step N 由当前 page-click Sequence 顺序自动重排。
+- targeted click、hover、keyboard、media-time 和 manual 等 advanced trigger 保持可见但只读，命令路径为 no-op，不被本 Batch 改写。
+- UI 通过 semantic request 调用 App；App 继续拥有 History、Project `updatedAt`、operation identity、Preview cleanup 和 orchestration；纯 Document mutation 位于 `animationSequenceCommands.ts`。
+- `animationCommands.ts` 继续只作为兼容公开入口 re-export 新 Sequence API，没有建立第二套实现。
+
+调用路径：
+
+```text
+AnimationTrackInspector
+→ AnimationFloatingPanel
+→ App.handleSetAnimationClipTrigger
+→ commitProjectChange
+→ setAnimationClipTriggerInSlide
+```
+
+实际修改文件：
+
+```text
+PROJECT_STATUS.md
+src/App.tsx
+src/components/editor/AnimationFloatingPanel.tsx
+src/components/editor/AnimationTrackInspector.tsx
+src/utils/animationCommands.ts
+src/utils/animationSequenceCommands.ts
+```
+
+本次最终自动检查（2026-08-10，基于当前源码重新执行）：
+
+- Domain / ownership / cleanup / no-op / deterministic ID / purity / isolation：45 项通过。
+- Presentation / standalone HTML Export trigger regression：27 项通过。
+- UI / App / compatibility contract：17 项通过。
+- 合计：89 项直接断言通过；断言使用 Rolldown 内存入口执行，没有留下临时脚本或 QA 数据文件。
+- TypeScript relative import graph：41 modules / 105 unique relative dependencies / 0 cycles。
+- `npm.cmd run lint`：通过，0 error、0 warning。
+- `npm.cmd run build`：通过；只保留既有 500 kB chunk warning。
+- `git diff --check` 与 `git diff --cached --check`：通过；仅有既有 LF / CRLF 转换提示。
+- 项目仍未定义正式 `test` script，本 Batch 没有新增虚假 test 命令或测试框架。
+
+人工 QA（2026-08-10）：
+
+1. 一个元素三个 Clip，Clip 2 `startMs = 300ms`；Clip 2 自动播放 → 点击播放后显示 Step 1，`startMs` 保持 300ms，Clip 1 / Clip 3 仍自动播放，Undo / Redo 正常。
+2. Clip 2 = Step 1、Clip 3 = Step 2；编辑器 Presentation 与 standalone HTML 均按页面进入自动 Clip → 第一次点击 Step 1 → 第二次点击 Step 2 的顺序运行，二者一致。
+3. Clip 2 从 Step 1 切回自动播放后，Clip 3 由 Step 2 自动重编号为 Step 1；Undo / Redo、autosave、refresh 后 trigger 与 Step 编号均保持正常。
+
+Stage 6 后续目标继续保留：
+
+- 多 Clip 合并到同一个 Click Step 的编辑 UI。
+- Step / Clip grouping。
+- Step reorder。
+- invalid Sequence protection UI / product closure。
+- 本节原定的其他 Stage 6 内容。
+
+下一开发入口：**Stage 6 下一 Batch 应从“多 Clip 合并到同一个 Click Step 的编辑 UI”开始；本次收尾不进入该 Batch。**
+
+Stage 6 整体不得标记 complete；Batch 3C-3、Batch 4 与 Batch 5 继续 deferred，Stage 7 尚未开始。
 
 目标：
 
@@ -2647,7 +2716,9 @@ GitHub 状态：已 push
 2026-08-05：Batch 3B-2B 新增 Pure Element Clone Facade，统一 Keyboard、元素右键和画布右键的 Copy / Paste / Duplicate 文档变换路由；117 项当前可执行断言和三个综合人工 QA 路径通过
 2026-08-06：Batch 3C-1 新增 Keyframe Commands 与 Shared Rules，五个 V2 Keyframe 命令完成纯职责抽离，Inspector 统一复用排序 / 边界 / 插入 / easing 可用性规则；97 项当前可执行断言和 Keyframe 编辑、新增、删除、Undo / Redo、保存恢复、Presentation 人工 QA 通过
 2026-08-09：Batch 3C-2 新增 Legacy/V2 Compatibility + Scene Cleanup 独立 domain，完成自动检查与单元素真实操作人工 QA；多元素批量添加 preset UI 当前不可触达，底层路径由自动断言覆盖
-当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成；Stage 5.5 架构拆分暂停于稳定边界，Batch 3C-3、Batch 4 与 Batch 5 暂缓；Video Bug Part A、Initial Selection、Pending Media Interaction Fix、Standalone Export Fullscreen Arrow-Key Seeking Fix、Presentation Element Click Blocking Fix、Presentation Transient Text Editing / Selection Fix 与 Hidden Media Playback Lifecycle 已解决并通过人工 QA；Selected Element Adorner Layering、Fullscreen Media Enter-Key Parity、独立文本 Selection UX、Audio keyboard parity 与 `file://` 警告待后续处理；下一开发入口为 Stage 6，尚未开始
+2026-08-10：Stage 6 正式开始；第一 Batch“Click Trigger Editing — Single Clip Trigger + Step Number”完成实现，用户已通过三条必要人工 QA 路径
+2026-08-10：第一 Batch 基于当前源码重新执行 45 项 domain 断言、27 项 Presentation / Export 回归、17 项 UI / App contract、Lint、Build、Diff 与 import-cycle 检查，全部通过
+当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成；Stage 5.5 架构拆分暂停于稳定边界，Batch 3C-3、Batch 4 与 Batch 5 暂缓；Stage 6 已正式开始，第一 Batch COMPLETE / MANUAL QA PASSED，但 Stage 6 整体未完成；下一开发入口为多 Clip 合并到同一 Click Step 的编辑 UI；Stage 7 尚未开始
 ```
 
 ---
@@ -2671,7 +2742,8 @@ GitHub 状态：已 push
 - 第 5.5 阶段 Batch 1 已完成人工验证、commit 和 push；不再存在“待验证”或“待 Git 闭环”状态。
 - Batch 2 前置只读架构审计已完成。Stage 5.5 Batch 2A“Project persistence adapter”已验证完成并 push；Video Bug Part A 已解决并完成人工 QA / Git 闭环。Export 现象当前无法复现，不启动 speculative repair；Batch 2B“Project document + history transaction”及 final no-op 修复已通过全部人工 QA 并成为稳定架构基线。Batch 3A 最小 Sequence Command Domain 已通过人工 QA，并通过 `d68ce74` 完成独立 Git 闭环；Batch 3B-1 Pure Element Command Facade 已完成自动检查、人工 QA 与独立 Git 闭环。
 - Pending Media Interaction Fix 已完成代码实现、自动检查和人工 QA，并纳入 `fix: sync pending media input ownership` 独立 Git 闭环；Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成。
-- Stage 5.5 architecture refactor paused at a stable boundary。Batch 3C-3、Batch 4 与 Batch 5 为暂缓架构债务，不是当前 required next step；下一开发入口改为 Stage 6，但本轮尚未开始 Stage 6 或 Stage 7。
+- Stage 5.5 architecture refactor paused at a stable boundary。Batch 3C-3、Batch 4 与 Batch 5 为暂缓架构债务，不是当前 required next step；Stage 6 已正式开始，第一 Batch“Single Clip Trigger + Step Number”已完成并通过人工 QA，Stage 6 整体仍未完成，Stage 7 尚未开始。
+- Stage 6 下一开发入口是“多 Clip 合并到同一个 Click Step 的编辑 UI”；未经新的独立任务确认，不得把本次收尾扩大为第二 Batch。
 - Standalone Export Fullscreen Arrow-Key Seeking Fix 已完成根因修复、自动检查和人工 QA；浏览器原生 Video controls 继续负责全屏方向键 seek，Presentation 不消费这些按键。
 - Presentation Element Click Blocking Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 的普通展示元素 click 现在冒泡到统一推进路由，编辑模式选择与媒体控件输入保持不变。
 - Presentation Transient Text Editing / Selection Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 不再拥有双击 / textarea 编辑入口，Text / Shape / SVG 展示文字不再产生原生 Selection，编辑模式 textarea 语义保持不变。
@@ -2721,6 +2793,7 @@ git diff --cached
 25. Batch 3B-2B 已新增 Pure Element Clone Facade，并统一 Keyboard、元素右键和画布右键的 Copy / Paste / Duplicate 文档变换路由；clipboard ref、History、Selection、坐标换算、Asset 生命周期和 UI orchestration 继续由 App 拥有。
 26. Batch 3C-1 已新增纯 Keyframe Command Domain 与 Shared Rules；五个 V2 Keyframe 命令、Inspector 边界规则、确定性 operation ID、深复制及 no-op / revision 语义已通过自动断言和人工 QA，legacy / V2 compatibility、Scene cleanup、Clip / Preset / Timing 仍留给后续独立 Batch。
 27. Batch 3C-2 已把 legacy / V2 incremental sync、Scene cleanup 与 live query 提取到 `animationLegacyCompatibility`，并把低层 ownership cleanup 集中到 `animationCommandHelpers`；Compatibility barrel 只 re-export，Element Commands 直接依赖低层 domain。3C-2 已通过自动检查和人工 QA；3C-3、Batch 4 与 Batch 5 暂缓，不阻塞 Stage 6。
+28. Stage 6 第一 Batch 已建立单 Clip `slide-enter` ↔ page-click 切换、Step N 派生显示、确定性新 Click Sequence、Sequence-local `startMs` 保留、空 Sequence / `sequenceOrder` 清理和 advanced trigger 保护；History、Preview 与 Project timestamp 继续由 App orchestration 拥有。
 
 ### Git 状态说明
 
@@ -2747,5 +2820,7 @@ git diff --cached
 - Batch 3B-2B 开始基线：`main`、本地 `origin/main` 均为 `ace9b08ec7507706c36728433553399bb75454f1`，ahead 0、behind 0，开始前工作区与暂存区干净；最终提交范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/utils/elementCloneCommands.ts`，提交信息为 `refactor: extract element clone facade`。
 - Batch 3C-1 开始基线：`main`、本地 `origin/main` 均为 `cc015fc22fc4aff5bf228c40b2b2742f1b78db48`，ahead 0、behind 0，开始前工作区与暂存区干净；最终提交范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/AnimationFloatingPanel.tsx`、`src/components/editor/AnimationTrackInspector.tsx`、`src/utils/animationCommands.ts`、`src/utils/animationKeyframeCommands.ts`、`src/utils/animationKeyframeRules.ts`，提交信息为 `refactor: extract keyframe commands`。
 - Batch 3C-2 开始基线：`main`、本地 `origin/main` 均为 `76f35fcdcc36fa49471f9f9271b37a6b166d789f`，ahead 0、behind 0，开始前工作区与暂存区干净；最终提交范围固定为 `PROJECT_STATUS.md`、`src/utils/animationLegacyCompatibility.ts`、`src/utils/animationCommandHelpers.ts`、`src/utils/animationCommands.ts`、`src/utils/elementCommands.ts`，提交信息为 `refactor: extract animation compatibility`。
+- Stage 6 第一 Batch 开始基线：`main`、本地 `origin/main` 均为 `e11453d8de06c678f8820394f6a668d2884bf5e8`，ahead 0、behind 0，开始前工作区与暂存区干净。
+- Stage 6 第一 Batch 最终范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/AnimationFloatingPanel.tsx`、`src/components/editor/AnimationTrackInspector.tsx`、`src/utils/animationCommands.ts`、`src/utils/animationSequenceCommands.ts`，提交信息为 `feat: add clip trigger editing`。
 
 未经用户允许，不得 commit 或 push。

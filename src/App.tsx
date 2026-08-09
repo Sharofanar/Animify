@@ -44,6 +44,7 @@ import {
   deleteAnimationKeyframeFromSlide,
   duplicateAnimationClipInSlide,
   isAnimationClipLiveForElements,
+  setAnimationClipTriggerInSlide,
   updateAnimationClipEasingInSlide,
   updateAnimationClipTimingInSlide,
   updateAnimationKeyframeEasingInSlide,
@@ -54,6 +55,7 @@ import {
   type DeleteAnimationClipCommand,
   type DeleteAnimationKeyframeCommand,
   type DuplicateAnimationClipCommand,
+  type SetAnimationClipTriggerRequest,
   type UpdateAnimationClipEasingCommand,
   type UpdateAnimationClipTimingCommand,
   type UpdateAnimationKeyframeEasingCommand,
@@ -3407,6 +3409,50 @@ function App() {
   }
 
   /**
+   * Move one Clip between automatic playback and a page Click Step.
+   *
+   * The pure Sequence command owns Clip membership; App owns the one History
+   * transaction, Project timestamp, preview cleanup, and operation identity.
+   */
+  function handleSetAnimationClipTrigger(
+    command: SetAnimationClipTriggerRequest,
+  ) {
+    const operationId = `clip-trigger-${Date.now()}`;
+
+    commitProjectChange((currentProject) => {
+      let changed = false;
+
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        const nextSlide = setAnimationClipTriggerInSlide(slide, {
+          ...command,
+          operationId,
+        });
+
+        if (nextSlide === slide) {
+          return slide;
+        }
+
+        changed = true;
+        return nextSlide;
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    });
+  }
+
+  /**
    * Update several V2 Clips through one project transaction.
    *
    * Regardless of how many selected elements are changed, the batch creates only
@@ -5121,6 +5167,7 @@ function App() {
         onAddClip={handleAddAnimationClip}
         onDuplicateClip={handleDuplicateAnimationClip}
         onDeleteClip={handleDeleteAnimationClip}
+        onSetClipTrigger={handleSetAnimationClipTrigger}
         onUpdateClipTiming={handleUpdateAnimationClipTiming}
         onUpdateElements={handleUpdateElements}
         onUpdateClipTimings={handleUpdateAnimationClipTimings}

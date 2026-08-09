@@ -7,16 +7,19 @@ import type {
   AnimationValue,
   SlideElement,
 } from "../../types/presentation";
-import type {
-  AddAnimationClipCommand,
-  AddAnimationKeyframeRequest,
-  DeleteAnimationClipCommand,
-  DeleteAnimationKeyframeCommand,
-  DuplicateAnimationClipCommand,
-  UpdateAnimationClipTimingCommand,
-  UpdateAnimationKeyframeEasingCommand,
-  UpdateAnimationKeyframeOffsetCommand,
-  UpdateAnimationKeyframeValueCommand,
+import {
+  getAnimationClipSequenceContext,
+  type AddAnimationClipCommand,
+  type AddAnimationKeyframeRequest,
+  type AnimationClipSequenceContext,
+  type DeleteAnimationClipCommand,
+  type DeleteAnimationKeyframeCommand,
+  type DuplicateAnimationClipCommand,
+  type SetAnimationClipTriggerRequest,
+  type UpdateAnimationClipTimingCommand,
+  type UpdateAnimationKeyframeEasingCommand,
+  type UpdateAnimationKeyframeOffsetCommand,
+  type UpdateAnimationKeyframeValueCommand,
 } from "../../utils/animationCommands";
 import { animationPresets } from "../../utils/animationPresets";
 import {
@@ -71,6 +74,7 @@ type AnimationTrackInspectorProps = {
   onAddClip?: (command: AddAnimationClipCommand) => void;
   onDuplicateClip?: (command: DuplicateAnimationClipCommand) => void;
   onDeleteClip?: (command: DeleteAnimationClipCommand) => void;
+  onSetClipTrigger?: (command: SetAnimationClipTriggerRequest) => void;
   onUpdateClipTiming?: (
     command: UpdateAnimationClipTimingCommand,
     options?: InspectorUpdateOptions,
@@ -96,6 +100,7 @@ type AnimationTrackInspectorProps = {
 type VisibleClip = {
   clip: AnimationClip;
   sequenceName: string;
+  sequenceContext?: AnimationClipSequenceContext;
   targetNames: string[];
 };
 
@@ -115,6 +120,7 @@ export function AnimationTrackInspector({
   onAddClip,
   onDuplicateClip,
   onDeleteClip,
+  onSetClipTrigger,
   onUpdateClipTiming,
   onUpdateKeyframeValue,
   onUpdateKeyframeEasing,
@@ -201,7 +207,7 @@ export function AnimationTrackInspector({
         <div>
           <h3 className="text-sm font-black text-slate-800">V2 动画轨道</h3>
           <p className="mt-1 text-xs leading-5 text-slate-500">
-            当前已开放 Clip 播放参数，以及关键帧数值、位置、增删和区间缓动。
+            当前可编辑触发方式、Clip 播放参数，以及关键帧数值、位置、增删和区间缓动。
           </p>
         </div>
 
@@ -289,6 +295,7 @@ export function AnimationTrackInspector({
                 }}
                 onDuplicateClip={onDuplicateClip}
                 onDeleteClip={onDeleteClip}
+                onSetClipTrigger={onSetClipTrigger}
                 onUpdateClipTiming={onUpdateClipTiming}
                 onUpdateKeyframeValue={onUpdateKeyframeValue}
                 onUpdateKeyframeEasing={onUpdateKeyframeEasing}
@@ -323,6 +330,7 @@ function AnimationClipCard({
   onActivate,
   onDuplicateClip,
   onDeleteClip,
+  onSetClipTrigger,
   onUpdateClipTiming,
   onUpdateKeyframeValue,
   onUpdateKeyframeEasing,
@@ -339,6 +347,7 @@ function AnimationClipCard({
   onActivate: () => void;
   onDuplicateClip?: (command: DuplicateAnimationClipCommand) => void;
   onDeleteClip?: (command: DeleteAnimationClipCommand) => void;
+  onSetClipTrigger?: (command: SetAnimationClipTriggerRequest) => void;
   onUpdateClipTiming?: (
     command: UpdateAnimationClipTimingCommand,
     options?: InspectorUpdateOptions,
@@ -364,7 +373,8 @@ function AnimationClipCard({
 
   const cardRef = useRef<HTMLElement | null>(null);
 
-  const { clip, sequenceName, targetNames } = item;
+  const { clip, sequenceName, sequenceContext, targetNames } = item;
+  const editableTriggerType = getEditableTriggerType(sequenceContext);
 
   /**
    * Scrolling is a DOM synchronization side effect, so it does not duplicate
@@ -405,6 +415,10 @@ function AnimationClipCard({
 
           <span className="mt-1 block truncate text-[11px] text-slate-400">
             {targetNames.join("、")}
+          </span>
+
+          <span className="mt-1 block truncate text-[10px] font-bold text-violet-500">
+            {getTriggerLabel(sequenceContext)}
           </span>
         </button>
 
@@ -452,7 +466,70 @@ function AnimationClipCard({
               label="类型"
               value={getCategoryLabel(clip.category)}
             />
+
+            <InspectorMetadata
+              label="触发"
+              value={getTriggerLabel(sequenceContext)}
+            />
+
+            <InspectorMetadata
+              label="序列内 Clip"
+              value={
+                sequenceContext
+                  ? `${sequenceContext.sequenceClipCount} 个`
+                  : "—"
+              }
+            />
           </div>
+
+          <section className="mt-3 rounded-xl border border-sky-100 bg-sky-50/60 p-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h4 className="text-xs font-black text-slate-700">触发方式</h4>
+
+                <p className="mt-1 text-[10px] leading-4 text-slate-400">
+                  切换只移动当前 Clip，不会改变同一步骤中的其他 Clip。
+                </p>
+              </div>
+
+              {sequenceContext?.clickStepNumber ? (
+                <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[9px] font-black text-sky-600 shadow-sm">
+                  Step {sequenceContext.clickStepNumber}
+                </span>
+              ) : null}
+            </div>
+
+            <select
+              className="mt-3 w-full rounded-xl bg-white px-3 py-2 text-xs font-bold text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-sky-300 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-300"
+              value={editableTriggerType ?? "unsupported"}
+              disabled={!editableTriggerType || !onSetClipTrigger}
+              onChange={(event) => {
+                const triggerType = event.target.value;
+
+                if (
+                  triggerType !== "slide-enter" &&
+                  triggerType !== "click"
+                ) {
+                  return;
+                }
+
+                onSetClipTrigger?.({
+                  clipId: clip.id,
+                  triggerType,
+                });
+              }}
+            >
+              {!editableTriggerType ? (
+                <option value="unsupported">当前触发方式暂不可编辑</option>
+              ) : null}
+              <option value="slide-enter">进入页面时自动播放</option>
+              <option value="click">点击后播放（新步骤）</option>
+            </select>
+
+            <p className="mt-2 text-[10px] leading-4 text-sky-700/70">
+              Clip 开始时间只表示所属 Sequence 内的局部时间，不代表点击步骤顺序。
+            </p>
+          </section>
 
           <section className="mt-3 rounded-xl border border-violet-100 bg-violet-50/50 p-3">
             <div className="flex items-center justify-between gap-3">
@@ -1590,25 +1667,12 @@ function getVisibleClips(
     return [];
   }
 
-  const sequenceNameByClipId = new Map<string, string>();
-
-  for (const sequenceId of scene.sequenceOrder) {
-    const sequence = scene.sequences[sequenceId];
-
-    if (!sequence) {
-      continue;
-    }
-
-    for (const clipId of sequence.clipIds) {
-      sequenceNameByClipId.set(clipId, sequence.name);
-    }
-  }
-
   return Object.values(scene.clips)
     .filter((clip) =>
       clip.targets.some((target) => selectedElementIds.has(target.elementId)),
     )
     .map((clip) => {
+      const sequenceContext = getAnimationClipSequenceContext(scene, clip.id);
       const targetNames = Array.from(
         new Set(
           clip.targets
@@ -1622,7 +1686,8 @@ function getVisibleClips(
 
       return {
         clip,
-        sequenceName: sequenceNameByClipId.get(clip.id) ?? "未归入序列",
+        sequenceName: sequenceContext?.sequenceName ?? "未归入序列",
+        sequenceContext,
         targetNames,
       };
     })
@@ -1631,6 +1696,45 @@ function getVisibleClips(
         left.clip.startMs - right.clip.startMs ||
         left.clip.name.localeCompare(right.clip.name),
     );
+}
+
+function getEditableTriggerType(
+  sequenceContext?: AnimationClipSequenceContext,
+) {
+  if (sequenceContext?.triggerType === "slide-enter") {
+    return "slide-enter" as const;
+  }
+
+  return sequenceContext?.isPageClickStep ? ("click" as const) : undefined;
+}
+
+function getTriggerLabel(sequenceContext?: AnimationClipSequenceContext) {
+  if (!sequenceContext) {
+    return "未归入序列";
+  }
+
+  if (sequenceContext.triggerType === "slide-enter") {
+    return "页面进入 · 自动播放";
+  }
+
+  if (sequenceContext.isPageClickStep) {
+    return sequenceContext.clickStepNumber
+      ? `点击播放 · Step ${sequenceContext.clickStepNumber}`
+      : "点击播放";
+  }
+
+  switch (sequenceContext.triggerType) {
+    case "click":
+      return "对象点击触发";
+    case "hover":
+      return "悬停触发";
+    case "keyboard":
+      return "键盘触发";
+    case "media-time":
+      return "媒体时间触发";
+    case "manual":
+      return "手动触发";
+  }
 }
 
 function getCategoryLabel(category: AnimationClip["category"]) {

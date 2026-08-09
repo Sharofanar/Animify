@@ -35,14 +35,20 @@ import {
  */
 export {
   createAnimationClickStepInSlide,
+  getAnimationClipSequenceContext,
   getAnimationClickSteps,
   moveAnimationClickStepInSlide,
+  setAnimationClipTriggerInSlide,
   setAnimationSequenceTriggerInSlide,
   updateAnimationClickStepInSlide,
 } from "./animationSequenceCommands";
 export type {
+  AnimationClipSequenceContext,
+  AnimationEditorTriggerType,
   CreateAnimationClickStepCommand,
   MoveAnimationClickStepCommand,
+  SetAnimationClipTriggerCommand,
+  SetAnimationClipTriggerRequest,
   SetAnimationSequenceTriggerCommand,
   UpdateAnimationClickStepCommand,
 } from "./animationSequenceCommands";

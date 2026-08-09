@@ -65,6 +65,15 @@ export type AnimationClipSequenceContext = {
   clickStepNumber?: number;
 };
 
+export type AnimationClipGroup = {
+  id: string;
+  type: "slide-enter" | "page-click" | "other";
+  clipIds: string[];
+  sequenceId?: string;
+  sequenceName?: string;
+  clickStepNumber?: number;
+};
+
 export type MoveAnimationClickStepCommand = {
   sequenceId: string;
 
@@ -100,11 +109,99 @@ export function getAnimationClickSteps(
 export function getAnimationPageClickSteps(
   scene?: AnimationScene,
 ): AnimationSequence[] {
+  if (!scene || scene.schemaVersion !== 2) {
+    return [];
+  }
+
   return getAnimationClickSteps(scene).filter(
     (sequence) =>
       sequence.trigger.type === "click" &&
-      sequence.trigger.targetElementId === undefined,
+      sequence.trigger.targetElementId === undefined &&
+      getUniqueExistingClipIds(scene, sequence.clipIds).length > 0,
   );
+}
+
+/**
+ * Derive the Inspector's visual groups without changing persisted ownership.
+ * The first ordered owner wins for malformed duplicate references; unsupported
+ * triggers and orphan Clips remain visible in one read-only fallback group.
+ */
+export function getAnimationClipGroups(
+  scene?: AnimationScene,
+): AnimationClipGroup[] {
+  if (!scene || scene.schemaVersion !== 2) {
+    return [];
+  }
+
+  const orderedSequences = getOrderedAnimationSequences(scene);
+  const slideEnterSequence = orderedSequences.find(
+    (sequence) => sequence.trigger.type === "slide-enter",
+  );
+  const pageClickSequenceIds = new Set(
+    getAnimationPageClickSteps(scene).map((sequence) => sequence.id),
+  );
+  const claimedClipIds = new Set<string>();
+  let slideEnterGroup: AnimationClipGroup | undefined;
+  const pageClickGroups: AnimationClipGroup[] = [];
+  const otherClipIds: string[] = [];
+
+  for (const sequence of orderedSequences) {
+    const clipIds = getUniqueExistingClipIds(scene, sequence.clipIds).filter(
+      (clipId) => !claimedClipIds.has(clipId),
+    );
+
+    clipIds.forEach((clipId) => claimedClipIds.add(clipId));
+
+    if (clipIds.length === 0) {
+      continue;
+    }
+
+    if (sequence.id === slideEnterSequence?.id) {
+      slideEnterGroup = {
+        id: `animation-group-${sequence.id}`,
+        type: "slide-enter",
+        sequenceId: sequence.id,
+        sequenceName: sequence.name,
+        clipIds,
+      };
+      continue;
+    }
+
+    if (pageClickSequenceIds.has(sequence.id)) {
+      pageClickGroups.push({
+        id: `animation-group-${sequence.id}`,
+        type: "page-click",
+        sequenceId: sequence.id,
+        sequenceName: sequence.name,
+        clickStepNumber: pageClickGroups.length + 1,
+        clipIds,
+      });
+      continue;
+    }
+
+    otherClipIds.push(...clipIds);
+  }
+
+  for (const clipId of Object.keys(scene.clips)) {
+    if (!claimedClipIds.has(clipId)) {
+      claimedClipIds.add(clipId);
+      otherClipIds.push(clipId);
+    }
+  }
+
+  return [
+    ...(slideEnterGroup ? [slideEnterGroup] : []),
+    ...pageClickGroups,
+    ...(otherClipIds.length > 0
+      ? [
+          {
+            id: "animation-group-other-triggers",
+            type: "other" as const,
+            clipIds: otherClipIds,
+          },
+        ]
+      : []),
+  ];
 }
 
 /**

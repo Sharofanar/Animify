@@ -8,10 +8,12 @@ import type {
   SlideElement,
 } from "../../types/presentation";
 import {
+  getAnimationClipGroups,
   getAnimationClipSequenceContext,
   getAnimationPageClickSteps,
   type AddAnimationClipCommand,
   type AddAnimationKeyframeRequest,
+  type AnimationClipGroup,
   type AnimationClipSequenceContext,
   type DeleteAnimationClipCommand,
   type DeleteAnimationKeyframeCommand,
@@ -109,6 +111,10 @@ type VisibleClip = {
   targetNames: string[];
 };
 
+type VisibleClipGroup = AnimationClipGroup & {
+  clips: VisibleClip[];
+};
+
 type PageClickStepOption = {
   sequenceId: string;
   stepNumber: number;
@@ -147,11 +153,12 @@ export function AnimationTrackInspector({
     elements.map((element) => [element.id, element.name]),
   );
 
-  const visibleClips = getVisibleClips(
+  const visibleClipGroups = getVisibleClipGroups(
     scene,
     selectedElementIds,
     elementNameById,
   );
+  const visibleClips = visibleClipGroups.flatMap((group) => group.clips);
 
   const pageClickSteps = getAnimationPageClickSteps(scene).map(
     (sequence, index) => ({
@@ -279,54 +286,88 @@ export function AnimationTrackInspector({
 
       {visibleClips.length > 0 ? (
         <div className="mt-4 space-y-3">
-          {visibleClips.map((item, index) => {
-            const requested = item.clip.id === visibleRequestedClip?.id;
+          {visibleClipGroups.map((group, groupIndex) => (
+            <section
+              key={group.id}
+              className="overflow-hidden rounded-2xl border border-slate-200 bg-white/70"
+            >
+              <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-slate-100/80 px-3 py-2.5">
+                <div className="min-w-0">
+                  <h4 className="truncate text-xs font-black text-slate-700">
+                    {getClipGroupTitle(group)}
+                  </h4>
 
-            const hasExternalFocusRequest =
-              visibleRequestedClip !== undefined &&
-              requestedClipRequestId !== undefined;
+                  <p className="mt-0.5 truncate text-[10px] font-bold text-slate-400">
+                    {getClipGroupTriggerLabel(group)}
+                  </p>
+                </div>
 
-            const selectionElementId =
-              item.clip.targets.find((target) =>
-                selectedElementIds.has(target.elementId),
-              )?.elementId ?? item.clip.targets[0]?.elementId;
+                <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[9px] font-black text-slate-500 shadow-sm">
+                  {group.clips.length} 个 Clip
+                </span>
+              </div>
 
-            return (
-              <AnimationClipCard
-                key={`${item.clip.id}-${
-                  hasExternalFocusRequest ? requestedClipRequestId : 0
-                }`}
-                item={item}
-                defaultOpen={hasExternalFocusRequest ? requested : index === 0}
-                active={item.clip.id === resolvedActiveClipId}
-                focusRequestId={requested ? requestedClipRequestId : undefined}
-                onActivate={() => {
-                  setActiveClipState({
-                    clipId: item.clip.id,
-                    requestId:
-                      requestedClipRequestId ?? activeClipState?.requestId ?? 0,
-                  });
+              <div className="space-y-3 p-3">
+                {group.clips.map((item, clipIndex) => {
+                  const requested =
+                    item.clip.id === visibleRequestedClip?.id;
 
-                  if (selectionElementId) {
-                    onSelectClip?.(selectionElementId, item.clip.id);
-                  }
-                }}
-                onDuplicateClip={onDuplicateClip}
-                onDeleteClip={onDeleteClip}
-                onSetClipTrigger={onSetClipTrigger}
-                onMoveClipToClickStep={onMoveClipToClickStep}
-                pageClickSteps={pageClickSteps}
-                onUpdateClipTiming={onUpdateClipTiming}
-                onUpdateKeyframeValue={onUpdateKeyframeValue}
-                onUpdateKeyframeEasing={onUpdateKeyframeEasing}
-                onUpdateKeyframeOffset={onUpdateKeyframeOffset}
-                onAddKeyframe={onAddKeyframe}
-                onDeleteKeyframe={onDeleteKeyframe}
-                onBeginChange={onBeginChange}
-                onFinishChange={onFinishChange}
-              />
-            );
-          })}
+                  const hasExternalFocusRequest =
+                    visibleRequestedClip !== undefined &&
+                    requestedClipRequestId !== undefined;
+
+                  const selectionElementId =
+                    item.clip.targets.find((target) =>
+                      selectedElementIds.has(target.elementId),
+                    )?.elementId ?? item.clip.targets[0]?.elementId;
+
+                  return (
+                    <AnimationClipCard
+                      key={`${item.clip.id}-${
+                        hasExternalFocusRequest ? requestedClipRequestId : 0
+                      }`}
+                      item={item}
+                      defaultOpen={
+                        hasExternalFocusRequest
+                          ? requested
+                          : groupIndex === 0 && clipIndex === 0
+                      }
+                      active={item.clip.id === resolvedActiveClipId}
+                      focusRequestId={
+                        requested ? requestedClipRequestId : undefined
+                      }
+                      onActivate={() => {
+                        setActiveClipState({
+                          clipId: item.clip.id,
+                          requestId:
+                            requestedClipRequestId ??
+                            activeClipState?.requestId ??
+                            0,
+                        });
+
+                        if (selectionElementId) {
+                          onSelectClip?.(selectionElementId, item.clip.id);
+                        }
+                      }}
+                      onDuplicateClip={onDuplicateClip}
+                      onDeleteClip={onDeleteClip}
+                      onSetClipTrigger={onSetClipTrigger}
+                      onMoveClipToClickStep={onMoveClipToClickStep}
+                      pageClickSteps={pageClickSteps}
+                      onUpdateClipTiming={onUpdateClipTiming}
+                      onUpdateKeyframeValue={onUpdateKeyframeValue}
+                      onUpdateKeyframeEasing={onUpdateKeyframeEasing}
+                      onUpdateKeyframeOffset={onUpdateKeyframeOffset}
+                      onAddKeyframe={onAddKeyframe}
+                      onDeleteKeyframe={onDeleteKeyframe}
+                      onBeginChange={onBeginChange}
+                      onFinishChange={onFinishChange}
+                    />
+                  );
+                })}
+              </div>
+            </section>
+          ))}
         </div>
       ) : (
         <div className="mt-4 rounded-xl border border-dashed border-slate-200 bg-white p-4 text-center">
@@ -1719,44 +1760,82 @@ function TrackBadge({ value }: { value: string }) {
   );
 }
 
-function getVisibleClips(
+function getVisibleClipGroups(
   scene: AnimationScene | undefined,
   selectedElementIds: Set<string>,
   elementNameById: Map<string, string>,
-): VisibleClip[] {
+): VisibleClipGroup[] {
   if (!scene || scene.schemaVersion !== 2) {
     return [];
   }
 
-  return Object.values(scene.clips)
-    .filter((clip) =>
-      clip.targets.some((target) => selectedElementIds.has(target.elementId)),
-    )
-    .map((clip) => {
-      const sequenceContext = getAnimationClipSequenceContext(scene, clip.id);
-      const targetNames = Array.from(
-        new Set(
-          clip.targets
-            .filter((target) => selectedElementIds.has(target.elementId))
-            .map(
-              (target) =>
-                elementNameById.get(target.elementId) ?? target.elementId,
-            ),
-        ),
-      );
+  return getAnimationClipGroups(scene)
+    .map((group) => ({
+      ...group,
+      clips: group.clipIds.flatMap((clipId) => {
+        const clip = scene.clips[clipId];
 
-      return {
-        clip,
-        sequenceName: sequenceContext?.sequenceName ?? "未归入序列",
-        sequenceContext,
-        targetNames,
-      };
-    })
-    .sort(
-      (left, right) =>
-        left.clip.startMs - right.clip.startMs ||
-        left.clip.name.localeCompare(right.clip.name),
-    );
+        if (
+          !clip ||
+          !clip.targets.some((target) =>
+            selectedElementIds.has(target.elementId),
+          )
+        ) {
+          return [];
+        }
+
+        const sequenceContext = getAnimationClipSequenceContext(
+          scene,
+          clip.id,
+        );
+        const targetNames = Array.from(
+          new Set(
+            clip.targets
+              .filter((target) =>
+                selectedElementIds.has(target.elementId),
+              )
+              .map(
+                (target) =>
+                  elementNameById.get(target.elementId) ?? target.elementId,
+              ),
+          ),
+        );
+
+        return [
+          {
+            clip,
+            sequenceName: sequenceContext?.sequenceName ?? "未归入序列",
+            sequenceContext,
+            targetNames,
+          },
+        ];
+      }),
+    }))
+    .filter((group) => group.clips.length > 0);
+}
+
+function getClipGroupTitle(group: VisibleClipGroup) {
+  switch (group.type) {
+    case "slide-enter":
+      return "页面进入自动播放";
+    case "page-click":
+      return group.clickStepNumber
+        ? `点击步骤 · Step ${group.clickStepNumber}`
+        : "点击步骤";
+    case "other":
+      return "其他触发方式";
+  }
+}
+
+function getClipGroupTriggerLabel(group: VisibleClipGroup) {
+  switch (group.type) {
+    case "slide-enter":
+      return "页面进入时自动触发";
+    case "page-click":
+      return "页面点击触发";
+    case "other":
+      return "高级触发或未归入 Sequence";
+  }
 }
 
 function getEditableTriggerType(

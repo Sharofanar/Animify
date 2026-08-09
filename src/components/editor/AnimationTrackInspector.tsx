@@ -9,12 +9,14 @@ import type {
 } from "../../types/presentation";
 import {
   getAnimationClipSequenceContext,
+  getAnimationPageClickSteps,
   type AddAnimationClipCommand,
   type AddAnimationKeyframeRequest,
   type AnimationClipSequenceContext,
   type DeleteAnimationClipCommand,
   type DeleteAnimationKeyframeCommand,
   type DuplicateAnimationClipCommand,
+  type MoveAnimationClipToClickStepCommand,
   type SetAnimationClipTriggerRequest,
   type UpdateAnimationClipTimingCommand,
   type UpdateAnimationKeyframeEasingCommand,
@@ -75,6 +77,9 @@ type AnimationTrackInspectorProps = {
   onDuplicateClip?: (command: DuplicateAnimationClipCommand) => void;
   onDeleteClip?: (command: DeleteAnimationClipCommand) => void;
   onSetClipTrigger?: (command: SetAnimationClipTriggerRequest) => void;
+  onMoveClipToClickStep?: (
+    command: MoveAnimationClipToClickStepCommand,
+  ) => void;
   onUpdateClipTiming?: (
     command: UpdateAnimationClipTimingCommand,
     options?: InspectorUpdateOptions,
@@ -104,6 +109,11 @@ type VisibleClip = {
   targetNames: string[];
 };
 
+type PageClickStepOption = {
+  sequenceId: string;
+  stepNumber: number;
+};
+
 /**
  * Read and edit Animation Schema V2 clips, tracks, and keyframes for the
  * currently checked property-panel targets.
@@ -121,6 +131,7 @@ export function AnimationTrackInspector({
   onDuplicateClip,
   onDeleteClip,
   onSetClipTrigger,
+  onMoveClipToClickStep,
   onUpdateClipTiming,
   onUpdateKeyframeValue,
   onUpdateKeyframeEasing,
@@ -140,6 +151,13 @@ export function AnimationTrackInspector({
     scene,
     selectedElementIds,
     elementNameById,
+  );
+
+  const pageClickSteps = getAnimationPageClickSteps(scene).map(
+    (sequence, index) => ({
+      sequenceId: sequence.id,
+      stepNumber: index + 1,
+    }),
   );
 
   const [newClipPresetId, setNewClipPresetId] = useState(
@@ -296,6 +314,8 @@ export function AnimationTrackInspector({
                 onDuplicateClip={onDuplicateClip}
                 onDeleteClip={onDeleteClip}
                 onSetClipTrigger={onSetClipTrigger}
+                onMoveClipToClickStep={onMoveClipToClickStep}
+                pageClickSteps={pageClickSteps}
                 onUpdateClipTiming={onUpdateClipTiming}
                 onUpdateKeyframeValue={onUpdateKeyframeValue}
                 onUpdateKeyframeEasing={onUpdateKeyframeEasing}
@@ -331,6 +351,8 @@ function AnimationClipCard({
   onDuplicateClip,
   onDeleteClip,
   onSetClipTrigger,
+  onMoveClipToClickStep,
+  pageClickSteps,
   onUpdateClipTiming,
   onUpdateKeyframeValue,
   onUpdateKeyframeEasing,
@@ -348,6 +370,10 @@ function AnimationClipCard({
   onDuplicateClip?: (command: DuplicateAnimationClipCommand) => void;
   onDeleteClip?: (command: DeleteAnimationClipCommand) => void;
   onSetClipTrigger?: (command: SetAnimationClipTriggerRequest) => void;
+  onMoveClipToClickStep?: (
+    command: MoveAnimationClipToClickStepCommand,
+  ) => void;
+  pageClickSteps: PageClickStepOption[];
   onUpdateClipTiming?: (
     command: UpdateAnimationClipTimingCommand,
     options?: InspectorUpdateOptions,
@@ -375,6 +401,12 @@ function AnimationClipCard({
 
   const { clip, sequenceName, sequenceContext, targetNames } = item;
   const editableTriggerType = getEditableTriggerType(sequenceContext);
+  const triggerSelection =
+    editableTriggerType === "slide-enter"
+      ? "slide-enter"
+      : editableTriggerType === "click" && sequenceContext
+        ? `step:${sequenceContext.sequenceId}`
+        : "unsupported";
 
   /**
    * Scrolling is a DOM synchronization side effect, so it does not duplicate
@@ -501,29 +533,58 @@ function AnimationClipCard({
 
             <select
               className="mt-3 w-full rounded-xl bg-white px-3 py-2 text-xs font-bold text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-sky-300 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-300"
-              value={editableTriggerType ?? "unsupported"}
-              disabled={!editableTriggerType || !onSetClipTrigger}
+              value={triggerSelection}
+              disabled={
+                !editableTriggerType ||
+                (!onSetClipTrigger && !onMoveClipToClickStep)
+              }
               onChange={(event) => {
-                const triggerType = event.target.value;
+                const selection = event.target.value;
 
-                if (
-                  triggerType !== "slide-enter" &&
-                  triggerType !== "click"
-                ) {
+                if (selection === "slide-enter") {
+                  onSetClipTrigger?.({
+                    clipId: clip.id,
+                    triggerType: "slide-enter",
+                  });
                   return;
                 }
 
-                onSetClipTrigger?.({
-                  clipId: clip.id,
-                  triggerType,
-                });
+                if (selection === "new-click-step") {
+                  onSetClipTrigger?.({
+                    clipId: clip.id,
+                    triggerType: "click",
+                    createNewClickStep: true,
+                  });
+                  return;
+                }
+
+                if (selection.startsWith("step:")) {
+                  onMoveClipToClickStep?.({
+                    clipId: clip.id,
+                    targetSequenceId: selection.slice("step:".length),
+                  });
+                }
               }}
             >
               {!editableTriggerType ? (
                 <option value="unsupported">当前触发方式暂不可编辑</option>
-              ) : null}
-              <option value="slide-enter">进入页面时自动播放</option>
-              <option value="click">点击后播放（新步骤）</option>
+              ) : (
+                <>
+                  <option value="slide-enter">进入页面时自动播放</option>
+                  <option value="new-click-step">点击后播放（新步骤）</option>
+                  {pageClickSteps.map((step) => (
+                    <option
+                      key={step.sequenceId}
+                      value={`step:${step.sequenceId}`}
+                    >
+                      加入 Step {step.stepNumber}
+                      {step.sequenceId === sequenceContext?.sequenceId
+                        ? "（当前）"
+                        : ""}
+                    </option>
+                  ))}
+                </>
+              )}
             </select>
 
             <p className="mt-2 text-[10px] leading-4 text-sky-700/70">

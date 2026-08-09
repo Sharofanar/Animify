@@ -44,6 +44,7 @@ import {
   deleteAnimationKeyframeFromSlide,
   duplicateAnimationClipInSlide,
   isAnimationClipLiveForElements,
+  moveAnimationClipToClickStepInSlide,
   setAnimationClipTriggerInSlide,
   updateAnimationClipEasingInSlide,
   updateAnimationClipTimingInSlide,
@@ -55,6 +56,7 @@ import {
   type DeleteAnimationClipCommand,
   type DeleteAnimationKeyframeCommand,
   type DuplicateAnimationClipCommand,
+  type MoveAnimationClipToClickStepCommand,
   type SetAnimationClipTriggerRequest,
   type UpdateAnimationClipEasingCommand,
   type UpdateAnimationClipTimingCommand,
@@ -3453,6 +3455,43 @@ function App() {
   }
 
   /**
+   * Move one Clip into an existing page Click Step as one undo transaction.
+   * Existing Sequence IDs are stable, so this path needs no operation identity.
+   */
+  function handleMoveAnimationClipToClickStep(
+    command: MoveAnimationClipToClickStepCommand,
+  ) {
+    commitProjectChange((currentProject) => {
+      let changed = false;
+
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        const nextSlide = moveAnimationClipToClickStepInSlide(slide, command);
+
+        if (nextSlide === slide) {
+          return slide;
+        }
+
+        changed = true;
+        return nextSlide;
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    });
+  }
+
+  /**
    * Update several V2 Clips through one project transaction.
    *
    * Regardless of how many selected elements are changed, the batch creates only
@@ -5168,6 +5207,7 @@ function App() {
         onDuplicateClip={handleDuplicateAnimationClip}
         onDeleteClip={handleDeleteAnimationClip}
         onSetClipTrigger={handleSetAnimationClipTrigger}
+        onMoveClipToClickStep={handleMoveAnimationClipToClickStep}
         onUpdateClipTiming={handleUpdateAnimationClipTiming}
         onUpdateElements={handleUpdateElements}
         onUpdateClipTimings={handleUpdateAnimationClipTimings}

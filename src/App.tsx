@@ -44,6 +44,7 @@ import {
   deleteAnimationKeyframeFromSlide,
   duplicateAnimationClipInSlide,
   isAnimationClipLiveForElements,
+  moveAnimationClickStepInSlide,
   moveAnimationClipToClickStepInSlide,
   setAnimationClipTriggerInSlide,
   updateAnimationClipEasingInSlide,
@@ -56,6 +57,7 @@ import {
   type DeleteAnimationClipCommand,
   type DeleteAnimationKeyframeCommand,
   type DuplicateAnimationClipCommand,
+  type MoveAnimationClickStepCommand,
   type MoveAnimationClipToClickStepCommand,
   type SetAnimationClipTriggerRequest,
   type UpdateAnimationClipEasingCommand,
@@ -3492,6 +3494,43 @@ function App() {
   }
 
   /**
+   * Reorder one complete page Click Step as one undo transaction. The Sequence
+   * command owns global ordering; App keeps selection and active Clip intact.
+   */
+  function handleMoveAnimationClickStep(
+    command: MoveAnimationClickStepCommand,
+  ) {
+    commitProjectChange((currentProject) => {
+      let changed = false;
+
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== currentProject.activeSlideId) {
+          return slide;
+        }
+
+        const nextSlide = moveAnimationClickStepInSlide(slide, command);
+
+        if (nextSlide === slide) {
+          return slide;
+        }
+
+        changed = true;
+        return nextSlide;
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    });
+  }
+
+  /**
    * Update several V2 Clips through one project transaction.
    *
    * Regardless of how many selected elements are changed, the batch creates only
@@ -5208,6 +5247,7 @@ function App() {
         onDeleteClip={handleDeleteAnimationClip}
         onSetClipTrigger={handleSetAnimationClipTrigger}
         onMoveClipToClickStep={handleMoveAnimationClipToClickStep}
+        onMoveClickStep={handleMoveAnimationClickStep}
         onUpdateClipTiming={handleUpdateAnimationClipTiming}
         onUpdateElements={handleUpdateElements}
         onUpdateClipTimings={handleUpdateAnimationClipTimings}

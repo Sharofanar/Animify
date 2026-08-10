@@ -18,6 +18,7 @@ import {
   type DeleteAnimationClipCommand,
   type DeleteAnimationKeyframeCommand,
   type DuplicateAnimationClipCommand,
+  type MoveAnimationClickStepCommand,
   type MoveAnimationClipToClickStepCommand,
   type SetAnimationClipTriggerRequest,
   type UpdateAnimationClipTimingCommand,
@@ -82,6 +83,7 @@ type AnimationTrackInspectorProps = {
   onMoveClipToClickStep?: (
     command: MoveAnimationClipToClickStepCommand,
   ) => void;
+  onMoveClickStep?: (command: MoveAnimationClickStepCommand) => void;
   onUpdateClipTiming?: (
     command: UpdateAnimationClipTimingCommand,
     options?: InspectorUpdateOptions,
@@ -138,6 +140,7 @@ export function AnimationTrackInspector({
   onDeleteClip,
   onSetClipTrigger,
   onMoveClipToClickStep,
+  onMoveClickStep,
   onUpdateClipTiming,
   onUpdateKeyframeValue,
   onUpdateKeyframeEasing,
@@ -302,9 +305,59 @@ export function AnimationTrackInspector({
                   </p>
                 </div>
 
-                <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[9px] font-black text-slate-500 shadow-sm">
-                  {group.clips.length} 个 Clip
-                </span>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {group.type === "page-click" && group.sequenceId
+                    ? (() => {
+                        const globalStepIndex = pageClickSteps.findIndex(
+                          (step) => step.sequenceId === group.sequenceId,
+                        );
+
+                        return (
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              className="grid h-7 w-7 place-items-center rounded-lg bg-white text-xs font-black text-sky-600 shadow-sm transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white"
+                              title="上移点击步骤"
+                              aria-label="上移点击步骤"
+                              disabled={!onMoveClickStep || globalStepIndex <= 0}
+                              onClick={() =>
+                                onMoveClickStep?.({
+                                  sequenceId: group.sequenceId!,
+                                  clickStepIndex: globalStepIndex - 1,
+                                })
+                              }
+                            >
+                              ↑
+                            </button>
+
+                            <button
+                              type="button"
+                              className="grid h-7 w-7 place-items-center rounded-lg bg-white text-xs font-black text-sky-600 shadow-sm transition hover:bg-sky-50 disabled:cursor-not-allowed disabled:text-slate-300 disabled:hover:bg-white"
+                              title="下移点击步骤"
+                              aria-label="下移点击步骤"
+                              disabled={
+                                !onMoveClickStep ||
+                                globalStepIndex < 0 ||
+                                globalStepIndex >= pageClickSteps.length - 1
+                              }
+                              onClick={() =>
+                                onMoveClickStep?.({
+                                  sequenceId: group.sequenceId!,
+                                  clickStepIndex: globalStepIndex + 1,
+                                })
+                              }
+                            >
+                              ↓
+                            </button>
+                          </div>
+                        );
+                      })()
+                    : null}
+
+                  <span className="rounded-full bg-white px-2.5 py-1 text-[9px] font-black text-slate-500 shadow-sm">
+                    {group.clips.length} 个 Clip
+                  </span>
+                </div>
               </div>
 
               <div className="space-y-3 p-3">

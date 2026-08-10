@@ -558,8 +558,9 @@ export function setAnimationSequenceTriggerInSlide(
 }
 
 /**
- * Move one Click Step while preserving all non-click Sequence positions. This
- * keeps sequenceOrder as the only persisted ordering source.
+ * Move one page-level Click Step while preserving every non-page-click
+ * Sequence position. The shared live-Step query remains the single source for
+ * numbering, boundary no-ops, and the order consumed by Stage 6 UI.
  */
 export function moveAnimationClickStepInSlide(
   slide: Slide,
@@ -583,26 +584,27 @@ export function moveAnimationClickStepInSlide(
   const orderedSequenceIds = getOrderedAnimationSequences(scene).map(
     (currentSequence) => currentSequence.id,
   );
-  const clickStepIds = orderedSequenceIds.filter(
-    (sequenceId) => scene.sequences[sequenceId]?.trigger.type === "click",
+  const pageClickStepIds = getAnimationPageClickSteps(scene).map(
+    (currentSequence) => currentSequence.id,
   );
-  const sourceIndex = clickStepIds.indexOf(sequence.id);
+  const sourceIndex = pageClickStepIds.indexOf(sequence.id);
   const targetIndex = Math.min(
     Math.max(0, Math.round(command.clickStepIndex)),
-    clickStepIds.length - 1,
+    pageClickStepIds.length - 1,
   );
 
   if (sourceIndex < 0 || sourceIndex === targetIndex) {
     return slide;
   }
 
-  const reorderedClickStepIds = [...clickStepIds];
+  const reorderedClickStepIds = [...pageClickStepIds];
   const [movedSequenceId] = reorderedClickStepIds.splice(sourceIndex, 1);
   reorderedClickStepIds.splice(targetIndex, 0, movedSequenceId);
 
+  const pageClickStepIdSet = new Set(pageClickStepIds);
   let clickStepCursor = 0;
   const nextSequenceOrder = orderedSequenceIds.map((sequenceId) => {
-    if (scene.sequences[sequenceId]?.trigger.type !== "click") {
+    if (!pageClickStepIdSet.has(sequenceId)) {
       return sequenceId;
     }
 

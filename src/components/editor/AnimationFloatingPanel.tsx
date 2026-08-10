@@ -15,6 +15,7 @@ import type {
   DeleteAnimationClipCommand,
   DeleteAnimationKeyframeCommand,
   DuplicateAnimationClipCommand,
+  MoveAnimationClickStepCommand,
   MoveAnimationClipToClickStepCommand,
   SetAnimationClipTriggerRequest,
   UpdateAnimationClipEasingCommand,
@@ -54,6 +55,7 @@ type AnimationFloatingPanelProps = {
   onMoveClipToClickStep?: (
     command: MoveAnimationClipToClickStepCommand,
   ) => void;
+  onMoveClickStep?: (command: MoveAnimationClickStepCommand) => void;
   onUpdateClipTiming?: (
     command: UpdateAnimationClipTimingCommand,
     options?: AnimationEditOptions,
@@ -171,6 +173,7 @@ export function AnimationFloatingPanel({
   onDeleteClip,
   onSetClipTrigger,
   onMoveClipToClickStep,
+  onMoveClickStep,
   onUpdateClipTiming,
   onUpdateElements,
   onUpdateClipTimings,
@@ -426,6 +429,7 @@ export function AnimationFloatingPanel({
               onDeleteClip={onDeleteClip}
               onSetClipTrigger={onSetClipTrigger}
               onMoveClipToClickStep={onMoveClipToClickStep}
+              onMoveClickStep={onMoveClickStep}
               onUpdateClipTiming={onUpdateClipTiming}
               onUpdateKeyframeValue={onUpdateKeyframeValue}
               onUpdateKeyframeEasing={onUpdateKeyframeEasing}
@@ -472,6 +476,7 @@ export function AnimationFloatingPanel({
             onDeleteClip={onDeleteClip}
             onSetClipTrigger={onSetClipTrigger}
             onMoveClipToClickStep={onMoveClipToClickStep}
+            onMoveClickStep={onMoveClickStep}
             onUpdateClipTiming={onUpdateClipTiming}
             onUpdateKeyframeValue={onUpdateKeyframeValue}
             onUpdateKeyframeEasing={onUpdateKeyframeEasing}

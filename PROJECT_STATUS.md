@@ -8,6 +8,7 @@
 > Stage 6 第三 Batch 开始基线：`c6ceddada0aa73bd547f88cdc9a432f6f58695b5 feat: group clips in click steps`
 > Stage 6 第四 Batch 开始基线：`286c9d48abb0f0be530dec50aec0735a0738e0ce feat: group animation clips by step`
 > Stage 6 第五 Batch 开始基线：`1eece89743205ba69720fbf91b2d3091800fc99f feat: reorder click steps`
+> Stage 7 第一 Batch 开始基线：`2798fed27c73b3c10f72dca05b0dad23cca2d63a docs: define stage 7 timeline architecture`
 
 本文档是 Animify 当前开发状态的长期事实来源。
 
@@ -1614,7 +1615,7 @@ Batch 2 当前明确禁止移动：
 
 - 不与第 5 阶段 HTML Click Step 同步混合开发。
 - 不提前实现第 6 阶段 Click Step 编辑 UI 或第 7 阶段 Timeline V2-C。
-- Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成；Batch 2 前置只读架构审计已完成；Pending Media Interaction Fix 已通过自动检查和人工 QA。Batch 3C-3、Batch 4 与 Batch 5 暂缓；Stage 6 第一至第五 Batch 均已验证完成，Stage 6 整体 COMPLETE，Stage 7 仍未开始。
+- Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成；Batch 2 前置只读架构审计已完成；Pending Media Interaction Fix 已通过自动检查和人工 QA。Batch 3C-3、Batch 4 与 Batch 5 暂缓；Stage 6 第一至第五 Batch 均已验证完成，Stage 6 整体 COMPLETE；Stage 7 第一 Batch 已完成并通过人工 QA，下一入口为 Stage 7 第二 Batch。
 
 ### 第 6 阶段：Click Step 编辑界面
 
@@ -1882,7 +1883,65 @@ Stage 6 完成结论：
 
 ### 第 7 阶段：Timeline V2-C
 
-状态：**计划开发，尚未开始**
+状态：**IN PROGRESS；第一 Batch COMPLETE / MANUAL QA PASSED（2026-08-11）；第二 Batch 尚未开始**
+
+#### 第一 Batch：Timeline View Model Foundation
+
+状态：**COMPLETE；MANUAL QA PASSED（2026-08-11）**
+
+本 Batch 建立唯一、纯的 `AnimationScene → AnimationTimelineViewModel` 读取层：
+
+```text
+AnimationScene
+→ src/utils/animationTimeline.ts
+→ AnimationTimelineViewModel
+→ App useMemo
+→ AnimationTimeline
+```
+
+最终实现与语义：
+
+- 新增 `src/utils/animationTimeline.ts`；唯一新增 runtime public API 为 `getAnimationTimelineViewModel`，并导出明确的 Timeline 派生类型。Timeline hierarchy、ownership、target、duration、protection 与 Keyframe display data 统一由该纯 read/query model 生成。
+- Sequence groups 按第一条有效 primary `slide-enter`、有效 targetless page-click Steps、protected / historical data 排列；global Step N 继续由共享 normal page-click query 动态派生，不持久化 Step number，也不按跨 Sequence `startMs`、Clip ID 或当前 element 局部列表排序。
+- `Clip.startMs` 继续严格表示所属 Sequence 的 local offset；没有跨 Sequence 累加、page-global timing 字段、Scene timing 改写或 schema 变更。Sequence semantic duration 复用 `getAnimationSequenceLocalDurationMs`。
+- `rulerExtentMs` 只表达最低 4 秒、末尾 750ms padding 与刻度布局；不充当 semantic playback duration。现有 page-flat editor clock、Playhead、play / pause / seek 与 controller 语义暂时保持，留给第二 Batch 处理 active Sequence / Sequence-local Playhead。
+- Timeline Object rows 从 `Sequence → live Clip → live target` 派生；不再遍历全部 `slide.elements` 创建空行。无动画 element 不显示“暂无动画”Timeline row，但 Canvas 上的元素及编辑能力不受影响。
+- 同一 Object 的多个 Clip 全部保留，顺序来自 Sequence order + `Sequence.clipIds`。一个 multi-target Clip 只有一个 canonical Clip identity，以 targets 中第一个真实存在的 element 作为确定性 anchor，其余 target IDs 与 availability 全部保留。
+- live + missing target 继续显示 live target 并保留 diagnostics；all-missing target 不伪造 Object row，进入 protected / unanchored model。orphan Clip 进入仅存在于 View Model 的 synthetic protected group；ambiguous ownership 只产生一个 canonical entry；additional slide-enter、omitted `sequenceOrder`、advanced 与 malformed data 均保持 protected / diagnostic。
+- Track 保持 authored order；Keyframe 使用现有排序规则，保留 identity 与 raw offset，并派生安全 display offset / Sequence-local display time。读取过程不修改 Track、Keyframe、offset、duration、targets、clipIds 或 sequenceOrder。
+- protected UI 只提供最小只读投影、计数、颜色与原因提示；没有 repair button、migration 或 normalization。整个 Batch 为零 document/schema mutation、零 Scene repair。
+- Selection source 未重写：Element selection 继续由 App 持有，active Clip 继续来自 `activeAnimationContext`，Timeline callback 继续传真实 `clipId`。没有新增 `timelineSelectedClip`、`activeSequenceId`、`selectedSequenceId`、Track selection 或 Keyframe selection。
+- App 只以 `useMemo` 构建 View Model、把 model 传给 Timeline，并从兼容字段读取旧 controller duration；`AnimationTimeline` 删除 raw element grouping、ownership inference、Clip regrouping、duration 与 Keyframe projection 业务规则，同时保留 zoom、scroll、ruler、现有 Playhead、controls 与 semantic callbacks。
+- `useTimelinePlaybackController`、current time、preview range、`SlideCanvas` sampling、Presentation runtime/state machine、standalone HTML Export runtime 与 Hidden Media lifecycle 均未修改。
+
+最终自动检查（2026-08-11，基于收尾源码重新执行）：
+
+- Timeline View Model、Stage 6、Keyframe Commands、current Timeline compatibility duration、Presentation 与 Export 综合回归：**61 项**通过。
+- protected / compatibility / purity 边界：**29 项**通过。
+- UI / App / domain static contract：**18 项**通过。
+- 本次收尾实际共 **108 项断言**通过；均通过不落盘 Node / TypeScript 内存脚本执行，没有留下临时脚本或 QA 数据。
+- TypeScript import graph：42 modules、111 internal edges、0 cycles。
+- `npm.cmd run lint`：通过。
+- `npm.cmd run build`：通过；仅保留既有 `> 500 kB` chunk warning（主 JS 约 528.13 kB），继续视为 non-blocking warning。
+- `git diff --check`、未跟踪新文件的独立 whitespace check 与提交前 `git diff --cached --check` 均通过；仅有既有 LF / CRLF 转换提示。
+
+人工 QA（2026-08-11）：
+
+1. A / B / C / D 中只有 A、C 有动画时，Timeline 只显示 A / C；B / D 不再产生空动画行，Canvas 上仍可正常存在、选择和编辑。
+2. 同一 Object 多 Clip 全部正确显示并与 active Clip、Property Panel、Animation Workspace 对应；0–600ms、600–1200ms 与 2000–2600ms 的 Sequence-local Timeline projection 均正确。
+3. auto、Step 1、Step 2、multi-Clip Step、Clip selection、Workspace grouping 与 Presentation smoke 全部通过；global Step order、Sequence-local timing 和 Presentation 行为未改变。
+
+已知非阻塞 UI 文案问题：
+
+- Animation Workspace 可能同时显示持久化 `Sequence.name`（例如“点击步骤 3”）与动态派生的“点击播放 · Step 2”。这是 Sequence name / dynamic Step wording 冲突，不属于本 Batch timing 或 View Model 缺陷；本次只记录，不修改 Sequence name 或 Step numbering。
+
+Stage 7 Batch 4 candidate UX（pending design confirmation，本次未实现）：
+
+- 未来评估跨 Sequence move 默认把 `startMs` 设为 0，并按相同 / 相交 targets 检测 timing overlap。
+- overlap 只提供非阻塞提示，同时允许“接在后面”或保持并行动画；建议的“接在后面”时间基于相关 targets 的最大 effective local end，优先复用现有 effective/local-end helpers，并让 multi-target Clip 检查 targets intersection。
+- 该建议不是已锁定 architecture invariant；本 Batch 没有修改 Stage 6 join / move command。
+
+下一开发入口：**Stage 7 第二 Batch — Active Sequence / Sequence-local Playhead**。本次只记录入口，未新增 `activeSequenceId`、Sequence-local controller context、completed / active / pending editor samples 或 Canvas sampling rewrite；第二 Batch 开始前必须重新确认独立范围。
 
 正式产品设计：
 
@@ -2732,6 +2791,20 @@ Standalone HTML 重新验证结论：
 
 状态：**已确认独立 UX；待后续诊断 / 修复，本轮未解决。**
 
+### 23. Sequence name / 动态 Step 编号文案冲突
+
+现象：
+
+- Animation Workspace 可能同时显示持久化 `Sequence.name`（例如“点击步骤 3”）与当前根据有效全局 page-click 顺序动态派生的“点击播放 · Step 2”。
+
+分类与边界：
+
+- 属于 Sequence display wording / stale authored name UX，不是 Stage 7 第一 Batch View Model timing、global Step query 或 Sequence-local projection 错误。
+- 动态 Step N 继续以共享 page-click query 为准；本轮不重命名 Sequence，不改 Step numbering，也不执行文档 migration。
+- 后续应独立确定 persisted name 与动态 trigger label 的展示优先级。
+
+状态：**人工 QA 已确认非阻塞文案问题；仅记录，未修复。**
+
 ---
 
 ## 十、最近测试状态
@@ -2905,7 +2978,9 @@ GitHub 状态：已 push
 2026-08-10：第四 Batch 基于收尾源码重新执行 60 项 domain / global ordering / UI / App / Presentation / Export 断言、Lint、Build、Diff 与 import-cycle 检查，全部通过
 2026-08-11：Stage 6 第五 Batch“Invalid Sequence Protection UI / Product Closure”完成；normal / protected capability、single-source effective Step query、command no-op、无自动文档修复与 Presentation query 对齐已闭环，三条人工 QA 结论为 PASSED（advanced UI 记录 MANUAL UI NOT REACHABLE / AUTOMATED COVERAGE PASSED）
 2026-08-11：第五 Batch 基于收尾源码重新执行 101 项 invalid / protection / Batch 1–4 / UI / Presentation / Export 断言、Lint、Build、Diff 与 import-cycle 检查，全部通过；最终审查同时补强 reorder 对 omitted / duplicate / missing `sequenceOrder` 引用的保持
-当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成；Stage 5.5 架构拆分暂停于稳定边界，Batch 3C-3、Batch 4 与 Batch 5 暂缓；Stage 6 第一至第五 Batch 均 COMPLETE / MANUAL QA PASSED，Stage 6 整体 COMPLETE；下一主要开发入口为 Stage 7 Timeline V2-C，Stage 7 尚未开始
+2026-08-11：Stage 7 第一 Batch“Timeline View Model Foundation”完成并通过三条人工 QA；animated-only Object rows、same Object multi-Clip、Sequence-local projection、Selection / Workspace 与 Presentation smoke 均通过
+2026-08-11：Stage 7 第一 Batch 收尾重新执行 61 项综合回归、29 项 protection / purity 边界和 18 项 UI / App / domain static contract，共 108 项断言；Lint、Build、Diff 与 import-cycle 检查全部通过
+当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成；Stage 5.5 架构拆分暂停于稳定边界，Batch 3C-3、Batch 4 与 Batch 5 暂缓；Stage 6 整体 COMPLETE；Stage 7 第一 Batch COMPLETE / MANUAL QA PASSED，下一开发入口为第二 Batch Active Sequence / Sequence-local Playhead，第二 Batch 尚未开始
 ```
 
 ---
@@ -2930,7 +3005,7 @@ GitHub 状态：已 push
 - Batch 2 前置只读架构审计已完成。Stage 5.5 Batch 2A“Project persistence adapter”已验证完成并 push；Video Bug Part A 已解决并完成人工 QA / Git 闭环。Export 现象当前无法复现，不启动 speculative repair；Batch 2B“Project document + history transaction”及 final no-op 修复已通过全部人工 QA 并成为稳定架构基线。Batch 3A 最小 Sequence Command Domain 已通过人工 QA，并通过 `d68ce74` 完成独立 Git 闭环；Batch 3B-1 Pure Element Command Facade 已完成自动检查、人工 QA 与独立 Git 闭环。
 - Pending Media Interaction Fix 已完成代码实现、自动检查和人工 QA，并纳入 `fix: sync pending media input ownership` 独立 Git 闭环；Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成。
 - Stage 5.5 architecture refactor paused at a stable boundary。Batch 3C-3、Batch 4 与 Batch 5 为暂缓架构债务，不是当前 required next step；Stage 6 第一至第五 Batch 均已完成并通过人工 QA，Stage 6 整体 COMPLETE。
-- 下一主要开发入口是 Stage 7“Timeline V2-C”；本次仅记录该入口，Stage 7 尚未开始，未经新的独立任务确认不得提前实现。
+- Stage 7 第一 Batch“Timeline View Model Foundation”已完成自动检查与三条人工 QA；下一主要开发入口是 Stage 7 第二 Batch“Active Sequence / Sequence-local Playhead”。第二 Batch 尚未开始，开始前必须单独确认范围。
 - Standalone Export Fullscreen Arrow-Key Seeking Fix 已完成根因修复、自动检查和人工 QA；浏览器原生 Video controls 继续负责全屏方向键 seek，Presentation 不消费这些按键。
 - Presentation Element Click Blocking Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 的普通展示元素 click 现在冒泡到统一推进路由，编辑模式选择与媒体控件输入保持不变。
 - Presentation Transient Text Editing / Selection Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 不再拥有双击 / textarea 编辑入口，Text / Shape / SVG 展示文字不再产生原生 Selection，编辑模式 textarea 语义保持不变。
@@ -2984,7 +3059,8 @@ git diff --cached
 29. Stage 6 第二 Batch 已允许一个 page-click Sequence 通过既有 `clipIds` 包含多个 Clip；加入已有 Step 保留 Clip / Track / Keyframe 和 Sequence-local `startMs`，维护唯一 ownership、源空 Step / `sequenceOrder` cleanup 与自动 Step renumbering。Inspector → FloatingPanel → App → Sequence command 继续保持 semantic routing，一个动作一个 History transaction，advanced trigger 与 no-op 保持保护。
 30. Stage 6 第三 Batch 已新增纯 `getAnimationClipGroups(scene)` 查询与 Inspector Step / Clip grouping UI；全局 page-click Step 编号在 selected-element filtering 之前派生，同一 Sequence 的 Clip 保持 `clipIds` 顺序，missing、duplicate ownership、orphan、advanced trigger 与额外 `slide-enter` ownership 均有安全呈现规则。该 Batch 不修改 schema、History、App orchestration、Presentation / Export runtime，也未实现 Step reorder。
 31. Stage 6 第四 Batch 已在 page-click group header 提供全局 Step 上移/下移，并复用 `moveAnimationClickStepInSlide`；`getAnimationPageClickSteps` 统一有效 reorder 集合，当前元素非连续可见 Step 仍与隐藏的全局相邻 Step 调换。multi-element / multi-Clip Sequence 整体移动，`clipIds`、Clip/Track/Keyframe、Sequence-local `startMs`、trigger 与 playback 保持；App 继续拥有单次 History transaction 与 actual-only Preview cleanup。
-32. Stage 6 第五 Batch 已建立 `getAnimationClipOwnerSequences`、`getAnimationPrimarySlideEnterSequence`、`getAnimationClipStage6Capabilities` 与共享 `getAnimationPageClickSteps`，把 empty / missing-only / advanced / ambiguous / orphan / additional slide-enter / omitted state 排除在普通编辑路径之外；UI 只读保护与 command no-op 双层兜底，不执行自动文档修复。Presentation 仅对齐 effective Step query，Export runtime 未修改；Stage 6 整体 COMPLETE，下一入口为尚未开始的 Stage 7 Timeline V2-C。
+32. Stage 6 第五 Batch 已建立 `getAnimationClipOwnerSequences`、`getAnimationPrimarySlideEnterSequence`、`getAnimationClipStage6Capabilities` 与共享 `getAnimationPageClickSteps`，把 empty / missing-only / advanced / ambiguous / orphan / additional slide-enter / omitted state 排除在普通编辑路径之外；UI 只读保护与 command no-op 双层兜底，不执行自动文档修复。Presentation 仅对齐 effective Step query，Export runtime 未修改；Stage 6 整体 COMPLETE。
+33. Stage 7 第一 Batch 已新增纯 `animationTimeline.ts` / `getAnimationTimelineViewModel`，统一 normal / protected Sequence、global Step number、canonical Clip、animated Object row、target、Track / Keyframe、semantic duration 与 diagnostics 读取模型；App 只做 `useMemo` orchestration，Timeline 不再遍历全部元素创建空行。Sequence-local `startMs`、旧 Playhead/controller、Canvas sampling、Presentation 与 Export 语义未修改；下一入口为尚未开始的第二 Batch Active Sequence / Sequence-local Playhead。
 
 ### Git 状态说明
 
@@ -3021,5 +3097,7 @@ git diff --cached
 - Stage 6 第四 Batch 最终范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/AnimationFloatingPanel.tsx`、`src/components/editor/AnimationTrackInspector.tsx`、`src/utils/animationSequenceCommands.ts`，提交信息为 `feat: reorder click steps`。
 - Stage 6 第五 Batch 开始基线：`main`、本地 `origin/main` 均为 `1eece89743205ba69720fbf91b2d3091800fc99f`，ahead 0、behind 0，开始前工作区与暂存区干净。
 - Stage 6 第五 Batch 最终范围固定为 `PROJECT_STATUS.md`、`src/components/editor/AnimationTrackInspector.tsx`、`src/utils/animationCommands.ts`、`src/utils/animationSequence.ts`、`src/utils/animationSequenceCommands.ts`、`src/utils/presentationPlayback.ts`，提交信息为 `feat: protect invalid animation sequences`。
+- Stage 7 第一 Batch 开始基线：`main`、本地 `origin/main` 均为 `2798fed27c73b3c10f72dca05b0dad23cca2d63a`，ahead 0、behind 0，开始前工作区与暂存区干净。
+- Stage 7 第一 Batch 最终范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/AnimationTimeline.tsx`、`src/utils/animationTimeline.ts`，提交信息为 `feat: add timeline view model`。
 
 未经用户允许，不得 commit 或 push。

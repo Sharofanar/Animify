@@ -9,11 +9,14 @@ import type {
   ActiveAnimationContext,
   TimelinePlaybackStatus,
 } from "../../types/editor";
-import type { AnimationClip, SlideElement } from "../../types/presentation";
+import type {
+  AnimationTimelineClipEntry,
+  AnimationTimelineProtectionReason,
+  AnimationTimelineViewModel,
+} from "../../utils/animationTimeline";
 
 type AnimationTimelineProps = {
-  elements: SlideElement[];
-  clips: AnimationClip[];
+  viewModel: AnimationTimelineViewModel;
 
   currentTimeMs: number;
 
@@ -41,14 +44,6 @@ const LABEL_COLUMN_WIDTH = 168;
 
 const BASE_PIXELS_PER_SECOND = 220;
 
-/**
- * Keyframes from different property Tracks commonly share the same offset.
- *
- * The lower Timeline shows one aggregate diamond for one visual time position
- * rather than stacking several indistinguishable markers on top of each other.
- */
-const KEYFRAME_OFFSET_MERGE_TOLERANCE = 0.000001;
-
 const ZOOM_LEVELS = [0.5, 0.75, 1, 1.5, 2, 3, 4] as const;
 
 const MAJOR_TICK_CANDIDATES_MS = [
@@ -59,38 +54,9 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-/**
- * Read the unique visible keyframe positions inside one Clip.
- *
- * Timeline V2-B intentionally shows an aggregate Clip-level overview. The
- * advanced track editor remains responsible for displaying separate property
- * tracks and editing their individual keyframes.
- */
-function getClipKeyframeOffsets(clip: AnimationClip) {
-  const offsets = clip.tracks
-    .filter((track) => track.enabled)
-    .flatMap((track) =>
-      track.keyframes.map((keyframe) => clamp(keyframe.offset, 0, 1)),
-    )
-    .sort((left, right) => left - right);
-
-  const uniqueOffsets: number[] = [];
-
-  for (const offset of offsets) {
-    const previousOffset = uniqueOffsets.at(-1);
-
-    if (
-      previousOffset === undefined ||
-      Math.abs(offset - previousOffset) > KEYFRAME_OFFSET_MERGE_TOLERANCE
-    ) {
-      uniqueOffsets.push(offset);
-    }
-  }
-
-  return uniqueOffsets;
-}
-
-function getAnimationCategoryLabel(category: AnimationClip["category"]) {
+function getAnimationCategoryLabel(
+  category: AnimationTimelineClipEntry["category"],
+) {
   switch (category) {
     case "enter":
       return "进入";
@@ -112,21 +78,29 @@ function getAnimationCategoryLabel(category: AnimationClip["category"]) {
   }
 }
 
-/**
- * Give the timeline some empty working room after the final Clip.
- *
- * A minimum four-second ruler prevents very short animations from stretching
- * across the entire editor and leaves room for future Clips.
- */
-function getTimelineDurationMs(clips: AnimationClip[]) {
-  const furthestClipEnd = Math.max(
-    0,
-    ...clips.map((clip) => clip.startMs + clip.durationMs),
-  );
-
-  const paddedDuration = furthestClipEnd + 750;
-
-  return Math.max(4000, Math.ceil(paddedDuration / 500) * 500);
+function getProtectionLabel(
+  reason: AnimationTimelineProtectionReason | undefined,
+) {
+  switch (reason) {
+    case "orphan":
+      return "未归入 Sequence";
+    case "ambiguous-ownership":
+      return "归属不明确";
+    case "additional-slide-enter":
+      return "额外页面进入";
+    case "advanced-trigger":
+      return "高级触发";
+    case "missing-target":
+      return "目标缺失";
+    case "inactive-legacy-clip":
+      return "兼容数据不完整";
+    case "invalid-sequence":
+      return "无效 Sequence";
+    case "missing-clip":
+      return "Clip 缺失";
+    case undefined:
+      return "";
+  }
 }
 
 function getMajorTickStepMs(timelineDurationMs: number, pixelsPerMs: number) {
@@ -168,7 +142,7 @@ function formatCurrentTime(timeMs: number) {
 }
 
 /**
- * Timeline V2-B.
+ * Stage 7 Batch 1 data foundation on the existing Timeline V2-B surface.
  *
  * This phase adds persistent ruler navigation, AE-style horizontal wheel
  * scrolling, and Clip-level keyframe visualization.
@@ -178,8 +152,7 @@ function formatCurrentTime(timeMs: number) {
  * user intent.
  */
 export function AnimationTimeline({
-  elements,
-  clips,
+  viewModel,
   currentTimeMs,
   playbackStatus,
   clipPreviewStatus,
@@ -263,7 +236,7 @@ export function AnimationTimeline({
     };
   }, []);
 
-  const timelineDurationMs = getTimelineDurationMs(clips);
+  const timelineDurationMs = viewModel.rulerExtentMs;
 
   const pixelsPerSecond = BASE_PIXELS_PER_SECOND * zoom;
 
@@ -274,37 +247,6 @@ export function AnimationTimeline({
   const effectiveCurrentTimeMs = clamp(currentTimeMs, 0, timelineDurationMs);
 
   const playheadX = effectiveCurrentTimeMs * pixelsPerMs;
-
-  const clipsByElementId = useMemo(() => {
-    const grouped = new Map<string, AnimationClip[]>();
-
-    for (const element of elements) {
-      grouped.set(element.id, []);
-    }
-
-    for (const clip of clips) {
-      for (const target of clip.targets) {
-        const elementClips = grouped.get(target.elementId);
-
-        if (!elementClips) {
-          continue;
-        }
-
-        if (!elementClips.some((item) => item.id === clip.id)) {
-          elementClips.push(clip);
-        }
-      }
-    }
-
-    grouped.forEach((elementClips) => {
-      elementClips.sort(
-        (left, right) =>
-          left.startMs - right.startMs || left.name.localeCompare(right.name),
-      );
-    });
-
-    return grouped;
-  }, [clips, elements]);
 
   const majorTickStepMs = getMajorTickStepMs(timelineDurationMs, pixelsPerMs);
 
@@ -415,6 +357,24 @@ export function AnimationTimeline({
             <span className="rounded-full bg-slate-100 px-2.5 py-1 font-mono text-[11px] font-black text-slate-600">
               {formatCurrentTime(effectiveCurrentTimeMs)}
             </span>
+
+            {viewModel.protectedClipCount > 0 ? (
+              <span
+                className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-black text-amber-700"
+                title="高级、无效或归属不明确的数据保持只读，不会由 Timeline 自动修复"
+              >
+                {viewModel.protectedClipCount} 个受保护 Clip
+              </span>
+            ) : null}
+
+            {viewModel.unanchoredClipCount > 0 ? (
+              <span
+                className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-black text-slate-500"
+                title="这些 Clip 已保留在读取模型中，但没有可用的 Timeline Object row"
+              >
+                {viewModel.unanchoredClipCount} 个无可用对象
+              </span>
+            ) : null}
           </div>
         </div>
 
@@ -485,7 +445,7 @@ export function AnimationTimeline({
 
           <button
             type="button"
-            disabled={clips.length === 0}
+            disabled={viewModel.visibleClipCount === 0}
             className="min-w-24 rounded-full bg-violet-500 px-4 py-2 text-xs font-black text-white shadow-sm transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
             onClick={onTogglePlayback}
           >
@@ -567,15 +527,13 @@ export function AnimationTimeline({
             </div>
           </div>
 
-          {/* Element rows */}
-          {elements.map((element, elementIndex) => {
-            const elementClips = clipsByElementId.get(element.id) ?? [];
-
-            const rowHeight = Math.max(36, elementClips.length * 28 + 8);
+          {/* Animated object rows */}
+          {viewModel.objectRows.map((row, elementIndex) => {
+            const rowHeight = Math.max(36, row.clips.length * 28 + 8);
 
             return (
               <div
-                key={element.id}
+                key={row.elementId}
                 className="grid border-b border-slate-100 last:border-b-0"
                 style={{
                   gridTemplateColumns: `${LABEL_COLUMN_WIDTH}px ${timelineTrackWidth}px`,
@@ -586,11 +544,10 @@ export function AnimationTimeline({
                   style={{
                     height: rowHeight,
                   }}
-                  title={element.name}
+                  title={row.elementName}
                 >
                   <span className="min-w-0 truncate text-xs font-bold text-slate-600">
-                    {elementIndex + 1}.{" "}
-                    {element.content || element.name || element.id}
+                    {elementIndex + 1}. {row.label}
                   </span>
                 </div>
 
@@ -611,77 +568,95 @@ export function AnimationTimeline({
                     />
                   ))}
 
-                  {elementClips.length === 0 ? (
-                    <span className="absolute left-3 top-2 text-[10px] font-semibold text-slate-300">
-                      暂无动画
-                    </span>
-                  ) : (
-                    elementClips.map((clip, clipIndex) => {
-                      const focused =
-                        activeAnimationContext?.elementId === element.id &&
-                        activeAnimationContext?.clipId === clip.id;
+                  {row.clips.map((clip, clipIndex) => {
+                    const focused =
+                      activeAnimationContext?.clipId === clip.id;
+                    const clipLeft = clip.localStartMs * pixelsPerMs;
 
-                      const clipLeft = clip.startMs * pixelsPerMs;
+                    const clipWidth = Math.max(
+                      12,
+                      Math.max(0, clip.authoredDurationMs) * pixelsPerMs,
+                    );
 
-                      const clipWidth = Math.max(
-                        12,
-                        clip.durationMs * pixelsPerMs,
-                      );
+                    const targetSummary = clip.targets
+                      .map(
+                        (target) =>
+                          target.elementName ??
+                          `${target.elementId}${
+                            target.available ? "" : "（缺失）"
+                          }`,
+                      )
+                      .join("、");
+                    const protectionLabel = getProtectionLabel(
+                      clip.protectionReason,
+                    );
 
-                      const keyframeOffsets = getClipKeyframeOffsets(clip);
-
-                      return (
-                        <div key={clip.id}>
-                          <button
-                            type="button"
-                            className={`absolute flex h-5 min-w-0 items-center gap-1 overflow-hidden rounded-md px-2 text-left text-[10px] font-black text-white shadow-sm transition hover:z-20 hover:brightness-105 ${
-                              focused
-                                ? "z-10 bg-violet-600 ring-2 ring-violet-300"
+                    return (
+                      <div key={clip.id}>
+                        <button
+                          type="button"
+                          className={`absolute flex h-5 min-w-0 items-center gap-1 overflow-hidden rounded-md px-2 text-left text-[10px] font-black text-white shadow-sm transition hover:z-20 hover:brightness-105 ${
+                            focused
+                              ? clip.status === "protected"
+                                ? "z-10 bg-amber-600 ring-2 ring-amber-300"
+                                : "z-10 bg-violet-600 ring-2 ring-violet-300"
+                              : clip.status === "protected"
+                                ? "bg-amber-500"
                                 : "bg-violet-400"
-                            }`}
-                            style={{
-                              left: clipLeft,
-                              top: 4 + clipIndex * 28,
-                              width: clipWidth,
-                            }}
-                            title={`${clip.name} · ${getAnimationCategoryLabel(
-                              clip.category,
-                            )} · 开始 ${clip.startMs}ms · 时长 ${
-                              clip.durationMs
-                            }ms · 单击选择 · 双击详细编辑`}
-                            onClick={(event) => {
-                              event.stopPropagation();
+                          }`}
+                          style={{
+                            left: clipLeft,
+                            top: 4 + clipIndex * 28,
+                            width: clipWidth,
+                          }}
+                          title={`${clip.name} · ${getAnimationCategoryLabel(
+                            clip.category,
+                          )} · ${clip.sequenceLabel} · Sequence-local 开始 ${
+                            clip.authoredStartMs
+                          }ms · 时长 ${clip.authoredDurationMs}ms · 目标 ${
+                            targetSummary || "无"
+                          }${
+                            protectionLabel
+                              ? ` · 受保护：${protectionLabel}`
+                              : ""
+                          } · 单击选择 · 双击详细编辑`}
+                          onClick={(event) => {
+                            event.stopPropagation();
 
-                              onSelectClip(element.id, clip.id);
-                            }}
-                            onDoubleClick={(event) => {
-                              event.stopPropagation();
+                            onSelectClip(row.elementId, clip.id);
+                          }}
+                          onDoubleClick={(event) => {
+                            event.stopPropagation();
 
-                              onOpenClipDetails(element.id, clip.id);
-                            }}
-                          >
-                            <span className="min-w-0 flex-1 truncate">
-                              {clip.name}
-                            </span>
+                            onOpenClipDetails(row.elementId, clip.id);
+                          }}
+                        >
+                          <span className="min-w-0 flex-1 truncate">
+                            {clip.name}
+                          </span>
 
-                            <span className="shrink-0 rounded-full bg-white/20 px-1 text-[8px]">
-                              {getAnimationCategoryLabel(clip.category)}
-                            </span>
-                          </button>
+                          <span className="shrink-0 rounded-full bg-white/20 px-1 text-[8px]">
+                            {clip.status === "protected"
+                              ? "保护"
+                              : getAnimationCategoryLabel(clip.category)}
+                          </span>
+                        </button>
 
-                          {keyframeOffsets.map((offset) => {
-                            const keyframeTimeMs =
-                              clip.startMs + clip.durationMs * offset;
-
+                        {clip.keyframeLocalTimesMs.map(
+                          (keyframeTimeMs, keyframeIndex) => {
                             const keyframeLeft = keyframeTimeMs * pixelsPerMs;
 
                             return (
                               <span
-                                key={`${clip.id}-keyframe-${offset}`}
+                                key={`${clip.id}-keyframe-${keyframeTimeMs}-${keyframeIndex}`}
                                 className={`pointer-events-none absolute z-30 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[1px] border shadow-sm ${
                                   focused
-                                    ? "border-violet-700 bg-violet-100"
-                                    : "border-violet-500 bg-white"
+                                    ? clip.status === "protected"
+                                      ? "border-amber-700 bg-amber-100"
+                                      : "border-violet-700 bg-violet-100"
+                                    : clip.status === "protected"
+                                      ? "border-amber-500 bg-white"
+                                      : "border-violet-500 bg-white"
                                 }`}
                                 style={{
                                   left: keyframeLeft,
@@ -689,11 +664,11 @@ export function AnimationTimeline({
                                 }}
                               />
                             );
-                          })}
-                        </div>
-                      );
-                    })
-                  )}
+                          },
+                        )}
+                      </div>
+                    );
+                  })}
 
                   {/* Playhead line continues through every row. */}
                   <div
@@ -706,6 +681,22 @@ export function AnimationTimeline({
               </div>
             );
           })}
+
+          {viewModel.objectRows.length === 0 ? (
+            <div
+              className="grid border-b border-slate-100"
+              style={{
+                gridTemplateColumns: `${LABEL_COLUMN_WIDTH}px ${timelineTrackWidth}px`,
+              }}
+            >
+              <div className="sticky left-0 z-50 flex h-12 items-center border-r border-slate-200 bg-slate-50 px-3 text-xs font-bold text-slate-400">
+                动画对象
+              </div>
+              <div className="flex h-12 items-center bg-white px-3 text-[11px] font-semibold text-slate-400">
+                当前页面没有可显示的 V2 动画对象
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
     </section>

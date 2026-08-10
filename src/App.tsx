@@ -20,6 +20,7 @@ import { SlideNavigator } from "./components/editor/SlideNavigator";
 import { demoProject } from "./data/demoProject";
 import { exportProjectAsHtml } from "./utils/exportHtml";
 import { getAnimationClipPreviewWindow } from "./utils/animationCompiler";
+import { getAnimationTimelineViewModel } from "./utils/animationTimeline";
 import {
   computeBlobSha256,
   dataUrlToBlob,
@@ -861,20 +862,25 @@ function App() {
       : null;
 
   /**
+   * Keep Timeline hierarchy, ownership, targets, and display ordering inside
+   * the pure read-model domain. Playback remains on the existing shared clock
+   * until the separate Sequence-local Timeline batch.
+   */
+  const animationTimelineViewModel = useMemo(
+    () =>
+      getAnimationTimelineViewModel(
+        activeSlide?.animationScene,
+        activeSlide?.elements ?? [],
+      ),
+    [activeSlide],
+  );
+
+  /**
    * PlaybackController must be created before the active-slide early return so
    * React Hooks always execute in the same order.
    */
   const animationPlaybackDurationMs =
-    activeSlide?.animationScene?.schemaVersion === 2
-      ? Math.max(
-          0,
-          ...Object.values(activeSlide.animationScene.clips)
-            .filter((clip) =>
-              isAnimationClipLiveForElements(clip, activeSlide.elements),
-            )
-            .map((clip) => clip.startMs + clip.durationMs),
-        )
-      : 0;
+    animationTimelineViewModel.maximumAuthoredLocalEndMs;
 
   const timelinePlayback = useTimelinePlaybackController({
     slideId: project.activeSlideId,
@@ -1918,23 +1924,6 @@ function App() {
   const activeSlideElementCount = activeSlide.elements.length;
 
   const activeAnimationScene = activeSlide.animationScene;
-
-  /**
-   * The lower timeline reads Animation Schema V2 directly rather than the
-   * temporary element.animations compatibility array.
-   */
-  const activeSlideTimelineClips =
-    activeAnimationScene?.schemaVersion === 2
-      ? Object.values(activeAnimationScene.clips)
-          .filter((clip) =>
-            isAnimationClipLiveForElements(clip, activeSlide.elements),
-          )
-          .sort(
-            (left, right) =>
-              left.startMs - right.startMs ||
-              left.name.localeCompare(right.name),
-          )
-      : [];
 
   /**
    * Keep stale UI selection harmless after delete, undo, redo, or slide changes.
@@ -5165,8 +5154,7 @@ function App() {
               </div>
               {mode === "animation" ? (
                 <AnimationTimeline
-                  elements={activeSlide.elements}
-                  clips={activeSlideTimelineClips}
+                  viewModel={animationTimelineViewModel}
                   currentTimeMs={animationTimelineCurrentTimeMs}
                   playbackStatus={
                     effectiveAnimationClipPreview

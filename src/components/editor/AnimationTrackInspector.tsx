@@ -9,11 +9,13 @@ import type {
 } from "../../types/presentation";
 import {
   getAnimationClipGroups,
+  getAnimationClipStage6Capabilities,
   getAnimationClipSequenceContext,
   getAnimationPageClickSteps,
   type AddAnimationClipCommand,
   type AddAnimationKeyframeRequest,
   type AnimationClipGroup,
+  type AnimationClipStage6Capabilities,
   type AnimationClipSequenceContext,
   type DeleteAnimationClipCommand,
   type DeleteAnimationKeyframeCommand,
@@ -109,6 +111,7 @@ type AnimationTrackInspectorProps = {
 type VisibleClip = {
   clip: AnimationClip;
   sequenceName: string;
+  stage6Capabilities: AnimationClipStage6Capabilities;
   sequenceContext?: AnimationClipSequenceContext;
   targetNames: string[];
 };
@@ -493,8 +496,15 @@ function AnimationClipCard({
 
   const cardRef = useRef<HTMLElement | null>(null);
 
-  const { clip, sequenceName, sequenceContext, targetNames } = item;
-  const editableTriggerType = getEditableTriggerType(sequenceContext);
+  const {
+    clip,
+    sequenceName,
+    stage6Capabilities,
+    sequenceContext,
+    targetNames,
+  } = item;
+  const editableTriggerType = stage6Capabilities.editableTriggerType;
+  const protectionMessage = getStage6ProtectionMessage(stage6Capabilities);
   const triggerSelection =
     editableTriggerType === "slide-enter"
       ? "slide-enter"
@@ -544,7 +554,7 @@ function AnimationClipCard({
           </span>
 
           <span className="mt-1 block truncate text-[10px] font-bold text-violet-500">
-            {getTriggerLabel(sequenceContext)}
+            {getTriggerLabel(sequenceContext, stage6Capabilities)}
           </span>
         </button>
 
@@ -595,7 +605,7 @@ function AnimationClipCard({
 
             <InspectorMetadata
               label="触发"
-              value={getTriggerLabel(sequenceContext)}
+              value={getTriggerLabel(sequenceContext, stage6Capabilities)}
             />
 
             <InspectorMetadata
@@ -614,11 +624,14 @@ function AnimationClipCard({
                 <h4 className="text-xs font-black text-slate-700">触发方式</h4>
 
                 <p className="mt-1 text-[10px] leading-4 text-slate-400">
-                  切换只移动当前 Clip，不会改变同一步骤中的其他 Clip。
+                  {protectionMessage ??
+                    "切换只移动当前 Clip，不会改变同一步骤中的其他 Clip。"}
                 </p>
               </div>
 
-              {sequenceContext?.clickStepNumber ? (
+              {stage6Capabilities.canEditTrigger &&
+              editableTriggerType === "click" &&
+              sequenceContext?.clickStepNumber ? (
                 <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[9px] font-black text-sky-600 shadow-sm">
                   Step {sequenceContext.clickStepNumber}
                 </span>
@@ -628,8 +641,14 @@ function AnimationClipCard({
             <select
               className="mt-3 w-full rounded-xl bg-white px-3 py-2 text-xs font-bold text-slate-700 outline-none ring-1 ring-transparent transition focus:ring-sky-300 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-300"
               value={triggerSelection}
+              title={protectionMessage ?? "编辑当前 Clip 的普通触发方式"}
+              aria-label={
+                protectionMessage
+                  ? "动画触发方式（受保护，只读）"
+                  : "编辑动画触发方式"
+              }
               disabled={
-                !editableTriggerType ||
+                !stage6Capabilities.canEditTrigger ||
                 (!onSetClipTrigger && !onMoveClipToClickStep)
               }
               onChange={(event) => {
@@ -661,7 +680,7 @@ function AnimationClipCard({
               }}
             >
               {!editableTriggerType ? (
-                <option value="unsupported">当前触发方式暂不可编辑</option>
+                <option value="unsupported">高级或异常触发方式（只读）</option>
               ) : (
                 <>
                   <option value="slide-enter">进入页面时自动播放</option>
@@ -682,7 +701,9 @@ function AnimationClipCard({
             </select>
 
             <p className="mt-2 text-[10px] leading-4 text-sky-700/70">
-              Clip 开始时间只表示所属 Sequence 内的局部时间，不代表点击步骤顺序。
+              {protectionMessage
+                ? "当前 Project 会保持原样；此处不会自动转换、合并或修复 Sequence。"
+                : "Clip 开始时间只表示所属 Sequence 内的局部时间，不代表点击步骤顺序。"}
             </p>
           </section>
 
@@ -1841,6 +1862,10 @@ function getVisibleClipGroups(
           scene,
           clip.id,
         );
+        const stage6Capabilities = getAnimationClipStage6Capabilities(
+          scene,
+          clip.id,
+        );
         const targetNames = Array.from(
           new Set(
             clip.targets
@@ -1858,6 +1883,7 @@ function getVisibleClipGroups(
           {
             clip,
             sequenceName: sequenceContext?.sequenceName ?? "未归入序列",
+            stage6Capabilities,
             sequenceContext,
             targetNames,
           },
@@ -1891,17 +1917,44 @@ function getClipGroupTriggerLabel(group: VisibleClipGroup) {
   }
 }
 
-function getEditableTriggerType(
-  sequenceContext?: AnimationClipSequenceContext,
+function getStage6ProtectionMessage(
+  capabilities: AnimationClipStage6Capabilities,
 ) {
-  if (sequenceContext?.triggerType === "slide-enter") {
-    return "slide-enter" as const;
+  switch (capabilities.protectionReason) {
+    case "ambiguous-ownership":
+      return "此 Clip 同时属于多个 Sequence，普通触发编辑已保护为只读。";
+    case "orphan":
+      return "此 Clip 未归入 Sequence，普通触发编辑已保护为只读。";
+    case "additional-slide-enter":
+      return "此 Clip 属于额外的页面进入 Sequence，当前仅支持只读查看。";
+    case "advanced-trigger":
+      return "当前为高级触发方式，暂不支持在此处编辑。";
+    case "invalid-sequence":
+      return "当前 Sequence 状态无法安全编辑，已保护为只读。";
+    case "missing-clip":
+      return "当前 Clip 不存在，无法编辑触发方式。";
+    default:
+      return undefined;
   }
-
-  return sequenceContext?.isPageClickStep ? ("click" as const) : undefined;
 }
 
-function getTriggerLabel(sequenceContext?: AnimationClipSequenceContext) {
+function getTriggerLabel(
+  sequenceContext: AnimationClipSequenceContext | undefined,
+  capabilities: AnimationClipStage6Capabilities,
+) {
+  switch (capabilities.protectionReason) {
+    case "ambiguous-ownership":
+      return "多个 Sequence 归属 · 只读";
+    case "orphan":
+      return "未归入 Sequence · 只读";
+    case "additional-slide-enter":
+      return "额外页面进入触发 · 只读";
+    case "advanced-trigger":
+    case "invalid-sequence":
+    case "missing-clip":
+      return "高级或异常触发 · 只读";
+  }
+
   if (!sequenceContext) {
     return "未归入序列";
   }
@@ -1927,6 +1980,8 @@ function getTriggerLabel(sequenceContext?: AnimationClipSequenceContext) {
       return "媒体时间触发";
     case "manual":
       return "手动触发";
+    default:
+      return "高级或异常触发";
   }
 }
 

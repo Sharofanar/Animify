@@ -1,7 +1,8 @@
 import type { Slide } from "../types/presentation";
 import {
+  getAnimationPageClickSteps,
+  getAnimationPrimarySlideEnterSequence,
   getAnimationSequenceLocalDurationMs,
-  getOrderedAnimationSequences,
 } from "./animationSequence";
 
 export type PresentationSlidePlaybackPlan = {
@@ -54,15 +55,10 @@ export type PresentationPlaybackTransition = {
 export function createPresentationSlidePlaybackPlan(
   slide: Pick<Slide, "id" | "animationScene">,
 ): PresentationSlidePlaybackPlan {
-  const orderedSequences = getOrderedAnimationSequences(slide.animationScene);
-  const slideEnterSequence = orderedSequences.find(
-    (sequence) => sequence.trigger.type === "slide-enter",
+  const slideEnterSequence = getAnimationPrimarySlideEnterSequence(
+    slide.animationScene,
   );
-  const clickStepSequences = orderedSequences.filter(
-    (sequence) =>
-      sequence.trigger.type === "click" &&
-      sequence.trigger.targetElementId === undefined,
-  );
+  const clickStepSequences = getAnimationPageClickSteps(slide.animationScene);
   const sequenceIds = [
     ...(slideEnterSequence ? [slideEnterSequence.id] : []),
     ...clickStepSequences.map((sequence) => sequence.id),

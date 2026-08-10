@@ -36,6 +36,7 @@ import {
 export {
   createAnimationClickStepInSlide,
   getAnimationClipGroups,
+  getAnimationClipStage6Capabilities,
   getAnimationClipSequenceContext,
   getAnimationClickSteps,
   getAnimationPageClickSteps,
@@ -47,6 +48,8 @@ export {
 } from "./animationSequenceCommands";
 export type {
   AnimationClipSequenceContext,
+  AnimationClipStage6Capabilities,
+  AnimationClipStage6ProtectionReason,
   AnimationClipGroup,
   AnimationEditorTriggerType,
   CreateAnimationClickStepCommand,

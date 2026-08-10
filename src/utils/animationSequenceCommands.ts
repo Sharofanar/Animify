@@ -6,9 +6,15 @@ import type {
 import {
   cloneAnimationScene,
   getLegacySequenceId,
-  removeEmptySequences,
 } from "./animationCommandHelpers";
-import { getOrderedAnimationSequences } from "./animationSequence";
+import {
+  getAnimationClipOwnerSequences,
+  getAnimationPageClickSteps,
+  getAnimationPrimarySlideEnterSequence,
+  getOrderedAnimationSequences,
+} from "./animationSequence";
+
+export { getAnimationPageClickSteps } from "./animationSequence";
 
 export type CreateAnimationClickStepCommand = {
   /** Stable ID generated once by the caller and persisted in sequenceOrder. */
@@ -58,11 +64,25 @@ export type AnimationClipSequenceContext = {
   sequenceId: string;
   sequenceName: string;
   sequenceClipCount: number;
-  triggerType: AnimationSequence["trigger"]["type"];
+  triggerType: AnimationSequence["trigger"]["type"] | "unsupported";
   isPageClickStep: boolean;
 
   /** One-based position among page-level Click Steps. */
   clickStepNumber?: number;
+};
+
+export type AnimationClipStage6ProtectionReason =
+  | "missing-clip"
+  | "orphan"
+  | "ambiguous-ownership"
+  | "additional-slide-enter"
+  | "advanced-trigger"
+  | "invalid-sequence";
+
+export type AnimationClipStage6Capabilities = {
+  canEditTrigger: boolean;
+  editableTriggerType?: AnimationEditorTriggerType;
+  protectionReason?: AnimationClipStage6ProtectionReason;
 };
 
 export type AnimationClipGroup = {
@@ -98,33 +118,14 @@ export function getAnimationClickSteps(
   }
 
   return getOrderedAnimationSequences(scene).filter(
-    (sequence) => sequence.trigger.type === "click",
-  );
-}
-
-/**
- * Read only page-level Click Steps. Targeted click Sequences remain advanced
- * triggers and are deliberately excluded from the Stage 6 ownership editor.
- */
-export function getAnimationPageClickSteps(
-  scene?: AnimationScene,
-): AnimationSequence[] {
-  if (!scene || scene.schemaVersion !== 2) {
-    return [];
-  }
-
-  return getAnimationClickSteps(scene).filter(
-    (sequence) =>
-      sequence.trigger.type === "click" &&
-      sequence.trigger.targetElementId === undefined &&
-      getUniqueExistingClipIds(scene, sequence.clipIds).length > 0,
+    (sequence) => sequence.trigger?.type === "click",
   );
 }
 
 /**
  * Derive the Inspector's visual groups without changing persisted ownership.
- * The first ordered owner wins for malformed duplicate references; unsupported
- * triggers and orphan Clips remain visible in one read-only fallback group.
+ * Ambiguous ownership, unsupported triggers, additional slide-enter Sequences,
+ * and orphan Clips remain visible in one protected fallback group.
  */
 export function getAnimationClipGroups(
   scene?: AnimationScene,
@@ -134,9 +135,7 @@ export function getAnimationClipGroups(
   }
 
   const orderedSequences = getOrderedAnimationSequences(scene);
-  const slideEnterSequence = orderedSequences.find(
-    (sequence) => sequence.trigger.type === "slide-enter",
-  );
+  const slideEnterSequence = getAnimationPrimarySlideEnterSequence(scene);
   const pageClickSequenceIds = new Set(
     getAnimationPageClickSteps(scene).map((sequence) => sequence.id),
   );
@@ -146,11 +145,22 @@ export function getAnimationClipGroups(
   const otherClipIds: string[] = [];
 
   for (const sequence of orderedSequences) {
-    const clipIds = getUniqueExistingClipIds(scene, sequence.clipIds).filter(
-      (clipId) => !claimedClipIds.has(clipId),
-    );
+    const clipIds: string[] = [];
 
-    clipIds.forEach((clipId) => claimedClipIds.add(clipId));
+    for (const clipId of getUniqueExistingClipIds(scene, sequence.clipIds)) {
+      if (claimedClipIds.has(clipId)) {
+        continue;
+      }
+
+      claimedClipIds.add(clipId);
+
+      if (getAnimationClipOwnerSequences(scene, clipId).length !== 1) {
+        otherClipIds.push(clipId);
+        continue;
+      }
+
+      clipIds.push(clipId);
+    }
 
     if (clipIds.length === 0) {
       continue;
@@ -205,6 +215,63 @@ export function getAnimationClipGroups(
 }
 
 /**
+ * Describe whether one live Clip can safely use the ordinary Stage 6 trigger
+ * editor. This is a pure capability query; protected historical state is never
+ * repaired or normalized in the document.
+ */
+export function getAnimationClipStage6Capabilities(
+  scene: AnimationScene | undefined,
+  clipId: string,
+): AnimationClipStage6Capabilities {
+  if (!scene || scene.schemaVersion !== 2 || !scene.clips[clipId]) {
+    return { canEditTrigger: false, protectionReason: "missing-clip" };
+  }
+
+  const owners = getAnimationClipOwnerSequences(scene, clipId);
+
+  if (owners.length === 0) {
+    return { canEditTrigger: false, protectionReason: "orphan" };
+  }
+
+  if (owners.length !== 1) {
+    return {
+      canEditTrigger: false,
+      protectionReason: "ambiguous-ownership",
+    };
+  }
+
+  const sequence = owners[0];
+  const group = getAnimationClipGroups(scene).find((currentGroup) =>
+    currentGroup.clipIds.includes(clipId),
+  );
+
+  if (group?.type === "slide-enter") {
+    return { canEditTrigger: true, editableTriggerType: "slide-enter" };
+  }
+
+  if (group?.type === "page-click") {
+    return { canEditTrigger: true, editableTriggerType: "click" };
+  }
+
+  if (!scene.sequenceOrder.includes(sequence.id)) {
+    return { canEditTrigger: false, protectionReason: "invalid-sequence" };
+  }
+
+  if (sequence.trigger?.type === "slide-enter") {
+    return {
+      canEditTrigger: false,
+      protectionReason: "additional-slide-enter",
+    };
+  }
+
+  if (sequence.trigger?.type) {
+    return { canEditTrigger: false, protectionReason: "advanced-trigger" };
+  }
+
+  return { canEditTrigger: false, protectionReason: "invalid-sequence" };
+}
+
+/**
  * Resolve the persisted Sequence and user-facing page Click Step number for one
  * Clip. Targeted click triggers remain outside the Stage 6 page-click editor.
  */
@@ -217,23 +284,21 @@ export function getAnimationClipSequenceContext(
   }
 
   const orderedSequences = getOrderedAnimationSequences(scene);
-  const sequence = orderedSequences.find((currentSequence) =>
-    currentSequence.clipIds.includes(clipId),
+  const sequence = orderedSequences.find(
+    (currentSequence) =>
+      Array.isArray(currentSequence.clipIds) &&
+      currentSequence.clipIds.includes(clipId),
   );
 
   if (!sequence) {
     return undefined;
   }
 
-  const isPageClickStep =
-    sequence.trigger.type === "click" &&
-    sequence.trigger.targetElementId === undefined;
   const pageClickSteps = getAnimationPageClickSteps(scene);
-  const clickStepIndex = isPageClickStep
-    ? pageClickSteps.findIndex(
-        (currentSequence) => currentSequence.id === sequence.id,
-      )
-    : -1;
+  const clickStepIndex = pageClickSteps.findIndex(
+    (currentSequence) => currentSequence.id === sequence.id,
+  );
+  const isPageClickStep = clickStepIndex >= 0;
 
   return {
     sequenceId: sequence.id,
@@ -242,7 +307,7 @@ export function getAnimationClipSequenceContext(
       scene,
       sequence.clipIds,
     ).length,
-    triggerType: sequence.trigger.type,
+    triggerType: sequence.trigger?.type ?? "unsupported",
     isPageClickStep,
     clickStepNumber: clickStepIndex >= 0 ? clickStepIndex + 1 : undefined,
   };
@@ -267,21 +332,14 @@ export function setAnimationClipTriggerInSlide(
     return slide;
   }
 
-  const sequence = getOrderedAnimationSequences(scene).find(
-    (currentSequence) => currentSequence.clipIds.includes(clip.id),
-  );
+  const capabilities = getAnimationClipStage6Capabilities(scene, clip.id);
+  const sequence = getAnimationClipOwnerSequences(scene, clip.id)[0];
 
-  if (!sequence) {
+  if (!capabilities.canEditTrigger || !sequence) {
     return slide;
   }
 
-  const currentTriggerType =
-    sequence.trigger.type === "slide-enter"
-      ? "slide-enter"
-      : sequence.trigger.type === "click" &&
-          sequence.trigger.targetElementId === undefined
-        ? "click"
-        : undefined;
+  const currentTriggerType = capabilities.editableTriggerType;
 
   const shouldCreateNewClickStep =
     currentTriggerType === "click" &&
@@ -309,8 +367,11 @@ export function setAnimationClipTriggerInSlide(
 
   const nextScene = cloneAnimationScene(scene);
 
-  removeClipIdsFromSequences(nextScene, new Set([clip.id]));
-  removeEmptySequences(nextScene);
+  const changedSequenceIds = removeClipIdsFromSequences(
+    nextScene,
+    new Set([clip.id]),
+  );
+  removeEmptySequenceIds(nextScene, changedSequenceIds);
   ensureClipsInSlideEnterSequence(nextScene, slide.id, [clip.id]);
   nextScene.revision = Math.max(1, scene.revision + 1);
 
@@ -337,27 +398,24 @@ export function moveAnimationClipToClickStepInSlide(
     !scene ||
     scene.schemaVersion !== 2 ||
     !clip ||
-    targetSequence?.trigger.type !== "click" ||
-    targetSequence.trigger.targetElementId !== undefined
+    !targetSequence ||
+    !getAnimationPageClickSteps(scene).some(
+      (sequence) => sequence.id === targetSequence.id,
+    )
   ) {
     return slide;
   }
 
-  const owningSequences = getOrderedAnimationSequences(scene).filter(
-    (sequence) => sequence.clipIds.includes(clip.id),
-  );
+  const owningSequences = getAnimationClipOwnerSequences(scene, clip.id);
+  const capabilities = getAnimationClipStage6Capabilities(scene, clip.id);
 
-  if (owningSequences.length !== 1) {
+  if (!capabilities.canEditTrigger || owningSequences.length !== 1) {
     return slide;
   }
 
   const sourceSequence = owningSequences[0];
-  const sourceIsSupported =
-    sourceSequence.trigger.type === "slide-enter" ||
-    (sourceSequence.trigger.type === "click" &&
-      sourceSequence.trigger.targetElementId === undefined);
 
-  if (!sourceIsSupported || sourceSequence.id === targetSequence.id) {
+  if (sourceSequence.id === targetSequence.id) {
     return slide;
   }
 
@@ -417,14 +475,26 @@ export function createAnimationClickStepInSlide(
     return slide;
   }
 
+  if (
+    clipIds.some(
+      (clipId) =>
+        !getAnimationClipStage6Capabilities(scene, clipId).canEditTrigger,
+    )
+  ) {
+    return slide;
+  }
+
   const nextScene = cloneAnimationScene(scene);
 
   /**
    * Clip ownership exists only in sequence.clipIds. Moving ownership preserves
    * startMs because it remains an offset from the destination Sequence local 0ms.
    */
-  removeClipIdsFromSequences(nextScene, new Set(clipIds));
-  removeEmptySequences(nextScene);
+  const changedSequenceIds = removeClipIdsFromSequences(
+    nextScene,
+    new Set(clipIds),
+  );
+  removeEmptySequenceIds(nextScene, changedSequenceIds);
 
   nextScene.sequences[sequenceId] = {
     id: sequenceId,
@@ -471,7 +541,10 @@ export function updateAnimationClickStepInSlide(
   if (
     !scene ||
     scene.schemaVersion !== 2 ||
-    sequence?.trigger.type !== "click"
+    !sequence ||
+    !getAnimationPageClickSteps(scene).some(
+      (pageClickSequence) => pageClickSequence.id === sequence.id,
+    )
   ) {
     return slide;
   }
@@ -486,12 +559,21 @@ export function updateAnimationClickStepInSlide(
     return slide;
   }
 
+  if (
+    nextClipIds.some(
+      (clipId) =>
+        !getAnimationClipStage6Capabilities(scene, clipId).canEditTrigger,
+    )
+  ) {
+    return slide;
+  }
+
   const nextScene = cloneAnimationScene(scene);
   const nextClipIdSet = new Set(nextClipIds);
   const removedClipIds = sequence.clipIds.filter(
     (clipId) => !nextClipIdSet.has(clipId) && Boolean(scene.clips[clipId]),
   );
-  const removedFromOtherSequences = removeClipIdsFromSequences(
+  const changedSequenceIds = removeClipIdsFromSequences(
     nextScene,
     nextClipIdSet,
     sequence.id,
@@ -500,7 +582,7 @@ export function updateAnimationClickStepInSlide(
     nextName !== sequence.name ||
     !stringArraysEqual(nextClipIds, sequence.clipIds);
 
-  if (!sequenceChanged && !removedFromOtherSequences) {
+  if (!sequenceChanged && changedSequenceIds.size === 0) {
     return slide;
   }
 
@@ -511,7 +593,7 @@ export function updateAnimationClickStepInSlide(
   };
 
   ensureClipsInSlideEnterSequence(nextScene, slide.id, removedClipIds);
-  removeEmptySequences(nextScene);
+  removeEmptySequenceIds(nextScene, changedSequenceIds);
   nextScene.revision = Math.max(1, scene.revision + 1);
 
   return {
@@ -536,8 +618,19 @@ export function setAnimationSequenceTriggerInSlide(
     !scene ||
     scene.schemaVersion !== 2 ||
     !sequence ||
+    !sequence.trigger?.type ||
     sequence.trigger.type === command.triggerType
   ) {
+    return slide;
+  }
+
+  const isEditableSequence =
+    getAnimationPrimarySlideEnterSequence(scene)?.id === sequence.id ||
+    getAnimationPageClickSteps(scene).some(
+      (pageClickSequence) => pageClickSequence.id === sequence.id,
+    );
+
+  if (!isEditableSequence) {
     return slide;
   }
 
@@ -572,7 +665,7 @@ export function moveAnimationClickStepInSlide(
   if (
     !scene ||
     scene.schemaVersion !== 2 ||
-    sequence?.trigger.type !== "click"
+    sequence?.trigger?.type !== "click"
   ) {
     return slide;
   }
@@ -581,9 +674,6 @@ export function moveAnimationClickStepInSlide(
     return slide;
   }
 
-  const orderedSequenceIds = getOrderedAnimationSequences(scene).map(
-    (currentSequence) => currentSequence.id,
-  );
   const pageClickStepIds = getAnimationPageClickSteps(scene).map(
     (currentSequence) => currentSequence.id,
   );
@@ -602,12 +692,22 @@ export function moveAnimationClickStepInSlide(
   reorderedClickStepIds.splice(targetIndex, 0, movedSequenceId);
 
   const pageClickStepIdSet = new Set(pageClickStepIds);
+  const visitedPageClickStepIds = new Set<string>();
   let clickStepCursor = 0;
-  const nextSequenceOrder = orderedSequenceIds.map((sequenceId) => {
-    if (!pageClickStepIdSet.has(sequenceId)) {
+
+  /**
+   * Replace only each valid Step's first persisted slot. Historical duplicate
+   * or missing references stay untouched, and omitted Sequences stay omitted.
+   */
+  const nextSequenceOrder = scene.sequenceOrder.map((sequenceId) => {
+    if (
+      !pageClickStepIdSet.has(sequenceId) ||
+      visitedPageClickStepIds.has(sequenceId)
+    ) {
       return sequenceId;
     }
 
+    visitedPageClickStepIds.add(sequenceId);
     const nextSequenceId = reorderedClickStepIds[clickStepCursor];
     clickStepCursor += 1;
     return nextSequenceId;
@@ -625,11 +725,11 @@ export function moveAnimationClickStepInSlide(
 
 function getUniqueExistingClipIds(
   scene: AnimationScene,
-  clipIds: string[],
+  clipIds: string[] | undefined,
 ) {
   const seenClipIds = new Set<string>();
 
-  return clipIds.filter((clipId) => {
+  return (Array.isArray(clipIds) ? clipIds : []).filter((clipId) => {
     if (!scene.clips[clipId] || seenClipIds.has(clipId)) {
       return false;
     }
@@ -662,29 +762,55 @@ function removeClipIdsFromSequences(
   clipIds: Set<string>,
   exceptSequenceId?: string,
 ) {
-  let changed = false;
+  const changedSequenceIds = new Set<string>();
 
   for (const [sequenceId, sequence] of Object.entries(scene.sequences)) {
     if (sequenceId === exceptSequenceId) {
       continue;
     }
 
-    const nextClipIds = sequence.clipIds.filter(
+    const currentClipIds = Array.isArray(sequence.clipIds)
+      ? sequence.clipIds
+      : [];
+    const nextClipIds = currentClipIds.filter(
       (clipId) => !clipIds.has(clipId),
     );
 
-    if (nextClipIds.length === sequence.clipIds.length) {
+    if (nextClipIds.length === currentClipIds.length) {
       continue;
     }
 
-    changed = true;
+    changedSequenceIds.add(sequenceId);
     scene.sequences[sequenceId] = {
       ...sequence,
       clipIds: nextClipIds,
     };
   }
 
-  return changed;
+  return changedSequenceIds;
+}
+
+function removeEmptySequenceIds(
+  scene: AnimationScene,
+  candidateSequenceIds: ReadonlySet<string>,
+) {
+  const emptySequenceIds = new Set(
+    [...candidateSequenceIds].filter(
+      (sequenceId) => scene.sequences[sequenceId]?.clipIds.length === 0,
+    ),
+  );
+
+  if (emptySequenceIds.size === 0) {
+    return;
+  }
+
+  for (const sequenceId of emptySequenceIds) {
+    delete scene.sequences[sequenceId];
+  }
+
+  scene.sequenceOrder = scene.sequenceOrder.filter(
+    (sequenceId) => !emptySequenceIds.has(sequenceId),
+  );
 }
 
 function insertClickStepSequenceId(
@@ -695,10 +821,9 @@ function insertClickStepSequenceId(
   const orderedSequenceIds = getOrderedAnimationSequences(scene)
     .map((sequence) => sequence.id)
     .filter((currentSequenceId) => currentSequenceId !== sequenceId);
-  const clickStepIds = orderedSequenceIds.filter(
-    (currentSequenceId) =>
-      scene.sequences[currentSequenceId]?.trigger.type === "click",
-  );
+  const clickStepIds = getAnimationPageClickSteps(scene)
+    .map((sequence) => sequence.id)
+    .filter((currentSequenceId) => currentSequenceId !== sequenceId);
   const clickStepIndex =
     requestedClickStepIndex === undefined ||
     !Number.isFinite(requestedClickStepIndex)
@@ -733,7 +858,7 @@ function ensureClipsInSlideEnterSequence(
   const orphanClipIds = getUniqueExistingClipIds(scene, clipIds).filter(
     (clipId) =>
       !Object.values(scene.sequences).some((sequence) =>
-        sequence.clipIds.includes(clipId),
+        Array.isArray(sequence.clipIds) && sequence.clipIds.includes(clipId),
       ),
   );
 
@@ -744,10 +869,7 @@ function ensureClipsInSlideEnterSequence(
   const orderedSequenceIds = getOrderedAnimationSequences(scene).map(
     (sequence) => sequence.id,
   );
-  const existingSequenceId = orderedSequenceIds.find(
-    (sequenceId) =>
-      scene.sequences[sequenceId]?.trigger.type === "slide-enter",
-  );
+  const existingSequenceId = getAnimationPrimarySlideEnterSequence(scene)?.id;
 
   if (existingSequenceId) {
     const sequence = scene.sequences[existingSequenceId];
@@ -784,7 +906,9 @@ function ensureClipsInSlideEnterSequence(
 
   const firstClickStepIndex = orderedSequenceIds.findIndex(
     (currentSequenceId) =>
-      scene.sequences[currentSequenceId]?.trigger.type === "click",
+      getAnimationPageClickSteps(scene).some(
+        (sequence) => sequence.id === currentSequenceId,
+      ),
   );
 
   if (firstClickStepIndex < 0) {

@@ -175,6 +175,24 @@ export type AnimationTimelineViewModel = {
   unanchoredClipCount: number;
 };
 
+export type AnimationTimelineEditorSequencePhase =
+  | "completed"
+  | "active"
+  | "pending";
+
+/**
+ * One derived Sequence-local editor sample.
+ *
+ * Pending samples remain useful to the Timeline UI, but the Canvas must only
+ * compile completed and active entries. Nothing in this contract is persisted.
+ */
+export type AnimationTimelineEditorSequenceSample = {
+  sequenceId: string;
+  phase: AnimationTimelineEditorSequencePhase;
+  localTimeMs: number;
+  normalClipIds: string[];
+};
+
 type SequenceGroupBuilder = Omit<
   AnimationTimelineSequenceGroup,
   "clips" | "viewOrder"
@@ -188,6 +206,137 @@ const RULER_ROUNDING_STEP_MS = 500;
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(Math.max(value, minimum), maximum);
+}
+
+function getSafeDurationMs(value: number) {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, value)
+    : 0;
+}
+
+function getNormalPlaybackSequenceGroups(
+  model: AnimationTimelineViewModel,
+) {
+  return model.sequenceGroups.filter(
+    (group) =>
+      group.status === "normal" &&
+      group.sequenceId !== undefined &&
+      group.clips.some(
+        (clip) => clip.status === "normal" && clip.liveForElements,
+      ),
+  );
+}
+
+/**
+ * Resolve the unique normal Sequence owned by one selectable Clip.
+ *
+ * Protected, ambiguous, orphaned, and otherwise non-normal Clips deliberately
+ * return null instead of being promoted into the editor playback path.
+ */
+export function getAnimationTimelineNormalSequenceIdForClip(
+  model: AnimationTimelineViewModel,
+  clipId: string | undefined,
+) {
+  if (!clipId) {
+    return null;
+  }
+
+  return (
+    getNormalPlaybackSequenceGroups(model).find((group) =>
+      group.clips.some(
+        (clip) => clip.id === clipId && clip.status === "normal",
+      ),
+    )?.sequenceId ?? null
+  );
+}
+
+/**
+ * Reconcile one editor-only Active Sequence without changing Scene data.
+ *
+ * A still-valid explicit request wins. Active Clip ownership is only a fallback
+ * here; Clip selection events request their owner explicitly in App so an old
+ * Clip cannot steal an independently selected Sequence on every render.
+ */
+export function resolveAnimationTimelineActiveSequenceId(
+  model: AnimationTimelineViewModel,
+  requestedSequenceId: string | null,
+  activeClipId?: string,
+) {
+  const normalGroups = getNormalPlaybackSequenceGroups(model);
+
+  if (
+    requestedSequenceId &&
+    normalGroups.some((group) => group.sequenceId === requestedSequenceId)
+  ) {
+    return requestedSequenceId;
+  }
+
+  const activeClipSequenceId = getAnimationTimelineNormalSequenceIdForClip(
+    model,
+    activeClipId,
+  );
+
+  if (activeClipSequenceId) {
+    return activeClipSequenceId;
+  }
+
+  return normalGroups[0]?.sequenceId ?? null;
+}
+
+/**
+ * Derive the editor frame from ordered normal Sequence groups.
+ *
+ * Earlier Sequences sample their semantic completion, the current Sequence
+ * samples its local Playhead, and later Sequences remain pending with no Canvas
+ * contribution. Cross-Sequence Clip offsets are never accumulated.
+ */
+export function getAnimationTimelineEditorSamples(
+  model: AnimationTimelineViewModel,
+  activeSequenceId: string | null,
+  localTimeMs: number,
+): AnimationTimelineEditorSequenceSample[] {
+  if (!activeSequenceId) {
+    return [];
+  }
+
+  const normalGroups = getNormalPlaybackSequenceGroups(model);
+  const activeGroupIndex = normalGroups.findIndex(
+    (group) => group.sequenceId === activeSequenceId,
+  );
+
+  if (activeGroupIndex < 0) {
+    return [];
+  }
+
+  return normalGroups.flatMap((group, groupIndex) => {
+    if (!group.sequenceId) {
+      return [];
+    }
+
+    const semanticDurationMs = getSafeDurationMs(group.semanticDurationMs);
+    const phase: AnimationTimelineEditorSequencePhase =
+      groupIndex < activeGroupIndex
+        ? "completed"
+        : groupIndex === activeGroupIndex
+          ? "active"
+          : "pending";
+
+    return [
+      {
+        sequenceId: group.sequenceId,
+        phase,
+        normalClipIds: group.clips.flatMap((clip) =>
+          clip.status === "normal" && clip.liveForElements ? [clip.id] : [],
+        ),
+        localTimeMs:
+          phase === "completed"
+            ? semanticDurationMs
+            : phase === "active"
+              ? clamp(localTimeMs, 0, semanticDurationMs)
+              : 0,
+      },
+    ];
+  });
 }
 
 function getSafeTriggerType(sequence: AnimationSequence) {
@@ -308,7 +457,7 @@ function createSequenceGroupBuilder(
     status === "normal" && kind === "slide-enter"
       ? "页面进入 · 自动播放"
       : status === "normal" && kind === "page-click" && clickStepNumber
-        ? `Click Step ${clickStepNumber}`
+        ? `点击播放 · Step ${clickStepNumber}`
         : sequence.name || `Sequence ${sequence.id}`;
 
   return {
@@ -709,10 +858,16 @@ export function getAnimationTimelineViewModel(
         ),
       0,
     );
+  const maximumSequenceLocalExtentMs = Math.max(
+    maximumAuthoredLocalEndMs,
+    ...sequenceGroups.map((group) =>
+      getSafeDurationMs(group.semanticDurationMs),
+    ),
+  );
   const rulerExtentMs = Math.max(
     RULER_MINIMUM_DURATION_MS,
     Math.ceil(
-      (maximumAuthoredLocalEndMs + RULER_END_PADDING_MS) /
+      (maximumSequenceLocalExtentMs + RULER_END_PADDING_MS) /
         RULER_ROUNDING_STEP_MS,
     ) * RULER_ROUNDING_STEP_MS,
   );

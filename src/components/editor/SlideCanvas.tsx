@@ -28,6 +28,9 @@ import {
   removeUnusedDeterministicAnimations,
   type ManagedDeterministicAnimation,
 } from "../../utils/deterministicAnimationLifecycle";
+import type {
+  AnimationTimelineEditorSequenceSample,
+} from "../../utils/animationTimeline";
 import {
   getPresentationRenderableAnimationSamples,
   type PresentationSequenceSample,
@@ -214,6 +217,12 @@ type SlideCanvasProps = {
   animationClipPreviewId?: string;
 
   /**
+   * Derived Sequence-local samples for the editor Timeline. Pending entries are
+   * descriptive only and never become Canvas animation contributions.
+   */
+  editorTimelineSequenceSamples?: AnimationTimelineEditorSequenceSample[];
+
+  /**
    * Runtime-only local time samples for formal presentation playback.
    *
    * The controller supplies completed, active, and pending Sequence-local
@@ -254,6 +263,7 @@ export function SlideCanvas({
   animationPreviewKey = 0,
   animationTimelineTimeMs,
   animationClipPreviewId,
+  editorTimelineSequenceSamples,
   animationSequenceSamples,
 
   readOnly = false,
@@ -278,16 +288,43 @@ export function SlideCanvas({
    * Selection, movement, and other editor-only rerenders reuse the same compiler
    * result instead of rebuilding every animation.
    */
-  const animationSequenceIdsKey =
-    animationSequenceSamples === undefined
-      ? undefined
-      : JSON.stringify(
-          animationSequenceSamples.map((sample) => sample.sequenceId),
-        );
+  const animationSequenceCompilationKey =
+    editorTimelineSequenceSamples !== undefined
+      ? JSON.stringify(
+          editorTimelineSequenceSamples.flatMap((sample) =>
+            sample.phase === "pending"
+              ? []
+              : [
+                  {
+                    sequenceId: sample.sequenceId,
+                    normalClipIds: sample.normalClipIds,
+                  },
+                ],
+          ),
+        )
+      : animationSequenceSamples === undefined
+        ? undefined
+        : JSON.stringify(
+            animationSequenceSamples.map((sample) => ({
+              sequenceId: sample.sequenceId,
+            })),
+          );
 
   const compiledSlideAnimations = useMemo(() => {
-    if (animationSequenceIdsKey !== undefined) {
-      const sequenceIds = JSON.parse(animationSequenceIdsKey) as string[];
+    if (animationClipPreviewId) {
+      return compileAnimationClipPreview(
+        slide.animationScene,
+        animationClipPreviewId,
+      );
+    }
+
+    if (animationSequenceCompilationKey !== undefined) {
+      const sequencePlans = JSON.parse(
+        animationSequenceCompilationKey,
+      ) as Array<{
+        sequenceId: string;
+        normalClipIds?: string[];
+      }>;
       const compiled: CompiledSlideAnimations = {
         revision: slide.animationScene?.revision ?? 0,
         byElementId: {},
@@ -299,20 +336,29 @@ export function SlideCanvas({
        * separate local time for each Sequence instead of flattening them onto a
        * page-global clock.
        */
-      for (const sequenceId of sequenceIds) {
+      for (const sequencePlan of sequencePlans) {
         const compiledSequence = compileAnimationSequence(
           slide.animationScene,
-          sequenceId,
+          sequencePlan.sequenceId,
         );
+        const normalClipIds = sequencePlan.normalClipIds
+          ? new Set(sequencePlan.normalClipIds)
+          : undefined;
 
         compiled.diagnostics.push(...compiledSequence.diagnostics);
 
         for (const [elementId, animations] of Object.entries(
           compiledSequence.byElementId,
         )) {
+          const renderableAnimations = normalClipIds
+            ? animations.filter((animation) =>
+                normalClipIds.has(animation.clipId),
+              )
+            : animations;
+
           compiled.byElementId[elementId] = [
             ...(compiled.byElementId[elementId] ?? []),
-            ...animations,
+            ...renderableAnimations,
           ];
         }
       }
@@ -320,15 +366,10 @@ export function SlideCanvas({
       return compiled;
     }
 
-    return animationClipPreviewId
-      ? compileAnimationClipPreview(
-          slide.animationScene,
-          animationClipPreviewId,
-        )
-      : compileSlideAnimations(slide.animationScene);
+    return compileSlideAnimations(slide.animationScene);
   }, [
     animationClipPreviewId,
-    animationSequenceIdsKey,
+    animationSequenceCompilationKey,
     slide.animationScene,
   ]);
 
@@ -346,6 +387,28 @@ export function SlideCanvas({
             ]),
           ),
     [animationSequenceSamples],
+  );
+
+  const editorTimelineSequenceSamplesById = useMemo(
+    () =>
+      editorTimelineSequenceSamples === undefined
+        ? undefined
+        : Object.fromEntries(
+            editorTimelineSequenceSamples.flatMap((sample) =>
+              sample.phase === "pending"
+                ? []
+                : [
+                    [
+                      sample.sequenceId,
+                      {
+                        ...sample,
+                        localTimeMs: Math.max(0, sample.localTimeMs),
+                      },
+                    ] as const,
+                  ],
+            ),
+          ),
+    [editorTimelineSequenceSamples],
   );
 
   /**
@@ -772,6 +835,9 @@ export function SlideCanvas({
             scale={scale}
             compiledAnimations={compiledAnimations}
             animationTimelineTimeMs={animationTimelineTimeMs}
+            editorTimelineSequenceSamplesById={
+              editorTimelineSequenceSamplesById
+            }
             animationSequenceSamples={animationSequenceSamples}
             animationSequenceSamplesById={animationSequenceSamplesById}
             legacyAnimationFallback={legacyAnimationFallback}
@@ -973,6 +1039,7 @@ function SlideElementView({
   scale,
   compiledAnimations,
   animationTimelineTimeMs,
+  editorTimelineSequenceSamplesById,
   animationSequenceSamples,
   animationSequenceSamplesById,
   legacyAnimationFallback,
@@ -1002,6 +1069,10 @@ function SlideElementView({
   scale: number;
   compiledAnimations: CompiledElementAnimation[];
   animationTimelineTimeMs?: number;
+  editorTimelineSequenceSamplesById?: Record<
+    string,
+    AnimationTimelineEditorSequenceSample
+  >;
   animationSequenceSamples?: PresentationSequenceSample[];
   animationSequenceSamplesById?: Record<string, PresentationSequenceSample>;
   legacyAnimationFallback: boolean;
@@ -1330,7 +1401,12 @@ function SlideElementView({
 
     const managedAnimations = deterministicAnimationsRef.current;
 
-    const sequenceControlled = animationSequenceSamplesById !== undefined;
+    const presentationSequenceControlled =
+      animationSequenceSamplesById !== undefined;
+    const editorSequenceControlled =
+      editorTimelineSequenceSamplesById !== undefined;
+    const sequenceControlled =
+      presentationSequenceControlled || editorSequenceControlled;
 
     if (
       (!sequenceControlled && animationTimelineTimeMs === undefined) ||
@@ -1345,16 +1421,21 @@ function SlideElementView({
     const visibleAnimationIds = new Set<string>();
 
     for (const compiledAnimation of renderableCompiledAnimations) {
-      const presentationAnimationSample = sequenceControlled
+      const presentationAnimationSample = presentationSequenceControlled
         ? presentationAnimationSamplesById?.get(compiledAnimation.id)
         : undefined;
       const sequenceSample = presentationAnimationSample?.sequenceSample;
+      const editorSequenceSample = editorSequenceControlled
+        ? editorTimelineSequenceSamplesById?.[compiledAnimation.sequenceId]
+        : undefined;
       const startTimeMs = Math.max(0, compiledAnimation.timing.delay);
-      const sampledTimeMs = sequenceControlled
+      const sampledTimeMs = presentationSequenceControlled
         ? presentationAnimationSample?.pendingBaseline
           ? startTimeMs
           : sequenceSample?.localTimeMs
-        : animationTimelineTimeMs;
+        : editorSequenceControlled
+          ? editorSequenceSample?.localTimeMs
+          : animationTimelineTimeMs;
 
       if (sampledTimeMs === undefined) {
         const existingAnimation = managedAnimations.get(compiledAnimation.id);
@@ -1458,6 +1539,7 @@ function SlideElementView({
   }, [
     animationSequenceSamplesById,
     animationTimelineTimeMs,
+    editorTimelineSequenceSamplesById,
     isEditing,
     presentationAnimationSamplesById,
     renderableCompiledAnimations,
@@ -1490,6 +1572,7 @@ function SlideElementView({
 
     const playbackControlled =
       animationTimelineTimeMs !== undefined ||
+      editorTimelineSequenceSamplesById !== undefined ||
       animationSequenceSamplesById !== undefined;
 
     if (
@@ -1558,6 +1641,7 @@ function SlideElementView({
   }, [
     animationSequenceSamplesById,
     animationTimelineTimeMs,
+    editorTimelineSequenceSamplesById,
     isEditing,
     renderableCompiledAnimations,
   ]);
@@ -1566,13 +1650,14 @@ function SlideElementView({
    * Only a Clip using backwards fill should affect the element before its start
    * time. Select the earliest matching Clip for the initial no-flash frame.
    */
-  const initialCompiledAnimation = !isEditing
-    ? renderableCompiledAnimations.find(
-        (compiledAnimation) =>
-          compiledAnimation.timing.fill === "backwards" ||
-          compiledAnimation.timing.fill === "both",
-      )
-    : undefined;
+  const initialCompiledAnimation =
+    !isEditing && editorTimelineSequenceSamplesById === undefined
+      ? renderableCompiledAnimations.find(
+          (compiledAnimation) =>
+            compiledAnimation.timing.fill === "backwards" ||
+            compiledAnimation.timing.fill === "both",
+        )
+      : undefined;
 
   const initialCompiledFrame = initialCompiledAnimation?.keyframes[0];
 

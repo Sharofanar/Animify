@@ -4,11 +4,12 @@ import type { TimelinePlaybackStatus } from "../types/editor";
 export type { TimelinePlaybackStatus } from "../types/editor";
 
 type TimelinePlaybackSnapshot = {
-  slideId: string;
+  contextKey: string;
   currentTimeMs: number;
   status: TimelinePlaybackStatus;
   rangeStartTimeMs?: number;
   rangeEndTimeMs?: number;
+  rangeReturnTimeMs?: number;
 };
 
 type TimelinePlaybackAnchor = {
@@ -17,12 +18,18 @@ type TimelinePlaybackAnchor = {
 };
 
 type UseTimelinePlaybackControllerOptions = {
-  slideId: string;
+  contextKey: string;
   durationMs: number;
+  onRangeComplete?: () => void;
 };
 
 function clampTime(value: number, durationMs: number) {
-  return Math.min(Math.max(0, value), Math.max(0, durationMs));
+  const safeValue = Number.isFinite(value) ? value : 0;
+  const safeDurationMs = Number.isFinite(durationMs)
+    ? Math.max(0, durationMs)
+    : 0;
+
+  return Math.min(Math.max(0, safeValue), safeDurationMs);
 }
 
 /**
@@ -32,13 +39,16 @@ function clampTime(value: number, durationMs: number) {
  * SlideCanvas, which samples the compiled animation state at currentTimeMs.
  */
 export function useTimelinePlaybackController({
-  slideId,
+  contextKey,
   durationMs,
+  onRangeComplete,
 }: UseTimelinePlaybackControllerOptions) {
-  const safeDurationMs = Math.max(0, durationMs);
+  const safeDurationMs = Number.isFinite(durationMs)
+    ? Math.max(0, durationMs)
+    : 0;
 
   const [snapshot, setSnapshot] = useState<TimelinePlaybackSnapshot>({
-    slideId: "",
+    contextKey: "",
     currentTimeMs: 0,
     status: "idle",
   });
@@ -47,14 +57,45 @@ export function useTimelinePlaybackController({
 
   const playbackAnchorRef = useRef<TimelinePlaybackAnchor | null>(null);
 
-  const snapshotBelongsToSlide = snapshot.slideId === slideId;
+  const snapshotHasPlaybackRange =
+    snapshot.rangeStartTimeMs !== undefined &&
+    snapshot.rangeEndTimeMs !== undefined;
 
-  const playbackRangeStartTimeMs = snapshotBelongsToSlide
+  /**
+   * React permits guarded state adjustment during render when a prop defines a
+   * new state identity. This makes the new 0/idle snapshot visible before child
+   * rendering and avoids a second effect-driven render with stale context data.
+   */
+  if (snapshot.contextKey !== contextKey) {
+    setSnapshot({
+      contextKey,
+      currentTimeMs: 0,
+      status: "idle",
+    });
+  } else if (
+    !snapshotHasPlaybackRange &&
+    (snapshot.currentTimeMs > safeDurationMs ||
+      (snapshot.status === "playing" && safeDurationMs <= 0))
+  ) {
+    setSnapshot({
+      ...snapshot,
+      currentTimeMs: clampTime(snapshot.currentTimeMs, safeDurationMs),
+      status: snapshot.status === "playing" ? "idle" : snapshot.status,
+    });
+  }
+
+  const snapshotBelongsToContext = snapshot.contextKey === contextKey;
+
+  const playbackRangeStartTimeMs = snapshotBelongsToContext
     ? snapshot.rangeStartTimeMs
     : undefined;
 
-  const playbackRangeEndTimeMs = snapshotBelongsToSlide
+  const playbackRangeEndTimeMs = snapshotBelongsToContext
     ? snapshot.rangeEndTimeMs
+    : undefined;
+
+  const playbackRangeReturnTimeMs = snapshotBelongsToContext
+    ? snapshot.rangeReturnTimeMs
     : undefined;
 
   const hasPlaybackRange =
@@ -67,11 +108,11 @@ export function useTimelinePlaybackController({
     hasPlaybackRange ? playbackRangeEndTimeMs : 0,
   );
 
-  const currentTimeMs = snapshotBelongsToSlide
+  const currentTimeMs = snapshotBelongsToContext
     ? clampTime(snapshot.currentTimeMs, currentTimelineLimitMs)
     : 0;
 
-  const status: TimelinePlaybackStatus = snapshotBelongsToSlide
+  const status: TimelinePlaybackStatus = snapshotBelongsToContext
     ? snapshot.status
     : "idle";
 
@@ -86,6 +127,16 @@ export function useTimelinePlaybackController({
   }, []);
 
   /**
+   * A playback context is one Slide + Active Sequence identity supplied by App.
+   * The controller treats it as opaque and mechanically resets every transient
+   * clock field whenever it changes.
+   */
+  useEffect(() => {
+    cancelAnimationFrame();
+    playbackAnchorRef.current = null;
+  }, [cancelAnimationFrame, contextKey]);
+
+  /**
    * Seek immediately.
    *
    * Seeking while playing keeps playback running from the new position.
@@ -93,6 +144,17 @@ export function useTimelinePlaybackController({
    */
   const seek = useCallback(
     (timeMs: number) => {
+      if (safeDurationMs <= 0) {
+        cancelAnimationFrame();
+        playbackAnchorRef.current = null;
+        setSnapshot({
+          contextKey,
+          currentTimeMs: 0,
+          status: "idle",
+        });
+        return;
+      }
+
       const nextTimeMs = clampTime(timeMs, safeDurationMs);
 
       playbackAnchorRef.current = {
@@ -102,19 +164,19 @@ export function useTimelinePlaybackController({
 
       setSnapshot((currentSnapshot) => {
         const currentStatus =
-          currentSnapshot.slideId === slideId &&
+          currentSnapshot.contextKey === contextKey &&
           currentSnapshot.status === "playing"
             ? "playing"
             : "paused";
 
         return {
-          slideId,
+          contextKey,
           currentTimeMs: nextTimeMs,
           status: currentStatus,
         };
       });
     },
-    [safeDurationMs, slideId],
+    [cancelAnimationFrame, contextKey, safeDurationMs],
   );
 
   /**
@@ -149,13 +211,14 @@ export function useTimelinePlaybackController({
     };
 
     setSnapshot({
-      slideId,
+      contextKey,
       currentTimeMs: startTimeMs,
       status: "playing",
       ...(hasPlaybackRange
         ? {
             rangeStartTimeMs: playbackRangeStartTimeMs,
             rangeEndTimeMs: playbackRangeEndTimeMs,
+            rangeReturnTimeMs: playbackRangeReturnTimeMs,
           }
         : {}),
     });
@@ -164,9 +227,10 @@ export function useTimelinePlaybackController({
     currentTimeMs,
     hasPlaybackRange,
     playbackRangeEndTimeMs,
+    playbackRangeReturnTimeMs,
     playbackRangeStartTimeMs,
     safeDurationMs,
-    slideId,
+    contextKey,
   ]);
 
   /**
@@ -178,13 +242,14 @@ export function useTimelinePlaybackController({
     playbackAnchorRef.current = null;
 
     setSnapshot({
-      slideId,
+      contextKey,
       currentTimeMs,
       status: "paused",
       ...(hasPlaybackRange
         ? {
             rangeStartTimeMs: playbackRangeStartTimeMs,
             rangeEndTimeMs: playbackRangeEndTimeMs,
+            rangeReturnTimeMs: playbackRangeReturnTimeMs,
           }
         : {}),
     });
@@ -193,8 +258,9 @@ export function useTimelinePlaybackController({
     currentTimeMs,
     hasPlaybackRange,
     playbackRangeEndTimeMs,
+    playbackRangeReturnTimeMs,
     playbackRangeStartTimeMs,
-    slideId,
+    contextKey,
   ]);
 
   /**
@@ -206,15 +272,13 @@ export function useTimelinePlaybackController({
     playbackAnchorRef.current = null;
 
     setSnapshot({
-      slideId,
+      contextKey,
       currentTimeMs: 0,
       status: "idle",
     });
-  }, [cancelAnimationFrame, slideId]);
+  }, [cancelAnimationFrame, contextKey]);
 
-  /**
-   * Explicit full-page replay always starts from zero.
-   */
+  /** Explicit playback-context replay always starts from zero. */
   const replay = useCallback(() => {
     if (safeDurationMs <= 0) {
       stop();
@@ -229,23 +293,27 @@ export function useTimelinePlaybackController({
     };
 
     setSnapshot({
-      slideId,
+      contextKey,
       currentTimeMs: 0,
       status: "playing",
     });
-  }, [cancelAnimationFrame, safeDurationMs, slideId, stop]);
+  }, [cancelAnimationFrame, contextKey, safeDurationMs, stop]);
 
   /**
-   * Start one isolated Clip preview on the shared absolute Timeline.
+   * Start one isolated Clip preview on the shared context-local Timeline.
    *
    * Repeated preview requests replace the previous range and animation frame,
    * so rapid clicks can never create overlapping playback loops.
    */
   const playRange = useCallback(
-    (startTimeMs: number, endTimeMs: number) => {
-      const safeStartTimeMs = Math.max(0, startTimeMs);
+    (startTimeMs: number, endTimeMs: number, returnTimeMs = currentTimeMs) => {
+      const safeStartTimeMs = Number.isFinite(startTimeMs)
+        ? Math.max(0, startTimeMs)
+        : 0;
 
-      const safeEndTimeMs = Math.max(safeStartTimeMs, endTimeMs);
+      const safeEndTimeMs = Number.isFinite(endTimeMs)
+        ? Math.max(safeStartTimeMs, endTimeMs)
+        : safeStartTimeMs;
 
       if (safeEndTimeMs <= safeStartTimeMs) {
         return;
@@ -259,18 +327,19 @@ export function useTimelinePlaybackController({
       };
 
       setSnapshot({
-        slideId,
+        contextKey,
         currentTimeMs: safeStartTimeMs,
         status: "playing",
         rangeStartTimeMs: safeStartTimeMs,
         rangeEndTimeMs: safeEndTimeMs,
+        rangeReturnTimeMs: clampTime(returnTimeMs, safeDurationMs),
       });
     },
-    [cancelAnimationFrame, slideId],
+    [cancelAnimationFrame, contextKey, currentTimeMs, safeDurationMs],
   );
 
   /**
-   * Leave Clip-preview mode and restore the full-page Timeline position.
+   * Leave Clip-preview mode and restore the Active Sequence local position.
    */
   const clearPlaybackRange = useCallback(
     (timeMs: number) => {
@@ -281,12 +350,12 @@ export function useTimelinePlaybackController({
       const nextTimeMs = clampTime(timeMs, safeDurationMs);
 
       setSnapshot({
-        slideId,
+        contextKey,
         currentTimeMs: nextTimeMs,
         status: nextTimeMs > 0 ? "paused" : "idle",
       });
     },
-    [cancelAnimationFrame, safeDurationMs, slideId],
+    [cancelAnimationFrame, contextKey, safeDurationMs],
   );
 
   /**
@@ -330,14 +399,29 @@ export function useTimelinePlaybackController({
 
       const reachedEnd = nextTimeMs >= playbackEndTimeMs;
 
+      const completedRangeReturnTimeMs = hasPlaybackRange
+        ? clampTime(playbackRangeReturnTimeMs ?? 0, safeDurationMs)
+        : undefined;
+
       setSnapshot({
-        slideId,
-        currentTimeMs: nextTimeMs,
-        status: reachedEnd ? "paused" : "playing",
-        ...(hasPlaybackRange
+        contextKey,
+        currentTimeMs:
+          reachedEnd && completedRangeReturnTimeMs !== undefined
+            ? completedRangeReturnTimeMs
+            : nextTimeMs,
+        status:
+          reachedEnd && completedRangeReturnTimeMs !== undefined
+            ? completedRangeReturnTimeMs > 0
+              ? "paused"
+              : "idle"
+            : reachedEnd
+              ? "paused"
+              : "playing",
+        ...(!reachedEnd && hasPlaybackRange
           ? {
               rangeStartTimeMs: playbackRangeStartTimeMs,
               rangeEndTimeMs: playbackRangeEndTimeMs,
+              rangeReturnTimeMs: playbackRangeReturnTimeMs,
             }
           : {}),
       });
@@ -346,6 +430,10 @@ export function useTimelinePlaybackController({
         playbackAnchorRef.current = null;
 
         animationFrameRef.current = null;
+
+        if (completedRangeReturnTimeMs !== undefined) {
+          onRangeComplete?.();
+        }
 
         return;
       }
@@ -363,10 +451,12 @@ export function useTimelinePlaybackController({
     cancelAnimationFrame,
     currentTimeMs,
     hasPlaybackRange,
+    onRangeComplete,
     playbackRangeEndTimeMs,
+    playbackRangeReturnTimeMs,
     playbackRangeStartTimeMs,
     safeDurationMs,
-    slideId,
+    contextKey,
     status,
   ]);
 

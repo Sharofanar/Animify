@@ -25,6 +25,9 @@ type AnimationTimelineProps = {
   clipPreviewStatus?: TimelinePlaybackStatus;
   clipPreviewAvailable?: boolean;
 
+  activeSequenceId?: string;
+  playbackDurationMs: number;
+
   activeAnimationContext?: ActiveAnimationContext;
 
   onCurrentTimeChange: (timeMs: number) => void;
@@ -147,9 +150,9 @@ function formatCurrentTime(timeMs: number) {
  * This phase adds persistent ruler navigation, AE-style horizontal wheel
  * scrolling, and Clip-level keyframe visualization.
  *
- * Full-page playback and isolated Clip preview both use the shared playback
- * controller, while this component remains responsible only for navigation and
- * user intent.
+ * Active-Sequence playback and isolated Clip preview both use the shared
+ * playback controller, while this component remains responsible only for
+ * navigation and user intent.
  */
 export function AnimationTimeline({
   viewModel,
@@ -157,6 +160,8 @@ export function AnimationTimeline({
   playbackStatus,
   clipPreviewStatus,
   clipPreviewAvailable = false,
+  activeSequenceId,
+  playbackDurationMs,
   activeAnimationContext,
   onCurrentTimeChange,
   onSelectClip,
@@ -238,6 +243,14 @@ export function AnimationTimeline({
 
   const timelineDurationMs = viewModel.rulerExtentMs;
 
+  const activeSequence = viewModel.sequenceGroups.find(
+    (group) =>
+      group.status === "normal" && group.sequenceId === activeSequenceId,
+  );
+
+  const normalPlaybackAvailable =
+    activeSequence !== undefined && playbackDurationMs > 0;
+
   const pixelsPerSecond = BASE_PIXELS_PER_SECOND * zoom;
 
   const pixelsPerMs = pixelsPerSecond / 1000;
@@ -289,11 +302,11 @@ export function AnimationTimeline({
      * Ten-millisecond precision keeps dragging smooth without filling UI state
      * with meaningless floating-point values.
      */
-    return clamp(Math.round(rawTime / 10) * 10, 0, timelineDurationMs);
+    return clamp(Math.round(rawTime / 10) * 10, 0, playbackDurationMs);
   }
 
   function handleRulerPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.button !== 0) {
+    if (event.button !== 0 || !normalPlaybackAvailable) {
       return;
     }
 
@@ -356,6 +369,17 @@ export function AnimationTimeline({
 
             <span className="rounded-full bg-slate-100 px-2.5 py-1 font-mono text-[11px] font-black text-slate-600">
               {formatCurrentTime(effectiveCurrentTimeMs)}
+            </span>
+
+            <span
+              className={`rounded-full px-2.5 py-1 text-[10px] font-black ${
+                activeSequence
+                  ? "bg-violet-100 text-violet-700"
+                  : "bg-slate-100 text-slate-400"
+              }`}
+              title="Playhead 使用当前 Sequence 的本地时间"
+            >
+              当前：{activeSequence?.label ?? "无可播放 Sequence"}
             </span>
 
             {viewModel.protectedClipCount > 0 ? (
@@ -445,11 +469,11 @@ export function AnimationTimeline({
 
           <button
             type="button"
-            disabled={viewModel.visibleClipCount === 0}
+            disabled={!normalPlaybackAvailable}
             className="min-w-24 rounded-full bg-violet-500 px-4 py-2 text-xs font-black text-white shadow-sm transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
             onClick={onTogglePlayback}
           >
-            {playbackStatus === "playing" ? "⏸ 整页" : "▶ 整页"}
+            {playbackStatus === "playing" ? "⏸ 当前序列" : "▶ 当前序列"}
           </button>
 
           {playbackStatus !== "idle" ? (
@@ -457,9 +481,9 @@ export function AnimationTimeline({
               type="button"
               className="rounded-full bg-violet-100 px-3 py-2 text-xs font-black text-violet-600 transition hover:bg-violet-200"
               onClick={onStopPlayback}
-              title="停止整页播放并返回 0 秒"
+              title="停止当前 Sequence 播放并返回 0 秒"
             >
-              停止整页
+              停止序列
             </button>
           ) : null}
         </div>
@@ -489,7 +513,11 @@ export function AnimationTimeline({
 
             <div
               ref={rulerRef}
-              className="relative h-9 cursor-ew-resize select-none bg-white"
+              className={`relative h-9 select-none bg-white ${
+                normalPlaybackAvailable
+                  ? "cursor-ew-resize"
+                  : "cursor-not-allowed"
+              }`}
               onPointerDown={handleRulerPointerDown}
               title="点击或拖动 Playhead · 滚轮横向浏览时间轴"
             >
@@ -571,6 +599,9 @@ export function AnimationTimeline({
                   {row.clips.map((clip, clipIndex) => {
                     const focused =
                       activeAnimationContext?.clipId === clip.id;
+                    const inactiveNormalSequence =
+                      clip.status === "normal" &&
+                      clip.sequenceId !== activeSequenceId;
                     const clipLeft = clip.localStartMs * pixelsPerMs;
 
                     const clipWidth = Math.max(
@@ -603,7 +634,7 @@ export function AnimationTimeline({
                               : clip.status === "protected"
                                 ? "bg-amber-500"
                                 : "bg-violet-400"
-                          }`}
+                          } ${inactiveNormalSequence ? "opacity-50" : ""}`}
                           style={{
                             left: clipLeft,
                             top: 4 + clipIndex * 28,

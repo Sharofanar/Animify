@@ -20,7 +20,12 @@ import { SlideNavigator } from "./components/editor/SlideNavigator";
 import { demoProject } from "./data/demoProject";
 import { exportProjectAsHtml } from "./utils/exportHtml";
 import { getAnimationClipPreviewWindow } from "./utils/animationCompiler";
-import { getAnimationTimelineViewModel } from "./utils/animationTimeline";
+import {
+  getAnimationTimelineEditorSamples,
+  getAnimationTimelineNormalSequenceIdForClip,
+  getAnimationTimelineViewModel,
+  resolveAnimationTimelineActiveSequenceId,
+} from "./utils/animationTimeline";
 import {
   computeBlobSha256,
   dataUrlToBlob,
@@ -304,12 +309,13 @@ type CanvasContextMenuState = {
  * Temporary editor-only state for one isolated Clip preview.
  *
  * The project scene remains the authority for every animation value. This state
- * only remembers which compiled Clip is sampled and where the page Playhead
- * should return when preview stops.
+ * only remembers which compiled Clip is sampled and where the Active Sequence
+ * local Playhead should return when preview stops.
  */
 type AnimationClipPreviewState = {
   slideId: string;
   clipId: string;
+  playbackContextKey: string;
   returnTimeMs: number;
 };
 
@@ -784,6 +790,14 @@ function App() {
   const [activeAnimationContext, setActiveAnimationContext] =
     useState<ActiveAnimationContext | null>(null);
 
+  /**
+   * Editor-only playback context. Sequence identity is never persisted in the
+   * presentation document and remains separate from active Clip navigation.
+   */
+  const [activeAnimationSequenceId, setActiveAnimationSequenceId] = useState<
+    string | null
+  >(null);
+
   const [elementContextMenu, setElementContextMenu] =
     useState<ElementContextMenuState>(null);
   const [canvasContextMenu, setCanvasContextMenu] =
@@ -849,22 +863,24 @@ function App() {
     (slide) => slide.id === project.activeSlideId,
   );
 
-  const effectiveAnimationClipPreview =
-    animationClipPreview &&
-    activeSlide?.animationScene?.schemaVersion === 2 &&
-    animationClipPreview.slideId === activeSlide.id &&
-    activeSlide.animationScene.clips[animationClipPreview.clipId] &&
-    isAnimationClipLiveForElements(
-      activeSlide.animationScene.clips[animationClipPreview.clipId],
-      activeSlide.elements,
+  const activeAnimationScene = activeSlide?.animationScene;
+
+  /**
+   * Keep stale Clip navigation harmless after delete, undo, redo, or Slide
+   * changes while retaining the original editor state for a possible restore.
+   */
+  const effectiveActiveAnimationContext =
+    activeAnimationContext &&
+    activeAnimationScene?.schemaVersion === 2 &&
+    activeAnimationScene.clips[activeAnimationContext.clipId]?.targets.some(
+      (target) => target.elementId === activeAnimationContext.elementId,
     )
-      ? animationClipPreview
+      ? activeAnimationContext
       : null;
 
   /**
    * Keep Timeline hierarchy, ownership, targets, and display ordering inside
-   * the pure read-model domain. Playback remains on the existing shared clock
-   * until the separate Sequence-local Timeline batch.
+   * the pure read-model domain.
    */
   const animationTimelineViewModel = useMemo(
     () =>
@@ -875,17 +891,96 @@ function App() {
     [activeSlide],
   );
 
+  const activeAnimationSequenceSlideIdRef = useRef(project.activeSlideId);
+  const activeSequenceStateBelongsToSlide =
+    activeAnimationSequenceSlideIdRef.current === project.activeSlideId;
+
+  const resolvedActiveAnimationSequenceId =
+    resolveAnimationTimelineActiveSequenceId(
+      animationTimelineViewModel,
+      activeSequenceStateBelongsToSlide
+        ? activeAnimationSequenceId
+        : null,
+      activeSequenceStateBelongsToSlide
+        ? effectiveActiveAnimationContext?.clipId
+        : undefined,
+    );
+
+  const activeAnimationSequenceGroup =
+    animationTimelineViewModel.sequenceGroups.find(
+      (group) =>
+        group.status === "normal" &&
+        group.sequenceId === resolvedActiveAnimationSequenceId,
+    );
+
   /**
    * PlaybackController must be created before the active-slide early return so
    * React Hooks always execute in the same order.
    */
   const animationPlaybackDurationMs =
-    animationTimelineViewModel.maximumAuthoredLocalEndMs;
+    activeAnimationSequenceGroup &&
+    Number.isFinite(activeAnimationSequenceGroup.semanticDurationMs)
+      ? Math.max(0, activeAnimationSequenceGroup.semanticDurationMs)
+      : 0;
+
+  const animationPlaybackContextKey = JSON.stringify([
+    project.activeSlideId,
+    resolvedActiveAnimationSequenceId,
+  ]);
+
+  /**
+   * Guarded render-time reconciliation prevents one committed frame from
+   * exposing a stale Sequence or preview after a document/context replacement.
+   * Both values are transient editor state and converge before child rendering.
+   */
+  if (activeAnimationSequenceId !== resolvedActiveAnimationSequenceId) {
+    setActiveAnimationSequenceId(resolvedActiveAnimationSequenceId);
+  }
+
+  if (
+    animationClipPreview &&
+    animationClipPreview.playbackContextKey !== animationPlaybackContextKey
+  ) {
+    setAnimationClipPreview(null);
+  }
+
+  const effectiveAnimationClipPreview =
+    animationClipPreview &&
+    animationClipPreview.playbackContextKey === animationPlaybackContextKey &&
+    activeSlide?.animationScene?.schemaVersion === 2 &&
+    animationClipPreview.slideId === activeSlide.id &&
+    activeSlide.animationScene.clips[animationClipPreview.clipId] &&
+    isAnimationClipLiveForElements(
+      activeSlide.animationScene.clips[animationClipPreview.clipId],
+      activeSlide.elements,
+    )
+      ? animationClipPreview
+      : null;
+
+  const handleAnimationClipPreviewRangeComplete = useCallback(() => {
+    setAnimationClipPreview(null);
+  }, []);
 
   const timelinePlayback = useTimelinePlaybackController({
-    slideId: project.activeSlideId,
+    contextKey: animationPlaybackContextKey,
     durationMs: animationPlaybackDurationMs,
+    onRangeComplete: handleAnimationClipPreviewRangeComplete,
   });
+
+  const editorTimelineSequenceSamples = useMemo(
+    () =>
+      getAnimationTimelineEditorSamples(
+        animationTimelineViewModel,
+        resolvedActiveAnimationSequenceId,
+        timelinePlayback.currentTimeMs,
+      ),
+    [
+      animationTimelineViewModel,
+      resolvedActiveAnimationSequenceId,
+      timelinePlayback.currentTimeMs,
+    ],
+  );
+
   const {
     state: presentationPlaybackState,
     enterSlide: enterPresentationSlidePlayback,
@@ -1099,6 +1194,11 @@ function App() {
     clearTimelinePlaybackRange,
     stopTimelinePlayback,
   ]);
+
+  /** Track the committed Slide identity without creating another business state. */
+  useEffect(() => {
+    activeAnimationSequenceSlideIdRef.current = project.activeSlideId;
+  }, [project.activeSlideId]);
 
   const commitProjectChange = useCallback(
     (updater: ProjectUpdater, options: { recordHistory?: boolean } = {}) => {
@@ -1922,23 +2022,6 @@ function App() {
   const showPropertyPanel = propertyPanelOpen && selectedElements.length > 0;
 
   const activeSlideElementCount = activeSlide.elements.length;
-
-  const activeAnimationScene = activeSlide.animationScene;
-
-  /**
-   * Keep stale UI selection harmless after delete, undo, redo, or slide changes.
-   *
-   * The original context is retained in State so undo can restore the same Clip,
-   * while editors receive only a context that is valid for the active slide.
-   */
-  const effectiveActiveAnimationContext =
-    activeAnimationContext &&
-    activeAnimationScene?.schemaVersion === 2 &&
-    activeAnimationScene.clips[activeAnimationContext.clipId]?.targets.some(
-      (target) => target.elementId === activeAnimationContext.elementId,
-    )
-      ? activeAnimationContext
-      : null;
 
   const selectedClipPreviewWindow = effectiveActiveAnimationContext
     ? getAnimationClipPreviewWindow(
@@ -3411,8 +3494,10 @@ function App() {
     command: SetAnimationClipTriggerRequest,
   ) {
     const operationId = `clip-trigger-${Date.now()}`;
+    const activeClipRelocated =
+      effectiveActiveAnimationContext?.clipId === command.clipId;
 
-    commitProjectChange((currentProject) => {
+    const changed = commitProjectChange((currentProject) => {
       let changed = false;
 
       const nextSlides = currentProject.slides.map((slide) => {
@@ -3443,6 +3528,10 @@ function App() {
         slides: nextSlides,
       };
     });
+
+    if (changed && activeClipRelocated) {
+      reconcileActiveAnimationSequenceAfterClipRelocation(command.clipId);
+    }
   }
 
   /**
@@ -3452,7 +3541,9 @@ function App() {
   function handleMoveAnimationClipToClickStep(
     command: MoveAnimationClipToClickStepCommand,
   ) {
-    commitProjectChange((currentProject) => {
+    const activeClipRelocated =
+      effectiveActiveAnimationContext?.clipId === command.clipId;
+    const changed = commitProjectChange((currentProject) => {
       let changed = false;
 
       const nextSlides = currentProject.slides.map((slide) => {
@@ -3480,6 +3571,10 @@ function App() {
         slides: nextSlides,
       };
     });
+
+    if (changed && activeClipRelocated) {
+      reconcileActiveAnimationSequenceAfterClipRelocation(command.clipId);
+    }
   }
 
   /**
@@ -4533,6 +4628,52 @@ function App() {
   }
 
   /**
+   * Let an explicit Clip selection request its normal owner without promoting a
+   * protected Clip into the Sequence playback path.
+   */
+  function requestActiveAnimationSequenceForClip(clipId: string) {
+    const ownerSequenceId = getAnimationTimelineNormalSequenceIdForClip(
+      animationTimelineViewModel,
+      clipId,
+    );
+
+    setActiveAnimationSequenceId(
+      ownerSequenceId ?? resolvedActiveAnimationSequenceId,
+    );
+  }
+
+  /**
+   * A successful trigger/Step relocation may move the active Clip to another
+   * normal Sequence while leaving its old Sequence alive. Re-read the committed
+   * document so that explicit Clip intent follows the new owner immediately.
+   */
+  function reconcileActiveAnimationSequenceAfterClipRelocation(
+    clipId: string,
+  ) {
+    const currentProject = latestProjectRef.current;
+    const currentSlide = currentProject.slides.find(
+      (slide) => slide.id === currentProject.activeSlideId,
+    );
+    const nextModel = getAnimationTimelineViewModel(
+      currentSlide?.animationScene,
+      currentSlide?.elements ?? [],
+    );
+    const ownerSequenceId = getAnimationTimelineNormalSequenceIdForClip(
+      nextModel,
+      clipId,
+    );
+
+    setActiveAnimationSequenceId((currentSequenceId) =>
+      ownerSequenceId ??
+      resolveAnimationTimelineActiveSequenceId(
+        nextModel,
+        currentSequenceId,
+        clipId,
+      ),
+    );
+  }
+
+  /**
    * Select one Clip from an outside animation editor.
    *
    * Property-panel and timeline selections increment requestId so an already
@@ -4553,6 +4694,7 @@ function App() {
     setSelectedElementIds([elementId]);
     setPropertyTargetElementIds([elementId]);
     setPropertyPanelOpen(true);
+    requestActiveAnimationSequenceForClip(clipId);
 
     setActiveAnimationContext({
       elementId,
@@ -4564,10 +4706,17 @@ function App() {
   /**
    * Seek the shared editor Timeline.
    *
-   * Manual seeking exits isolated preview because the ruler represents the full
-   * page Timeline rather than Clip-local navigation.
+   * Manual seeking exits isolated preview because the ruler represents the
+   * Active Sequence rather than one isolated Clip.
    */
   function handleAnimationTimelineTimeChange(timeMs: number) {
+    if (
+      !resolvedActiveAnimationSequenceId ||
+      animationPlaybackDurationMs <= 0
+    ) {
+      return;
+    }
+
     if (effectiveAnimationClipPreview) {
       setAnimationClipPreview(null);
       timelinePlayback.clearPlaybackRange(timeMs);
@@ -4577,22 +4726,36 @@ function App() {
     timelinePlayback.seek(timeMs);
   }
 
-  /**
-   * Replay the complete active page from zero using the shared Timeline clock.
-   */
+  /** Replay the Active Sequence from local zero. */
   function handleReplayCurrentSlideAnimation() {
     setMode("animation");
     setAnimationClipPreview(null);
+
+    if (
+      !resolvedActiveAnimationSequenceId ||
+      animationPlaybackDurationMs <= 0
+    ) {
+      timelinePlayback.stop();
+      return;
+    }
+
     timelinePlayback.replay();
   }
 
   /**
-   * Toggle full-page Timeline playback.
+   * Toggle Active Sequence Timeline playback.
    *
-   * Choosing full-page playback while a Clip is isolated deliberately replaces
+   * Choosing Sequence playback while a Clip is isolated deliberately replaces
    * preview mode rather than allowing two playback intents to compete.
    */
   function handleToggleTimelinePlayback() {
+    if (
+      !resolvedActiveAnimationSequenceId ||
+      animationPlaybackDurationMs <= 0
+    ) {
+      return;
+    }
+
     if (effectiveAnimationClipPreview) {
       setAnimationClipPreview(null);
       timelinePlayback.replay();
@@ -4618,20 +4781,23 @@ function App() {
     const previewingSameClip =
       effectiveAnimationClipPreview?.clipId ===
       effectiveActiveAnimationContext.clipId;
+    const returnTimeMs = previewingSameClip
+      ? effectiveAnimationClipPreview.returnTimeMs
+      : animationTimelineCurrentTimeMs;
 
     setMode("animation");
 
     setAnimationClipPreview({
       slideId: project.activeSlideId,
       clipId: effectiveActiveAnimationContext.clipId,
-      returnTimeMs: previewingSameClip
-        ? effectiveAnimationClipPreview.returnTimeMs
-        : animationTimelineCurrentTimeMs,
+      playbackContextKey: animationPlaybackContextKey,
+      returnTimeMs,
     });
 
     timelinePlayback.playRange(
       selectedClipPreviewWindow.startTimeMs,
       selectedClipPreviewWindow.endTimeMs,
+      returnTimeMs,
     );
   }
 
@@ -4738,6 +4904,7 @@ function App() {
 
     setPropertyTargetElementIds([elementId]);
     setPropertyPanelOpen(true);
+    requestActiveAnimationSequenceForClip(clipId);
 
     setActiveAnimationContext({
       elementId,
@@ -5150,6 +5317,11 @@ function App() {
                       ? effectiveAnimationClipPreview?.clipId
                       : undefined
                   }
+                  editorTimelineSequenceSamples={
+                    mode === "animation" && !effectiveAnimationClipPreview
+                      ? editorTimelineSequenceSamples
+                      : undefined
+                  }
                 />
               </div>
               {mode === "animation" ? (
@@ -5163,6 +5335,10 @@ function App() {
                   }
                   clipPreviewStatus={selectedClipPreviewStatus}
                   clipPreviewAvailable={Boolean(selectedClipPreviewWindow)}
+                  activeSequenceId={
+                    resolvedActiveAnimationSequenceId ?? undefined
+                  }
+                  playbackDurationMs={animationPlaybackDurationMs}
                   activeAnimationContext={
                     effectiveActiveAnimationContext ?? undefined
                   }

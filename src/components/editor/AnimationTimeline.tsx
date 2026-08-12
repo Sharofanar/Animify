@@ -3,7 +3,10 @@ import {
   useMemo,
   useRef,
   useState,
+  type Dispatch,
+  type ReactNode,
   type PointerEvent as ReactPointerEvent,
+  type SetStateAction,
 } from "react";
 import type {
   ActiveAnimationContext,
@@ -11,12 +14,18 @@ import type {
 } from "../../types/editor";
 import type {
   AnimationTimelineClipEntry,
+  AnimationTimelineHierarchyClipNode,
   AnimationTimelineProtectionReason,
+  AnimationTimelineRevealRequest,
+  AnimationTimelineSelection,
+  AnimationTimelineSequenceGroup,
   AnimationTimelineViewModel,
 } from "../../utils/animationTimeline";
+import { getAnimationTimelineHierarchy } from "../../utils/animationTimeline";
 
 type AnimationTimelineProps = {
   viewModel: AnimationTimelineViewModel;
+  hierarchyContextKey: string;
 
   currentTimeMs: number;
 
@@ -29,10 +38,24 @@ type AnimationTimelineProps = {
   playbackDurationMs: number;
 
   activeAnimationContext?: ActiveAnimationContext;
+  selection?: AnimationTimelineSelection;
+  revealRequest?: AnimationTimelineRevealRequest;
 
   onCurrentTimeChange: (timeMs: number) => void;
 
+  onSelectSequence: (sequenceId: string) => void;
+
   onSelectClip: (elementId: string, clipId: string) => void;
+
+  onSelectTrack: (
+    elementId: string,
+    selection: Extract<AnimationTimelineSelection, { kind: "track" }>,
+  ) => void;
+
+  onSelectKeyframe: (
+    elementId: string,
+    selection: Extract<AnimationTimelineSelection, { kind: "keyframe" }>,
+  ) => void;
 
   onOpenClipDetails: (elementId: string, clipId: string) => void;
 
@@ -44,6 +67,11 @@ type AnimationTimelineProps = {
 };
 
 const LABEL_COLUMN_WIDTH = 168;
+
+type AnimationTimelineCollapseState = {
+  contextKey: string;
+  ids: Set<string>;
+};
 
 const BASE_PIXELS_PER_SECOND = 220;
 
@@ -156,6 +184,7 @@ function formatCurrentTime(timeMs: number) {
  */
 export function AnimationTimeline({
   viewModel,
+  hierarchyContextKey,
   currentTimeMs,
   playbackStatus,
   clipPreviewStatus,
@@ -163,8 +192,13 @@ export function AnimationTimeline({
   activeSequenceId,
   playbackDurationMs,
   activeAnimationContext,
+  selection,
+  revealRequest,
   onCurrentTimeChange,
+  onSelectSequence,
   onSelectClip,
+  onSelectTrack,
+  onSelectKeyframe,
   onOpenClipDetails,
   onTogglePlayback,
   onToggleClipPreview,
@@ -173,6 +207,32 @@ export function AnimationTimeline({
   onStopPlayback,
 }: AnimationTimelineProps) {
   const [zoom, setZoom] = useState<number>(1);
+
+  const [sequenceCollapseState, setSequenceCollapseState] =
+    useState<AnimationTimelineCollapseState>(() => ({
+      contextKey: hierarchyContextKey,
+      ids: new Set(),
+    }));
+
+  const [clipExpansionState, setClipExpansionState] =
+    useState<AnimationTimelineCollapseState>(() => ({
+      contextKey: hierarchyContextKey,
+      ids: new Set(),
+    }));
+  const [suppressedRevealRequestKey, setSuppressedRevealRequestKey] = useState<
+    string | null
+  >(null);
+
+  const collapsedSequenceIds =
+    sequenceCollapseState.contextKey === hierarchyContextKey
+      ? sequenceCollapseState.ids
+      : new Set<string>();
+
+  /** Empty means every Clip starts collapsed; only explicit local expansion wins. */
+  const expandedClipIds =
+    clipExpansionState.contextKey === hierarchyContextKey
+      ? clipExpansionState.ids
+      : new Set<string>();
 
   const rulerRef = useRef<HTMLDivElement | null>(null);
 
@@ -183,6 +243,8 @@ export function AnimationTimeline({
    * sticky layer-label column keeps ordinary vertical scrolling available.
    */
   const scrollViewportRef = useRef<HTMLDivElement | null>(null);
+  const clipRowRefs = useRef(new Map<string, HTMLDivElement>());
+  const completedRevealRequestKeyRef = useRef<string | null>(null);
 
   /**
    * Convert wheel movement into horizontal Timeline navigation only when the
@@ -243,6 +305,11 @@ export function AnimationTimeline({
 
   const timelineDurationMs = viewModel.rulerExtentMs;
 
+  const hierarchy = useMemo(
+    () => getAnimationTimelineHierarchy(viewModel),
+    [viewModel],
+  );
+
   const activeSequence = viewModel.sequenceGroups.find(
     (group) =>
       group.status === "normal" && group.sequenceId === activeSequenceId,
@@ -260,6 +327,110 @@ export function AnimationTimeline({
   const effectiveCurrentTimeMs = clamp(currentTimeMs, 0, timelineDurationMs);
 
   const playheadX = effectiveCurrentTimeMs * pixelsPerMs;
+  const revealRequestKey = revealRequest
+    ? `${hierarchyContextKey}:${revealRequest.requestId}:${revealRequest.clipId}`
+    : null;
+  const revealSequenceNode = revealRequest
+    ? hierarchy.sequences.find((entry) =>
+        entry.clips.some((clipNode) => clipNode.id === revealRequest.clipId),
+      )
+    : undefined;
+  const revealedSequenceGroupId =
+    revealRequestKey &&
+    suppressedRevealRequestKey !== revealRequestKey
+      ? revealSequenceNode?.id
+      : undefined;
+
+  /**
+   * Reveal external Clip navigation without touching selection or local time.
+   * The parent Sequence opens first; the animation frame waits for that row to
+   * enter the DOM before applying the smallest vertical/horizontal scroll.
+   */
+  useEffect(() => {
+    if (!revealRequest) {
+      return;
+    }
+
+    if (
+      !revealRequestKey ||
+      completedRevealRequestKeyRef.current === revealRequestKey
+    ) {
+      return;
+    }
+
+    const clipNode = revealSequenceNode?.clips.find(
+      (entry) => entry.id === revealRequest.clipId,
+    );
+
+    if (!revealSequenceNode || !clipNode) {
+      return;
+    }
+
+    const frameId = window.requestAnimationFrame(() => {
+      const viewport = scrollViewportRef.current;
+      const clipRow = clipRowRefs.current.get(clipNode.id);
+
+      if (!viewport || !clipRow) {
+        return;
+      }
+
+      completedRevealRequestKeyRef.current = revealRequestKey;
+
+      const viewportRect = viewport.getBoundingClientRect();
+      const clipRowRect = clipRow.getBoundingClientRect();
+      const visibleTop = viewportRect.top + 36;
+      const visibleBottom = viewportRect.bottom;
+
+      if (clipRowRect.top < visibleTop) {
+        viewport.scrollTop += clipRowRect.top - visibleTop;
+      } else if (clipRowRect.bottom > visibleBottom) {
+        viewport.scrollTop += clipRowRect.bottom - visibleBottom;
+      }
+
+      const visibleTimelineWidth = Math.max(
+        0,
+        viewport.clientWidth - LABEL_COLUMN_WIDTH,
+      );
+
+      if (visibleTimelineWidth === 0) {
+        return;
+      }
+
+      const clipStartX = clipNode.clip.localStartMs * pixelsPerMs;
+      const clipWidth = Math.max(
+        12,
+        Math.max(0, clipNode.clip.authoredDurationMs) * pixelsPerMs,
+      );
+      const clipEndX = clipStartX + clipWidth;
+      const visibleStartX = viewport.scrollLeft;
+      const visibleEndX = visibleStartX + visibleTimelineWidth;
+      let nextScrollLeft = visibleStartX;
+
+      if (clipStartX < visibleStartX) {
+        nextScrollLeft = clipStartX;
+      } else if (clipEndX > visibleEndX) {
+        nextScrollLeft =
+          clipWidth >= visibleTimelineWidth
+            ? clipStartX
+            : clipEndX - visibleTimelineWidth;
+      }
+
+      viewport.scrollLeft = clamp(
+        nextScrollLeft,
+        0,
+        Math.max(0, viewport.scrollWidth - viewport.clientWidth),
+      );
+    });
+
+    return () => window.cancelAnimationFrame(frameId);
+  }, [
+    hierarchy,
+    hierarchyContextKey,
+    pixelsPerMs,
+    revealRequest,
+    revealRequestKey,
+    revealSequenceNode,
+  ]);
 
   const majorTickStepMs = getMajorTickStepMs(timelineDurationMs, pixelsPerMs);
 
@@ -350,6 +521,30 @@ export function AnimationTimeline({
   }
 
   const currentZoomIndex = ZOOM_LEVELS.findIndex((level) => level === zoom);
+
+  function toggleIdInState(
+    setter: Dispatch<SetStateAction<AnimationTimelineCollapseState>>,
+    id: string,
+  ) {
+    setter((currentState) => {
+      const nextIds = new Set(
+        currentState.contextKey === hierarchyContextKey
+          ? currentState.ids
+          : undefined,
+      );
+
+      if (nextIds.has(id)) {
+        nextIds.delete(id);
+      } else {
+        nextIds.add(id);
+      }
+
+      return {
+        contextKey: hierarchyContextKey,
+        ids: nextIds,
+      };
+    });
+  }
 
   return (
     <section
@@ -555,165 +750,136 @@ export function AnimationTimeline({
             </div>
           </div>
 
-          {/* Animated object rows */}
-          {viewModel.objectRows.map((row, elementIndex) => {
-            const rowHeight = Math.max(36, row.clips.length * 28 + 8);
+          {/* Sequence → Object / Clip → Track → Keyframe hierarchy */}
+          {hierarchy.sequences.map((sequenceNode) => {
+            const { group } = sequenceNode;
+            const sequenceCollapsed =
+              collapsedSequenceIds.has(group.id) &&
+              revealedSequenceGroupId !== group.id;
+            const active =
+              group.status === "normal" && group.sequenceId === activeSequenceId;
+            const sequenceDuration = formatRulerTime(group.semanticDurationMs);
 
             return (
-              <div
-                key={row.elementId}
-                className="grid border-b border-slate-100 last:border-b-0"
-                style={{
-                  gridTemplateColumns: `${LABEL_COLUMN_WIDTH}px ${timelineTrackWidth}px`,
-                }}
-              >
+              <div key={sequenceNode.id} className="border-b border-slate-200">
                 <div
-                  className="sticky left-0 z-50 flex items-center border-r border-slate-200 bg-slate-50 px-3 shadow-[1px_0_0_rgba(15,23,42,0.06)]"
+                  className={`grid ${
+                    active
+                      ? "bg-violet-50"
+                      : group.status === "protected"
+                        ? "bg-amber-50"
+                        : "bg-slate-100"
+                  }`}
                   style={{
-                    height: rowHeight,
-                  }}
-                  title={row.elementName}
-                >
-                  <span className="min-w-0 truncate text-xs font-bold text-slate-600">
-                    {elementIndex + 1}. {row.label}
-                  </span>
-                </div>
-
-                <div
-                  className="relative z-0 overflow-hidden bg-white"
-                  style={{
-                    height: rowHeight,
+                    gridTemplateColumns: `${LABEL_COLUMN_WIDTH}px ${timelineTrackWidth}px`,
                   }}
                 >
-                  {/* Major vertical guide lines */}
-                  {majorTicks.map((timeMs) => (
-                    <div
-                      key={`guide-${timeMs}`}
-                      className="pointer-events-none absolute bottom-0 top-0 border-l border-slate-100"
-                      style={{
-                        left: timeMs * pixelsPerMs,
-                      }}
-                    />
-                  ))}
-
-                  {row.clips.map((clip, clipIndex) => {
-                    const focused =
-                      activeAnimationContext?.clipId === clip.id;
-                    const inactiveNormalSequence =
-                      clip.status === "normal" &&
-                      clip.sequenceId !== activeSequenceId;
-                    const clipLeft = clip.localStartMs * pixelsPerMs;
-
-                    const clipWidth = Math.max(
-                      12,
-                      Math.max(0, clip.authoredDurationMs) * pixelsPerMs,
-                    );
-
-                    const targetSummary = clip.targets
-                      .map(
-                        (target) =>
-                          target.elementName ??
-                          `${target.elementId}${
-                            target.available ? "" : "（缺失）"
-                          }`,
-                      )
-                      .join("、");
-                    const protectionLabel = getProtectionLabel(
-                      clip.protectionReason,
-                    );
-
-                    return (
-                      <div key={clip.id}>
-                        <button
-                          type="button"
-                          className={`absolute flex h-5 min-w-0 items-center gap-1 overflow-hidden rounded-md px-2 text-left text-[10px] font-black text-white shadow-sm transition hover:z-20 hover:brightness-105 ${
-                            focused
-                              ? clip.status === "protected"
-                                ? "z-10 bg-amber-600 ring-2 ring-amber-300"
-                                : "z-10 bg-violet-600 ring-2 ring-violet-300"
-                              : clip.status === "protected"
-                                ? "bg-amber-500"
-                                : "bg-violet-400"
-                          } ${inactiveNormalSequence ? "opacity-50" : ""}`}
-                          style={{
-                            left: clipLeft,
-                            top: 4 + clipIndex * 28,
-                            width: clipWidth,
-                          }}
-                          title={`${clip.name} · ${getAnimationCategoryLabel(
-                            clip.category,
-                          )} · ${clip.sequenceLabel} · Sequence-local 开始 ${
-                            clip.authoredStartMs
-                          }ms · 时长 ${clip.authoredDurationMs}ms · 目标 ${
-                            targetSummary || "无"
-                          }${
-                            protectionLabel
-                              ? ` · 受保护：${protectionLabel}`
-                              : ""
-                          } · 单击选择 · 双击详细编辑`}
-                          onClick={(event) => {
-                            event.stopPropagation();
-
-                            onSelectClip(row.elementId, clip.id);
-                          }}
-                          onDoubleClick={(event) => {
-                            event.stopPropagation();
-
-                            onOpenClipDetails(row.elementId, clip.id);
-                          }}
-                        >
-                          <span className="min-w-0 flex-1 truncate">
-                            {clip.name}
-                          </span>
-
-                          <span className="shrink-0 rounded-full bg-white/20 px-1 text-[8px]">
-                            {clip.status === "protected"
-                              ? "保护"
-                              : getAnimationCategoryLabel(clip.category)}
-                          </span>
-                        </button>
-
-                        {clip.keyframeLocalTimesMs.map(
-                          (keyframeTimeMs, keyframeIndex) => {
-                            const keyframeLeft = keyframeTimeMs * pixelsPerMs;
-
-                            return (
-                              <span
-                                key={`${clip.id}-keyframe-${keyframeTimeMs}-${keyframeIndex}`}
-                                className={`pointer-events-none absolute z-30 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[1px] border shadow-sm ${
-                                  focused
-                                    ? clip.status === "protected"
-                                      ? "border-amber-700 bg-amber-100"
-                                      : "border-violet-700 bg-violet-100"
-                                    : clip.status === "protected"
-                                      ? "border-amber-500 bg-white"
-                                      : "border-violet-500 bg-white"
-                                }`}
-                                style={{
-                                  left: keyframeLeft,
-                                  top: 14 + clipIndex * 28,
-                                }}
-                              />
+                  <div className="sticky left-0 z-50 flex h-10 min-w-0 items-center gap-1 border-r border-slate-200 px-2 shadow-[1px_0_0_rgba(15,23,42,0.06)]">
+                    <button
+                      type="button"
+                      className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[10px] font-black text-slate-500 hover:bg-white"
+                      onClick={() => {
+                        if (revealedSequenceGroupId === group.id) {
+                          setSuppressedRevealRequestKey(revealRequestKey);
+                          setSequenceCollapseState((currentState) => {
+                            const nextIds = new Set(
+                              currentState.contextKey === hierarchyContextKey
+                                ? currentState.ids
+                                : undefined,
                             );
-                          },
-                        )}
-                      </div>
-                    );
-                  })}
+                            nextIds.add(group.id);
 
-                  {/* Playhead line continues through every row. */}
-                  <div
-                    className="pointer-events-none absolute bottom-0 top-0 z-40 w-px bg-rose-500"
-                    style={{
-                      left: playheadX,
-                    }}
-                  />
+                            return {
+                              contextKey: hierarchyContextKey,
+                              ids: nextIds,
+                            };
+                          });
+                          return;
+                        }
+
+                        toggleIdInState(setSequenceCollapseState, group.id);
+                      }}
+                      aria-label={`${sequenceCollapsed ? "展开" : "折叠"} ${group.label}`}
+                    >
+                      {sequenceCollapsed ? "▶" : "▼"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={group.status === "protected" || !group.sequenceId}
+                      className={`min-w-0 flex-1 truncate text-left text-[11px] font-black disabled:cursor-default ${
+                        active
+                          ? "text-violet-700"
+                          : group.status === "protected"
+                            ? "text-amber-700"
+                            : "text-slate-700"
+                      }`}
+                      onClick={() => {
+                        if (group.sequenceId) {
+                          onSelectSequence(group.sequenceId);
+                        }
+                      }}
+                      title={
+                        group.status === "protected"
+                          ? `${group.label} · 受保护，只读检查`
+                          : `${group.label} · 选择 Active Sequence`
+                      }
+                    >
+                      {group.label}
+                    </button>
+                  </div>
+                  <div className="flex h-10 items-center gap-2 px-3 text-[10px] font-bold text-slate-500">
+                    <span>{sequenceNode.clips.length} Clips</span>
+                    <span>·</span>
+                    <span>{sequenceDuration}</span>
+                    {active ? (
+                      <span className="rounded-full bg-violet-100 px-2 py-0.5 text-violet-700">
+                        ACTIVE
+                      </span>
+                    ) : null}
+                    {group.status === "protected" ? (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-amber-700">
+                        只读保护
+                      </span>
+                    ) : null}
+                  </div>
                 </div>
+
+                {!sequenceCollapsed
+                  ? sequenceNode.clips.map((clipNode) => (
+                      <AnimationTimelineClipHierarchyRows
+                        key={clipNode.id}
+                        node={clipNode}
+                        group={group}
+                        activeSequenceId={activeSequenceId}
+                        activeAnimationContext={activeAnimationContext}
+                        selection={selection}
+                        collapsed={!expandedClipIds.has(clipNode.id)}
+                        timelineTrackWidth={timelineTrackWidth}
+                        pixelsPerMs={pixelsPerMs}
+                        playheadX={playheadX}
+                        majorTicks={majorTicks}
+                        onToggleCollapse={() =>
+                          toggleIdInState(setClipExpansionState, clipNode.id)
+                        }
+                        registerClipRow={(node) => {
+                          if (node) {
+                            clipRowRefs.current.set(clipNode.id, node);
+                          } else {
+                            clipRowRefs.current.delete(clipNode.id);
+                          }
+                        }}
+                        onSelectClip={onSelectClip}
+                        onSelectTrack={onSelectTrack}
+                        onSelectKeyframe={onSelectKeyframe}
+                        onOpenClipDetails={onOpenClipDetails}
+                      />
+                    ))
+                  : null}
               </div>
             );
           })}
 
-          {viewModel.objectRows.length === 0 ? (
+          {hierarchy.sequences.length === 0 ? (
             <div
               className="grid border-b border-slate-100"
               style={{
@@ -721,15 +887,344 @@ export function AnimationTimeline({
               }}
             >
               <div className="sticky left-0 z-50 flex h-12 items-center border-r border-slate-200 bg-slate-50 px-3 text-xs font-bold text-slate-400">
-                动画对象
+                动画层级
               </div>
               <div className="flex h-12 items-center bg-white px-3 text-[11px] font-semibold text-slate-400">
-                当前页面没有可显示的 V2 动画对象
+                当前页面没有可显示的 V2 动画 Sequence
               </div>
             </div>
           ) : null}
         </div>
       </div>
     </section>
+  );
+}
+
+function AnimationTimelineClipHierarchyRows({
+  node,
+  group,
+  activeSequenceId,
+  activeAnimationContext,
+  selection,
+  collapsed,
+  timelineTrackWidth,
+  pixelsPerMs,
+  playheadX,
+  majorTicks,
+  onToggleCollapse,
+  registerClipRow,
+  onSelectClip,
+  onSelectTrack,
+  onSelectKeyframe,
+  onOpenClipDetails,
+}: {
+  node: AnimationTimelineHierarchyClipNode;
+  group: AnimationTimelineSequenceGroup;
+  activeSequenceId?: string;
+  activeAnimationContext?: ActiveAnimationContext;
+  selection?: AnimationTimelineSelection;
+  collapsed: boolean;
+  timelineTrackWidth: number;
+  pixelsPerMs: number;
+  playheadX: number;
+  majorTicks: number[];
+  onToggleCollapse: () => void;
+  registerClipRow: (node: HTMLDivElement | null) => void;
+  onSelectClip: (elementId: string, clipId: string) => void;
+  onSelectTrack: (
+    elementId: string,
+    selection: Extract<AnimationTimelineSelection, { kind: "track" }>,
+  ) => void;
+  onSelectKeyframe: (
+    elementId: string,
+    selection: Extract<AnimationTimelineSelection, { kind: "keyframe" }>,
+  ) => void;
+  onOpenClipDetails: (elementId: string, clipId: string) => void;
+}) {
+  const { clip } = node;
+  const clipHierarchySelected =
+    activeAnimationContext?.clipId === clip.id && selection?.clipId === clip.id;
+  const clipLevelSelected =
+    clipHierarchySelected && selection?.kind === "clip";
+  const clipActive = activeAnimationContext?.clipId === clip.id;
+  const inactiveNormalSequence =
+    clip.status === "normal" && clip.sequenceId !== activeSequenceId;
+  const protectionLabel = getProtectionLabel(clip.protectionReason);
+  const targetSummary = node.targetLabels.join("、") || "无";
+  const clipLeft = clip.localStartMs * pixelsPerMs;
+  const clipWidth = Math.max(
+    12,
+    Math.max(0, clip.authoredDurationMs) * pixelsPerMs,
+  );
+  const selectionElementId = node.selectionElementId;
+
+  function selectClip() {
+    if (selectionElementId) {
+      onSelectClip(selectionElementId, clip.id);
+    }
+  }
+
+  function selectTrack(trackId: string) {
+    if (!selectionElementId) {
+      return;
+    }
+
+    onSelectTrack(selectionElementId, {
+      kind: "track",
+      sequenceGroupId: group.id,
+      sequenceId: clip.sequenceId,
+      clipId: clip.id,
+      trackId,
+    });
+  }
+
+  function selectKeyframe(trackId: string, keyframeId: string) {
+    if (!selectionElementId) {
+      return;
+    }
+
+    onSelectKeyframe(selectionElementId, {
+      kind: "keyframe",
+      sequenceGroupId: group.id,
+      sequenceId: clip.sequenceId,
+      clipId: clip.id,
+      trackId,
+      keyframeId,
+    });
+  }
+
+  return (
+    <>
+      <AnimationTimelineHierarchyRow
+        rowRef={registerClipRow}
+        label={
+          <div className="flex min-w-0 items-center gap-1 pl-2">
+            <button
+              type="button"
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-[9px] font-black text-slate-400 hover:bg-white"
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleCollapse();
+              }}
+              aria-label={`${collapsed ? "展开" : "折叠"} ${clip.name}`}
+            >
+              {collapsed ? "▶" : "▼"}
+            </button>
+            <button
+              type="button"
+              className={`min-w-0 flex-1 truncate text-left text-[11px] font-black ${
+                clipLevelSelected
+                  ? clip.status === "protected"
+                    ? "text-amber-700"
+                    : "text-violet-700"
+                  : clipHierarchySelected
+                    ? clip.status === "protected"
+                      ? "text-amber-600"
+                      : "text-violet-600"
+                  : clipActive
+                    ? "text-slate-800"
+                    : "text-slate-600"
+              }`}
+              onClick={selectClip}
+              onDoubleClick={() => {
+                if (selectionElementId) {
+                  onOpenClipDetails(selectionElementId, clip.id);
+                }
+              }}
+              title={`${node.objectLabel} · ${clip.name} · 目标 ${targetSummary}`}
+            >
+              <span className="text-slate-400">{node.objectLabel}</span>
+              <span> / {clip.name}</span>
+            </button>
+            {clip.multiTarget ? (
+              <span
+                className="shrink-0 rounded-full bg-slate-200 px-1.5 py-0.5 text-[8px] font-black text-slate-500"
+                title={targetSummary}
+              >
+                {clip.targets.length} targets
+              </span>
+            ) : null}
+          </div>
+        }
+        timelineTrackWidth={timelineTrackWidth}
+        playheadX={playheadX}
+        majorTicks={majorTicks}
+        pixelsPerMs={pixelsPerMs}
+        rowClassName={
+          clip.status === "protected" ? "bg-amber-50/40" : "bg-white"
+        }
+      >
+        <button
+          type="button"
+          className={`absolute top-2 flex h-5 min-w-0 items-center gap-1 overflow-hidden rounded-md px-2 text-left text-[10px] font-black text-white shadow-sm transition hover:z-20 hover:brightness-105 ${
+            clipHierarchySelected
+              ? clip.status === "protected"
+                ? "z-10 bg-amber-600 ring-2 ring-amber-300"
+                : "z-10 bg-violet-600 ring-2 ring-violet-300"
+              : clip.status === "protected"
+                ? "bg-amber-500"
+                : "bg-violet-400"
+          } ${inactiveNormalSequence ? "opacity-50" : ""}`}
+          style={{ left: clipLeft, width: clipWidth }}
+          title={`${clip.name} · ${getAnimationCategoryLabel(
+            clip.category,
+          )} · Sequence-local 开始 ${clip.authoredStartMs}ms · 时长 ${
+            clip.authoredDurationMs
+          }ms${protectionLabel ? ` · 受保护：${protectionLabel}` : ""}`}
+          onClick={selectClip}
+          onDoubleClick={() => {
+            if (selectionElementId) {
+              onOpenClipDetails(selectionElementId, clip.id);
+            }
+          }}
+        >
+          <span className="min-w-0 flex-1 truncate">{clip.name}</span>
+          <span className="shrink-0 rounded-full bg-white/20 px-1 text-[8px]">
+            {clip.status === "protected"
+              ? "保护"
+              : getAnimationCategoryLabel(clip.category)}
+          </span>
+        </button>
+      </AnimationTimelineHierarchyRow>
+
+      {!collapsed
+        ? clip.tracks.map((track) => {
+            const selectedTrack =
+              selection?.clipId === clip.id &&
+              selection.kind === "track" &&
+              selection.trackId === track.id;
+            const trackContainsSelection =
+              selection?.clipId === clip.id &&
+              selection.kind !== "clip" &&
+              selection.trackId === track.id;
+
+            return (
+              <AnimationTimelineHierarchyRow
+                key={track.id}
+                label={
+                  <button
+                    type="button"
+                    className={`flex h-full w-full min-w-0 items-center gap-2 pl-10 pr-2 text-left text-[10px] font-bold ${
+                      selectedTrack
+                        ? clip.status === "protected"
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-violet-100 text-violet-700"
+                        : trackContainsSelection
+                          ? clip.status === "protected"
+                            ? "bg-amber-50 text-amber-600"
+                            : "bg-violet-50 text-violet-600"
+                        : "text-slate-500 hover:bg-slate-100"
+                    }`}
+                    onClick={() => selectTrack(track.id)}
+                    title={`${track.name} · ${track.property} · Track ${track.id}`}
+                  >
+                    <span className="min-w-0 flex-1 truncate">
+                      {track.name || track.property}
+                    </span>
+                    <span className="shrink-0 font-mono text-[8px] text-slate-400">
+                      {track.property}
+                    </span>
+                  </button>
+                }
+                timelineTrackWidth={timelineTrackWidth}
+                playheadX={playheadX}
+                majorTicks={majorTicks}
+                pixelsPerMs={pixelsPerMs}
+                rowClassName={
+                  clip.status === "protected" ? "bg-amber-50/20" : "bg-white"
+                }
+              >
+                <div
+                  className={`absolute top-1/2 h-0.5 -translate-y-1/2 rounded-full ${
+                    clip.status === "protected"
+                      ? "bg-amber-200"
+                      : "bg-violet-200"
+                  }`}
+                  style={{ left: clipLeft, width: clipWidth }}
+                />
+                {track.keyframes.map((keyframe) => {
+                  const selectedKeyframe =
+                    selection?.kind === "keyframe" &&
+                    selection.clipId === clip.id &&
+                    selection.trackId === track.id &&
+                    selection.keyframeId === keyframe.id;
+
+                  return (
+                    <button
+                      key={keyframe.id}
+                      type="button"
+                      className={`absolute top-1/2 z-30 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[2px] border-2 shadow-sm transition hover:scale-125 ${
+                        selectedKeyframe
+                          ? clip.status === "protected"
+                            ? "border-amber-700 bg-amber-300"
+                            : "border-violet-700 bg-violet-300"
+                          : clip.status === "protected"
+                            ? "border-amber-500 bg-white"
+                            : "border-violet-500 bg-white"
+                      }`}
+                      style={{ left: keyframe.localTimeMs * pixelsPerMs }}
+                      onClick={() => selectKeyframe(track.id, keyframe.id)}
+                      title={`${track.property} · Keyframe ${keyframe.id} · ${formatRulerTime(
+                        keyframe.localTimeMs,
+                      )}`}
+                      aria-label={`选择 ${track.property} 的 ${formatRulerTime(
+                        keyframe.localTimeMs,
+                      )} 关键帧`}
+                    />
+                  );
+                })}
+              </AnimationTimelineHierarchyRow>
+            );
+          })
+        : null}
+    </>
+  );
+}
+
+function AnimationTimelineHierarchyRow({
+  rowRef,
+  label,
+  children,
+  timelineTrackWidth,
+  playheadX,
+  majorTicks,
+  pixelsPerMs,
+  rowClassName,
+}: {
+  rowRef?: (node: HTMLDivElement | null) => void;
+  label: ReactNode;
+  children: ReactNode;
+  timelineTrackWidth: number;
+  playheadX: number;
+  majorTicks: number[];
+  pixelsPerMs: number;
+  rowClassName: string;
+}) {
+  return (
+    <div
+      ref={rowRef}
+      className="grid border-t border-slate-100"
+      style={{
+        gridTemplateColumns: `${LABEL_COLUMN_WIDTH}px ${timelineTrackWidth}px`,
+      }}
+    >
+      <div className="sticky left-0 z-50 h-9 min-w-0 border-r border-slate-200 bg-slate-50 shadow-[1px_0_0_rgba(15,23,42,0.06)]">
+        {label}
+      </div>
+      <div className={`relative h-9 overflow-hidden ${rowClassName}`}>
+        {majorTicks.map((timeMs) => (
+          <div
+            key={`guide-${timeMs}`}
+            className="pointer-events-none absolute bottom-0 top-0 border-l border-slate-100"
+            style={{ left: timeMs * pixelsPerMs }}
+          />
+        ))}
+        {children}
+        <div
+          className="pointer-events-none absolute bottom-0 top-0 z-40 w-px bg-rose-500"
+          style={{ left: playheadX }}
+        />
+      </div>
+    </div>
   );
 }

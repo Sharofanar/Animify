@@ -193,6 +193,64 @@ export type AnimationTimelineEditorSequenceSample = {
   normalClipIds: string[];
 };
 
+/**
+ * One editor-only Timeline selection with every parent identity preserved.
+ *
+ * Sequence groups without a persisted Sequence (for example orphan Clips) use
+ * sequenceGroupId as their stable diagnostic context. This state never enters
+ * AnimationScene, persistence, or History.
+ */
+export type AnimationTimelineSelection =
+  | {
+      kind: "clip";
+      sequenceGroupId: string;
+      sequenceId?: string;
+      clipId: string;
+    }
+  | {
+      kind: "track";
+      sequenceGroupId: string;
+      sequenceId?: string;
+      clipId: string;
+      trackId: string;
+    }
+  | {
+      kind: "keyframe";
+      sequenceGroupId: string;
+      sequenceId?: string;
+      clipId: string;
+      trackId: string;
+      keyframeId: string;
+    };
+
+/**
+ * External navigation intent stays separate from selection and playback.
+ * requestId allows the same Clip to be revealed repeatedly.
+ */
+export type AnimationTimelineRevealRequest = {
+  clipId: string;
+  requestId: number;
+};
+
+export type AnimationTimelineHierarchyClipNode = {
+  id: string;
+  clip: AnimationTimelineClipEntry;
+  objectElementId?: string;
+  objectLabel: string;
+  targetLabels: string[];
+  selectionElementId?: string;
+};
+
+export type AnimationTimelineHierarchySequenceNode = {
+  id: string;
+  group: AnimationTimelineSequenceGroup;
+  clips: AnimationTimelineHierarchyClipNode[];
+};
+
+export type AnimationTimelineHierarchy = {
+  sequences: AnimationTimelineHierarchySequenceNode[];
+};
+
 type SequenceGroupBuilder = Omit<
   AnimationTimelineSequenceGroup,
   "clips" | "viewOrder"
@@ -225,6 +283,165 @@ function getNormalPlaybackSequenceGroups(
         (clip) => clip.status === "normal" && clip.liveForElements,
       ),
   );
+}
+
+function getAnimationTimelineClipSelection(
+  clip: AnimationTimelineClipEntry,
+): AnimationTimelineSelection {
+  return {
+    kind: "clip",
+    sequenceGroupId: clip.sequenceGroupId,
+    sequenceId: clip.sequenceId,
+    clipId: clip.id,
+  };
+}
+
+/**
+ * Project the existing canonical Sequence / Clip read model into render-ready
+ * hierarchy nodes. No Clip is duplicated for secondary targets.
+ */
+export function getAnimationTimelineHierarchy(
+  model: AnimationTimelineViewModel,
+): AnimationTimelineHierarchy {
+  const objectRowByElementId = new Map(
+    model.objectRows.map((row) => [row.elementId, row]),
+  );
+
+  return {
+    sequences: model.sequenceGroups.map((group) => ({
+      id: group.id,
+      group,
+      clips: group.clips.map((clip) => {
+        const objectRow = clip.anchorElementId
+          ? objectRowByElementId.get(clip.anchorElementId)
+          : undefined;
+        const targetLabels = clip.targets.map(
+          (target) =>
+            target.elementName ??
+            `${target.elementId}${target.available ? "" : "（缺失）"}`,
+        );
+
+        return {
+          id: clip.id,
+          clip,
+          objectElementId: objectRow?.elementId,
+          objectLabel:
+            objectRow?.label ?? targetLabels[0] ?? "无可用动画对象",
+          targetLabels,
+          selectionElementId:
+            clip.anchorElementId ?? clip.targetElementIds[0],
+        };
+      }),
+    })),
+  };
+}
+
+/**
+ * Return the canonical Clip-level selection used when another editor changes
+ * Active Clip or a descendant selection becomes invalid.
+ */
+export function getAnimationTimelineSelectionForClip(
+  model: AnimationTimelineViewModel,
+  clipId: string | undefined,
+) {
+  const clip = clipId
+    ? model.clips.find((entry) => entry.id === clipId)
+    : undefined;
+
+  return clip ? getAnimationTimelineClipSelection(clip) : null;
+}
+
+/**
+ * Reconcile transient Timeline selection against the latest pure read model.
+ *
+ * A valid normal selection must belong to the current Active Sequence. A
+ * protected Clip may remain selected for inspection without becoming normal
+ * playback context. Missing descendants fall back toward their surviving Clip.
+ */
+export function reconcileAnimationTimelineSelection(
+  model: AnimationTimelineViewModel,
+  activeSequenceId: string | null,
+  activeClipId: string | undefined,
+  requestedSelection: AnimationTimelineSelection | null,
+): AnimationTimelineSelection | null {
+  const activeClip = activeClipId
+    ? model.clips.find((clip) => clip.id === activeClipId)
+    : undefined;
+  const activeClipCanBeSelected =
+    activeClip !== undefined &&
+    (activeClip.status === "protected" ||
+      activeClip.sequenceId === activeSequenceId);
+  const fallbackSelection = activeClipCanBeSelected
+    ? getAnimationTimelineClipSelection(activeClip)
+    : null;
+
+  if (!requestedSelection) {
+    return fallbackSelection;
+  }
+
+  const clip = model.clips.find(
+    (entry) => entry.id === requestedSelection.clipId,
+  );
+
+  if (!clip || clip.id !== activeClipId) {
+    return fallbackSelection;
+  }
+
+  if (clip.status === "normal" && clip.sequenceId !== activeSequenceId) {
+    return null;
+  }
+
+  const currentContext = {
+    sequenceGroupId: clip.sequenceGroupId,
+    sequenceId: clip.sequenceId,
+    clipId: clip.id,
+  };
+
+  if (requestedSelection.kind === "clip") {
+    return requestedSelection.sequenceGroupId === currentContext.sequenceGroupId &&
+      requestedSelection.sequenceId === currentContext.sequenceId
+      ? requestedSelection
+      : { kind: "clip", ...currentContext };
+  }
+
+  const track = clip.tracks.find(
+    (entry) => entry.id === requestedSelection.trackId,
+  );
+
+  if (!track) {
+    return { kind: "clip", ...currentContext };
+  }
+
+  const trackSelection = {
+    kind: "track" as const,
+    ...currentContext,
+    trackId: track.id,
+  };
+
+  if (requestedSelection.kind === "track") {
+    return requestedSelection.sequenceGroupId === currentContext.sequenceGroupId &&
+      requestedSelection.sequenceId === currentContext.sequenceId
+      ? requestedSelection
+      : trackSelection;
+  }
+
+  const keyframe = track.keyframes.find(
+    (entry) => entry.id === requestedSelection.keyframeId,
+  );
+
+  if (!keyframe) {
+    return trackSelection;
+  }
+
+  return requestedSelection.sequenceGroupId === currentContext.sequenceGroupId &&
+    requestedSelection.sequenceId === currentContext.sequenceId
+    ? requestedSelection
+    : {
+        kind: "keyframe",
+        ...currentContext,
+        trackId: track.id,
+        keyframeId: keyframe.id,
+      };
 }
 
 /**

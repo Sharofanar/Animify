@@ -23,8 +23,12 @@ import { getAnimationClipPreviewWindow } from "./utils/animationCompiler";
 import {
   getAnimationTimelineEditorSamples,
   getAnimationTimelineNormalSequenceIdForClip,
+  getAnimationTimelineSelectionForClip,
   getAnimationTimelineViewModel,
+  reconcileAnimationTimelineSelection,
   resolveAnimationTimelineActiveSequenceId,
+  type AnimationTimelineRevealRequest,
+  type AnimationTimelineSelection,
 } from "./utils/animationTimeline";
 import {
   computeBlobSha256,
@@ -798,6 +802,17 @@ function App() {
     string | null
   >(null);
 
+  /**
+   * One editor-only descendant selection for the Timeline hierarchy.
+   * Active Clip and Active Sequence remain owned by their existing App states.
+   */
+  const [animationTimelineSelection, setAnimationTimelineSelection] =
+    useState<AnimationTimelineSelection | null>(null);
+
+  /** External navigation intent stays separate from Timeline selection/playback. */
+  const [animationTimelineRevealRequest, setAnimationTimelineRevealRequest] =
+    useState<AnimationTimelineRevealRequest | null>(null);
+
   const [elementContextMenu, setElementContextMenu] =
     useState<ElementContextMenuState>(null);
   const [canvasContextMenu, setCanvasContextMenu] =
@@ -807,6 +822,7 @@ function App() {
    * Clip is cleared by a normal canvas or slide selection.
    */
   const animationContextRequestCounterRef = useRef(0);
+  const animationTimelineRevealRequestCounterRef = useRef(0);
 
   const slideSurfaceRef = useRef<HTMLDivElement | null>(null);
   const imageInputRef = useRef<HTMLInputElement | null>(null);
@@ -906,6 +922,14 @@ function App() {
         : undefined,
     );
 
+  const resolvedAnimationTimelineSelection =
+    reconcileAnimationTimelineSelection(
+      animationTimelineViewModel,
+      resolvedActiveAnimationSequenceId,
+      effectiveActiveAnimationContext?.clipId,
+      animationTimelineSelection,
+    );
+
   const activeAnimationSequenceGroup =
     animationTimelineViewModel.sequenceGroups.find(
       (group) =>
@@ -935,6 +959,10 @@ function App() {
    */
   if (activeAnimationSequenceId !== resolvedActiveAnimationSequenceId) {
     setActiveAnimationSequenceId(resolvedActiveAnimationSequenceId);
+  }
+
+  if (animationTimelineSelection !== resolvedAnimationTimelineSelection) {
+    setAnimationTimelineSelection(resolvedAnimationTimelineSelection);
   }
 
   if (
@@ -4643,6 +4671,22 @@ function App() {
   }
 
   /**
+   * Keep every Timeline hierarchy selection routed through the existing Clip,
+   * Element, and Active Sequence sources before recording its descendant ID.
+   */
+  function handleSelectAnimationTimelineDescendant(
+    elementId: string,
+    selection: AnimationTimelineSelection,
+  ) {
+    handleSelectAnimationClip(elementId, selection.clipId, false);
+    setAnimationTimelineSelection(selection);
+  }
+
+  function handleSelectAnimationTimelineSequence(sequenceId: string) {
+    setActiveAnimationSequenceId(sequenceId);
+  }
+
+  /**
    * A successful trigger/Step relocation may move the active Clip to another
    * normal Sequence while leaving its old Sequence alive. Re-read the committed
    * document so that explicit Clip intent follows the new owner immediately.
@@ -4679,7 +4723,11 @@ function App() {
    * Property-panel and timeline selections increment requestId so an already
    * selected Clip can still be reopened and scrolled into view.
    */
-  function handleSelectAnimationClip(elementId: string, clipId: string) {
+  function handleSelectAnimationClip(
+    elementId: string,
+    clipId: string,
+    revealInTimeline = true,
+  ) {
     if (
       effectiveAnimationClipPreview &&
       effectiveAnimationClipPreview.clipId !== clipId
@@ -4689,12 +4737,23 @@ function App() {
 
     animationContextRequestCounterRef.current += 1;
 
+    if (revealInTimeline) {
+      animationTimelineRevealRequestCounterRef.current += 1;
+      setAnimationTimelineRevealRequest({
+        clipId,
+        requestId: animationTimelineRevealRequestCounterRef.current,
+      });
+    }
+
     setMode("animation");
     setSelectedElementId(elementId);
     setSelectedElementIds([elementId]);
     setPropertyTargetElementIds([elementId]);
     setPropertyPanelOpen(true);
     requestActiveAnimationSequenceForClip(clipId);
+    setAnimationTimelineSelection(
+      getAnimationTimelineSelectionForClip(animationTimelineViewModel, clipId),
+    );
 
     setActiveAnimationContext({
       elementId,
@@ -4850,7 +4909,7 @@ function App() {
    * In on-demand mode a normal click is navigation only.
    */
   function handleFocusTimelineClip(elementId: string, clipId: string) {
-    handleSelectAnimationClip(elementId, clipId);
+    handleSelectAnimationClip(elementId, clipId, false);
   }
 
   /**
@@ -4859,7 +4918,7 @@ function App() {
    * This is used by double-click and detailed-edit actions.
    */
   function handleOpenAnimationClipDetails(elementId: string, clipId: string) {
-    handleSelectAnimationClip(elementId, clipId);
+    handleSelectAnimationClip(elementId, clipId, false);
 
     setAnimationPanelOpen(true);
   }
@@ -4895,6 +4954,12 @@ function App() {
       animationContextRequestCounterRef.current += 1;
     }
 
+    animationTimelineRevealRequestCounterRef.current += 1;
+    setAnimationTimelineRevealRequest({
+      clipId,
+      requestId: animationTimelineRevealRequestCounterRef.current,
+    });
+
     setMode("animation");
     setSelectedElementId(elementId);
 
@@ -4905,6 +4970,9 @@ function App() {
     setPropertyTargetElementIds([elementId]);
     setPropertyPanelOpen(true);
     requestActiveAnimationSequenceForClip(clipId);
+    setAnimationTimelineSelection(
+      getAnimationTimelineSelectionForClip(animationTimelineViewModel, clipId),
+    );
 
     setActiveAnimationContext({
       elementId,
@@ -5327,6 +5395,7 @@ function App() {
               {mode === "animation" ? (
                 <AnimationTimeline
                   viewModel={animationTimelineViewModel}
+                  hierarchyContextKey={project.activeSlideId}
                   currentTimeMs={animationTimelineCurrentTimeMs}
                   playbackStatus={
                     effectiveAnimationClipPreview
@@ -5342,8 +5411,13 @@ function App() {
                   activeAnimationContext={
                     effectiveActiveAnimationContext ?? undefined
                   }
+                  selection={resolvedAnimationTimelineSelection ?? undefined}
+                  revealRequest={animationTimelineRevealRequest ?? undefined}
                   onCurrentTimeChange={handleAnimationTimelineTimeChange}
+                  onSelectSequence={handleSelectAnimationTimelineSequence}
                   onSelectClip={handleFocusTimelineClip}
+                  onSelectTrack={handleSelectAnimationTimelineDescendant}
+                  onSelectKeyframe={handleSelectAnimationTimelineDescendant}
                   onOpenClipDetails={handleOpenAnimationClipDetails}
                   onTogglePlayback={handleToggleTimelinePlayback}
                   onToggleClipPreview={

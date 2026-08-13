@@ -22,6 +22,12 @@ import type {
   AnimationTimelineViewModel,
 } from "../../utils/animationTimeline";
 import { getAnimationTimelineHierarchy } from "../../utils/animationTimeline";
+import {
+  ANIMATION_TIMELINE_CLIP_START_DRAG_THRESHOLD_PX,
+  getAnimationTimelineClipStartDragSession,
+  type AnimationTimelineClipStartEditSession,
+  type BeginAnimationTimelineClipStartEditRequest,
+} from "../../utils/animationTimelineTiming";
 
 type AnimationTimelineProps = {
   viewModel: AnimationTimelineViewModel;
@@ -58,6 +64,22 @@ type AnimationTimelineProps = {
   ) => void;
 
   onOpenClipDetails: (elementId: string, clipId: string) => void;
+
+  timingEditSession?: AnimationTimelineClipStartEditSession;
+  timingEditingDisabled?: boolean;
+  onBeginClipStartEdit: (
+    request: BeginAnimationTimelineClipStartEditRequest,
+  ) => AnimationTimelineClipStartEditSession | null;
+  onUpdateClipStartEdit: (
+    session: AnimationTimelineClipStartEditSession,
+  ) => void;
+  onCommitClipStartEdit: (
+    session: AnimationTimelineClipStartEditSession,
+  ) => void;
+  onCancelClipStartEdit: (
+    session: AnimationTimelineClipStartEditSession,
+  ) => void;
+  onPausePlaybackForTimingEdit: () => void;
 
   onTogglePlayback: () => void;
   onToggleClipPreview: () => void;
@@ -200,6 +222,13 @@ export function AnimationTimeline({
   onSelectTrack,
   onSelectKeyframe,
   onOpenClipDetails,
+  timingEditSession,
+  timingEditingDisabled = false,
+  onBeginClipStartEdit,
+  onUpdateClipStartEdit,
+  onCommitClipStartEdit,
+  onCancelClipStartEdit,
+  onPausePlaybackForTimingEdit,
   onTogglePlayback,
   onToggleClipPreview,
   onReplayClipPreview,
@@ -872,6 +901,17 @@ export function AnimationTimeline({
                         onSelectTrack={onSelectTrack}
                         onSelectKeyframe={onSelectKeyframe}
                         onOpenClipDetails={onOpenClipDetails}
+                        timingEditSession={timingEditSession}
+                        timingEditingDisabled={timingEditingDisabled}
+                        currentTimeMs={currentTimeMs}
+                        rulerGridStepMs={minorTickStepMs}
+                        onBeginClipStartEdit={onBeginClipStartEdit}
+                        onUpdateClipStartEdit={onUpdateClipStartEdit}
+                        onCommitClipStartEdit={onCommitClipStartEdit}
+                        onCancelClipStartEdit={onCancelClipStartEdit}
+                        onPausePlaybackForTimingEdit={
+                          onPausePlaybackForTimingEdit
+                        }
                       />
                     ))
                   : null}
@@ -917,6 +957,15 @@ function AnimationTimelineClipHierarchyRows({
   onSelectTrack,
   onSelectKeyframe,
   onOpenClipDetails,
+  timingEditSession,
+  timingEditingDisabled,
+  currentTimeMs,
+  rulerGridStepMs,
+  onBeginClipStartEdit,
+  onUpdateClipStartEdit,
+  onCommitClipStartEdit,
+  onCancelClipStartEdit,
+  onPausePlaybackForTimingEdit,
 }: {
   node: AnimationTimelineHierarchyClipNode;
   group: AnimationTimelineSequenceGroup;
@@ -940,6 +989,23 @@ function AnimationTimelineClipHierarchyRows({
     selection: Extract<AnimationTimelineSelection, { kind: "keyframe" }>,
   ) => void;
   onOpenClipDetails: (elementId: string, clipId: string) => void;
+  timingEditSession?: AnimationTimelineClipStartEditSession;
+  timingEditingDisabled: boolean;
+  currentTimeMs: number;
+  rulerGridStepMs: number;
+  onBeginClipStartEdit: (
+    request: BeginAnimationTimelineClipStartEditRequest,
+  ) => AnimationTimelineClipStartEditSession | null;
+  onUpdateClipStartEdit: (
+    session: AnimationTimelineClipStartEditSession,
+  ) => void;
+  onCommitClipStartEdit: (
+    session: AnimationTimelineClipStartEditSession,
+  ) => void;
+  onCancelClipStartEdit: (
+    session: AnimationTimelineClipStartEditSession,
+  ) => void;
+  onPausePlaybackForTimingEdit: () => void;
 }) {
   const { clip } = node;
   const clipHierarchySelected =
@@ -957,6 +1023,19 @@ function AnimationTimelineClipHierarchyRows({
     Math.max(0, clip.authoredDurationMs) * pixelsPerMs,
   );
   const selectionElementId = node.selectionElementId;
+  const cancelClipPointerInteractionRef = useRef<(() => void) | null>(null);
+  const directlyEditable =
+    clip.status === "normal" &&
+    clip.liveForElements &&
+    clip.sequenceId !== undefined &&
+    clip.sequenceId === activeSequenceId &&
+    !timingEditingDisabled;
+  const activeTimingEdit =
+    timingEditSession?.kind === "clip-start" &&
+    timingEditSession.clipId === clip.id &&
+    timingEditSession.sequenceId === clip.sequenceId
+      ? timingEditSession
+      : undefined;
 
   function selectClip() {
     if (selectionElementId) {
@@ -992,6 +1071,155 @@ function AnimationTimelineClipHierarchyRows({
       keyframeId,
     });
   }
+
+  function handleClipPointerDown(
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    if (!directlyEditable || !clip.sequenceId) {
+      return;
+    }
+
+    const sequenceId = clip.sequenceId;
+    const sourceClientX = event.clientX;
+    const pointerId = event.pointerId;
+    const clipButton = event.currentTarget;
+    clipButton.setPointerCapture(pointerId);
+    let activeSession: AnimationTimelineClipStartEditSession | null = null;
+    let latestSession: AnimationTimelineClipStartEditSession | null = null;
+    let dragStarted = false;
+    let finished = false;
+
+    function finish(kind: "commit" | "cancel") {
+      if (finished) {
+        return;
+      }
+
+      finished = true;
+      if (
+        cancelClipPointerInteractionRef.current === cancelCurrentInteraction
+      ) {
+        cancelClipPointerInteractionRef.current = null;
+      }
+      window.removeEventListener("keydown", handleKeyDown);
+      clipButton.removeEventListener("pointermove", handlePointerMove);
+      clipButton.removeEventListener("pointerup", handlePointerUp);
+      clipButton.removeEventListener("pointercancel", handlePointerCancel);
+      clipButton.removeEventListener(
+        "lostpointercapture",
+        handleLostPointerCapture,
+      );
+
+      if (kind === "commit" && dragStarted && latestSession) {
+        onCommitClipStartEdit(latestSession);
+      } else if (latestSession) {
+        onCancelClipStartEdit(latestSession);
+      }
+
+      if (clipButton.hasPointerCapture(pointerId)) {
+        clipButton.releasePointerCapture(pointerId);
+      }
+    }
+
+    function cancelCurrentInteraction() {
+      finish("cancel");
+    }
+
+    function handleKeyDown(keyEvent: KeyboardEvent) {
+      if (keyEvent.key !== "Escape") {
+        return;
+      }
+
+      keyEvent.preventDefault();
+      finish("cancel");
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    function handlePointerMove(moveEvent: PointerEvent) {
+      if (moveEvent.pointerId !== pointerId || finished) {
+        return;
+      }
+
+      const deltaPixels = moveEvent.clientX - sourceClientX;
+
+      if (
+        !dragStarted &&
+        Math.abs(deltaPixels) <
+          ANIMATION_TIMELINE_CLIP_START_DRAG_THRESHOLD_PX
+      ) {
+        return;
+      }
+
+      if (!dragStarted) {
+        selectClip();
+        activeSession = onBeginClipStartEdit({
+          sequenceId,
+          clipId: clip.id,
+          pointerId,
+        });
+
+        if (!activeSession) {
+          finish("cancel");
+          return;
+        }
+
+        dragStarted = true;
+        moveEvent.preventDefault();
+        onPausePlaybackForTimingEdit();
+      }
+
+      if (!activeSession) {
+        return;
+      }
+
+      latestSession = getAnimationTimelineClipStartDragSession(activeSession, {
+        deltaPixels,
+        pixelsPerMs,
+        rulerGridStepMs,
+        playheadTimeMs: currentTimeMs,
+      });
+      onUpdateClipStartEdit(latestSession);
+    }
+
+    function handlePointerUp(upEvent: PointerEvent) {
+      if (upEvent.pointerId !== pointerId) {
+        return;
+      }
+
+      finish("commit");
+    }
+
+    function handlePointerCancel(cancelEvent: PointerEvent) {
+      if (cancelEvent.pointerId === pointerId) {
+        finish("cancel");
+      }
+    }
+
+    function handleLostPointerCapture() {
+      finish("cancel");
+    }
+
+    clipButton.addEventListener("pointermove", handlePointerMove);
+    clipButton.addEventListener("pointerup", handlePointerUp);
+    clipButton.addEventListener("pointercancel", handlePointerCancel);
+    clipButton.addEventListener(
+      "lostpointercapture",
+      handleLostPointerCapture,
+    );
+    cancelClipPointerInteractionRef.current = cancelCurrentInteraction;
+  }
+
+  useEffect(
+    () => () => {
+      cancelClipPointerInteractionRef.current?.();
+      cancelClipPointerInteractionRef.current = null;
+    },
+    [],
+  );
 
   return (
     <>
@@ -1056,7 +1284,7 @@ function AnimationTimelineClipHierarchyRows({
       >
         <button
           type="button"
-          className={`absolute top-2 flex h-5 min-w-0 items-center gap-1 overflow-hidden rounded-md px-2 text-left text-[10px] font-black text-white shadow-sm transition hover:z-20 hover:brightness-105 ${
+          className={`absolute top-2 flex h-5 min-w-0 touch-none items-center gap-1 overflow-visible rounded-md px-2 text-left text-[10px] font-black text-white shadow-sm transition hover:z-20 hover:brightness-105 ${
             clipHierarchySelected
               ? clip.status === "protected"
                 ? "z-10 bg-amber-600 ring-2 ring-amber-300"
@@ -1064,13 +1292,16 @@ function AnimationTimelineClipHierarchyRows({
               : clip.status === "protected"
                 ? "bg-amber-500"
                 : "bg-violet-400"
-          } ${inactiveNormalSequence ? "opacity-50" : ""}`}
+          } ${inactiveNormalSequence ? "opacity-50" : ""} ${
+            directlyEditable ? "cursor-grab active:cursor-grabbing" : ""
+          }`}
           style={{ left: clipLeft, width: clipWidth }}
           title={`${clip.name} · ${getAnimationCategoryLabel(
             clip.category,
           )} · Sequence-local 开始 ${clip.authoredStartMs}ms · 时长 ${
             clip.authoredDurationMs
           }ms${protectionLabel ? ` · 受保护：${protectionLabel}` : ""}`}
+          onPointerDown={handleClipPointerDown}
           onClick={selectClip}
           onDoubleClick={() => {
             if (selectionElementId) {
@@ -1084,6 +1315,17 @@ function AnimationTimelineClipHierarchyRows({
               ? "保护"
               : getAnimationCategoryLabel(clip.category)}
           </span>
+          {activeTimingEdit?.dragging ? (
+            <>
+              {activeTimingEdit.snap ? (
+                <span className="pointer-events-none absolute -top-2 left-0 z-40 h-9 w-px bg-cyan-400 shadow-[0_0_0_1px_rgba(255,255,255,0.65)]" />
+              ) : null}
+              <span className="pointer-events-none absolute -top-8 left-1/2 z-50 -translate-x-1/2 whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 font-mono text-[9px] font-bold text-white shadow-lg">
+                {formatRulerTime(activeTimingEdit.candidateStartMs)}
+                {activeTimingEdit.snap ? " · SNAP" : ""}
+              </span>
+            </>
+          ) : null}
         </button>
       </AnimationTimelineHierarchyRow>
 

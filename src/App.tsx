@@ -31,6 +31,15 @@ import {
   type AnimationTimelineSelection,
 } from "./utils/animationTimeline";
 import {
+  animationTimelineTimingSessionsMatch,
+  applyAnimationTimelineTimingDraftToSlide,
+  commitAnimationTimelineClipStartEditInSlide,
+  createAnimationTimelineClipStartEditSession,
+  isAnimationTimelineClipStartEditSessionCurrent,
+  type AnimationTimelineClipStartEditSession,
+  type BeginAnimationTimelineClipStartEditRequest,
+} from "./utils/animationTimelineTiming";
+import {
   computeBlobSha256,
   dataUrlToBlob,
   deleteAssetBlob,
@@ -813,6 +822,15 @@ function App() {
   const [animationTimelineRevealRequest, setAnimationTimelineRevealRequest] =
     useState<AnimationTimelineRevealRequest | null>(null);
 
+  /**
+   * One editor-only Timeline timing draft. Pointer movement never enters the
+   * Project document, persistence, revision counter, or History.
+   */
+  const [
+    animationTimelineTimingEditSession,
+    setAnimationTimelineTimingEditSession,
+  ] = useState<AnimationTimelineClipStartEditSession | null>(null);
+
   const [elementContextMenu, setElementContextMenu] =
     useState<ElementContextMenuState>(null);
   const [canvasContextMenu, setCanvasContextMenu] =
@@ -879,6 +897,27 @@ function App() {
     (slide) => slide.id === project.activeSlideId,
   );
 
+  const activeAnimationTimelineTimingEditSession =
+    activeSlide &&
+    animationTimelineTimingEditSession &&
+    isAnimationTimelineClipStartEditSessionCurrent(
+      activeSlide,
+      animationTimelineTimingEditSession,
+    )
+      ? animationTimelineTimingEditSession
+      : null;
+
+  const editorAnimationSlide = useMemo(
+    () =>
+      activeSlide
+        ? applyAnimationTimelineTimingDraftToSlide(
+            activeSlide,
+            activeAnimationTimelineTimingEditSession,
+          )
+        : undefined,
+    [activeAnimationTimelineTimingEditSession, activeSlide],
+  );
+
   const activeAnimationScene = activeSlide?.animationScene;
 
   /**
@@ -901,6 +940,14 @@ function App() {
   const animationTimelineViewModel = useMemo(
     () =>
       getAnimationTimelineViewModel(
+        editorAnimationSlide?.animationScene,
+        editorAnimationSlide?.elements ?? [],
+      ),
+    [editorAnimationSlide],
+  );
+  const committedAnimationTimelineViewModel = useMemo(
+    () =>
+      getAnimationTimelineViewModel(
         activeSlide?.animationScene,
         activeSlide?.elements ?? [],
       ),
@@ -913,7 +960,7 @@ function App() {
 
   const resolvedActiveAnimationSequenceId =
     resolveAnimationTimelineActiveSequenceId(
-      animationTimelineViewModel,
+      committedAnimationTimelineViewModel,
       activeSequenceStateBelongsToSlide
         ? activeAnimationSequenceId
         : null,
@@ -924,14 +971,14 @@ function App() {
 
   const resolvedAnimationTimelineSelection =
     reconcileAnimationTimelineSelection(
-      animationTimelineViewModel,
+      committedAnimationTimelineViewModel,
       resolvedActiveAnimationSequenceId,
       effectiveActiveAnimationContext?.clipId,
       animationTimelineSelection,
     );
 
   const activeAnimationSequenceGroup =
-    animationTimelineViewModel.sequenceGroups.find(
+    committedAnimationTimelineViewModel.sequenceGroups.find(
       (group) =>
         group.status === "normal" &&
         group.sequenceId === resolvedActiveAnimationSequenceId,
@@ -963,6 +1010,13 @@ function App() {
 
   if (animationTimelineSelection !== resolvedAnimationTimelineSelection) {
     setAnimationTimelineSelection(resolvedAnimationTimelineSelection);
+  }
+
+  if (
+    animationTimelineTimingEditSession &&
+    !activeAnimationTimelineTimingEditSession
+  ) {
+    setAnimationTimelineTimingEditSession(null);
   }
 
   if (
@@ -1024,6 +1078,7 @@ function App() {
         : null,
     [activeSlide],
   );
+
   const presentationSequenceSamples = useMemo(
     () =>
       activePresentationPlan
@@ -1259,6 +1314,7 @@ function App() {
       return;
     }
 
+    setAnimationTimelineTimingEditSession(null);
     const projectToRestore = undoProjectDocument();
 
     if (!projectToRestore) {
@@ -1284,6 +1340,7 @@ function App() {
       return;
     }
 
+    setAnimationTimelineTimingEditSession(null);
     const projectToRestore = redoProjectDocument();
 
     if (!projectToRestore) {
@@ -4429,6 +4486,7 @@ function App() {
 
     if (slideId !== project.activeSlideId) {
       clearAnimationClipPreview();
+      setAnimationTimelineTimingEditSession(null);
     }
 
     mutateProjectWithoutHistory((currentProject) => ({
@@ -4912,6 +4970,100 @@ function App() {
     handleSelectAnimationClip(elementId, clipId, false);
   }
 
+  function handleBeginAnimationTimelineClipStartEdit(
+    request: BeginAnimationTimelineClipStartEditRequest,
+  ) {
+    if (!activeSlide || effectiveAnimationClipPreview) {
+      return null;
+    }
+
+    const session = createAnimationTimelineClipStartEditSession(
+      activeSlide,
+      request,
+    );
+
+    if (!session) {
+      return null;
+    }
+
+    setAnimationTimelineTimingEditSession(session);
+    return session;
+  }
+
+  function handleUpdateAnimationTimelineClipStartEdit(
+    session: AnimationTimelineClipStartEditSession,
+  ) {
+    setAnimationTimelineTimingEditSession((currentSession) =>
+      currentSession &&
+      animationTimelineTimingSessionsMatch(currentSession, session)
+        ? session
+        : currentSession,
+    );
+  }
+
+  function handleCancelAnimationTimelineClipStartEdit(
+    session: AnimationTimelineClipStartEditSession,
+  ) {
+    setAnimationTimelineTimingEditSession((currentSession) =>
+      currentSession &&
+      animationTimelineTimingSessionsMatch(currentSession, session)
+        ? null
+        : currentSession,
+    );
+  }
+
+  function handleCommitAnimationTimelineClipStartEdit(
+    session: AnimationTimelineClipStartEditSession,
+  ) {
+    setAnimationTimelineTimingEditSession((currentSession) =>
+      currentSession &&
+      animationTimelineTimingSessionsMatch(currentSession, session)
+        ? null
+        : currentSession,
+    );
+
+    commitProjectChange((currentProject) => {
+      if (currentProject.activeSlideId !== session.slideId) {
+        return currentProject;
+      }
+
+      let changed = false;
+      const nextSlides = currentProject.slides.map((slide) => {
+        if (slide.id !== session.slideId) {
+          return slide;
+        }
+
+        const nextSlide = commitAnimationTimelineClipStartEditInSlide(
+          slide,
+          session,
+        );
+
+        if (nextSlide === slide) {
+          return slide;
+        }
+
+        changed = true;
+        return nextSlide;
+      });
+
+      if (!changed) {
+        return currentProject;
+      }
+
+      return {
+        ...currentProject,
+        updatedAt: new Date().toISOString(),
+        slides: nextSlides,
+      };
+    });
+  }
+
+  function handlePauseAnimationTimelineForTimingEdit() {
+    if (timelinePlayback.status === "playing") {
+      timelinePlayback.pause();
+    }
+  }
+
   /**
    * Explicitly open one Clip in the advanced track editor.
    *
@@ -5327,7 +5479,7 @@ function App() {
 
               <div ref={canvasAreaRef} className="min-h-0 flex-1">
                 <SlideCanvas
-                  slide={activeSlide}
+                  slide={editorAnimationSlide ?? activeSlide}
                   assets={project.assets}
                   assetSources={assetSources}
                   assetStoreReady={assetStoreReady}
@@ -5419,6 +5571,25 @@ function App() {
                   onSelectTrack={handleSelectAnimationTimelineDescendant}
                   onSelectKeyframe={handleSelectAnimationTimelineDescendant}
                   onOpenClipDetails={handleOpenAnimationClipDetails}
+                  timingEditSession={
+                    activeAnimationTimelineTimingEditSession ?? undefined
+                  }
+                  timingEditingDisabled={Boolean(effectiveAnimationClipPreview)}
+                  onBeginClipStartEdit={
+                    handleBeginAnimationTimelineClipStartEdit
+                  }
+                  onUpdateClipStartEdit={
+                    handleUpdateAnimationTimelineClipStartEdit
+                  }
+                  onCommitClipStartEdit={
+                    handleCommitAnimationTimelineClipStartEdit
+                  }
+                  onCancelClipStartEdit={
+                    handleCancelAnimationTimelineClipStartEdit
+                  }
+                  onPausePlaybackForTimingEdit={
+                    handlePauseAnimationTimelineForTimingEdit
+                  }
                   onTogglePlayback={handleToggleTimelinePlayback}
                   onToggleClipPreview={
                     handleToggleSelectedAnimationClipPreview

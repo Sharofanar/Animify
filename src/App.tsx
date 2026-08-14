@@ -33,11 +33,12 @@ import {
 import {
   animationTimelineTimingSessionsMatch,
   applyAnimationTimelineTimingDraftToSlide,
-  commitAnimationTimelineClipStartEditInSlide,
-  createAnimationTimelineClipStartEditSession,
-  isAnimationTimelineClipStartEditSessionCurrent,
-  type AnimationTimelineClipStartEditSession,
-  type BeginAnimationTimelineClipStartEditRequest,
+  canDirectEditAnimationTimelineClipDuration,
+  commitAnimationTimelineTimingEditInSlide,
+  createAnimationTimelineTimingEditSession,
+  isAnimationTimelineTimingEditSessionCurrent,
+  type AnimationTimelineTimingEditSession,
+  type BeginAnimationTimelineTimingEditRequest,
 } from "./utils/animationTimelineTiming";
 import {
   computeBlobSha256,
@@ -829,7 +830,7 @@ function App() {
   const [
     animationTimelineTimingEditSession,
     setAnimationTimelineTimingEditSession,
-  ] = useState<AnimationTimelineClipStartEditSession | null>(null);
+  ] = useState<AnimationTimelineTimingEditSession | null>(null);
 
   const [elementContextMenu, setElementContextMenu] =
     useState<ElementContextMenuState>(null);
@@ -900,7 +901,7 @@ function App() {
   const activeAnimationTimelineTimingEditSession =
     activeSlide &&
     animationTimelineTimingEditSession &&
-    isAnimationTimelineClipStartEditSessionCurrent(
+    isAnimationTimelineTimingEditSessionCurrent(
       activeSlide,
       animationTimelineTimingEditSession,
     )
@@ -952,6 +953,24 @@ function App() {
         activeSlide?.elements ?? [],
       ),
     [activeSlide],
+  );
+  const durationEditableAnimationTimelineClipIds = useMemo(
+    () =>
+      new Set(
+        activeSlide
+          ? committedAnimationTimelineViewModel.clips.flatMap((clip) =>
+              clip.sequenceId &&
+              canDirectEditAnimationTimelineClipDuration(
+                activeSlide,
+                clip.sequenceId,
+                clip.id,
+              )
+                ? [clip.id]
+                : [],
+            )
+          : [],
+      ),
+    [activeSlide, committedAnimationTimelineViewModel],
   );
 
   const activeAnimationSequenceSlideIdRef = useRef(project.activeSlideId);
@@ -4970,14 +4989,14 @@ function App() {
     handleSelectAnimationClip(elementId, clipId, false);
   }
 
-  function handleBeginAnimationTimelineClipStartEdit(
-    request: BeginAnimationTimelineClipStartEditRequest,
+  function handleBeginAnimationTimelineTimingEdit(
+    request: BeginAnimationTimelineTimingEditRequest,
   ) {
     if (!activeSlide || effectiveAnimationClipPreview) {
       return null;
     }
 
-    const session = createAnimationTimelineClipStartEditSession(
+    const session = createAnimationTimelineTimingEditSession(
       activeSlide,
       request,
     );
@@ -4990,8 +5009,8 @@ function App() {
     return session;
   }
 
-  function handleUpdateAnimationTimelineClipStartEdit(
-    session: AnimationTimelineClipStartEditSession,
+  function handleUpdateAnimationTimelineTimingEdit(
+    session: AnimationTimelineTimingEditSession,
   ) {
     setAnimationTimelineTimingEditSession((currentSession) =>
       currentSession &&
@@ -5001,8 +5020,8 @@ function App() {
     );
   }
 
-  function handleCancelAnimationTimelineClipStartEdit(
-    session: AnimationTimelineClipStartEditSession,
+  function handleCancelAnimationTimelineTimingEdit(
+    session: AnimationTimelineTimingEditSession,
   ) {
     setAnimationTimelineTimingEditSession((currentSession) =>
       currentSession &&
@@ -5012,8 +5031,8 @@ function App() {
     );
   }
 
-  function handleCommitAnimationTimelineClipStartEdit(
-    session: AnimationTimelineClipStartEditSession,
+  function handleCommitAnimationTimelineTimingEdit(
+    session: AnimationTimelineTimingEditSession,
   ) {
     setAnimationTimelineTimingEditSession((currentSession) =>
       currentSession &&
@@ -5033,7 +5052,7 @@ function App() {
           return slide;
         }
 
-        const nextSlide = commitAnimationTimelineClipStartEditInSlide(
+        const nextSlide = commitAnimationTimelineTimingEditInSlide(
           slide,
           session,
         );
@@ -5575,17 +5594,20 @@ function App() {
                     activeAnimationTimelineTimingEditSession ?? undefined
                   }
                   timingEditingDisabled={Boolean(effectiveAnimationClipPreview)}
-                  onBeginClipStartEdit={
-                    handleBeginAnimationTimelineClipStartEdit
+                  durationEditableClipIds={
+                    durationEditableAnimationTimelineClipIds
                   }
-                  onUpdateClipStartEdit={
-                    handleUpdateAnimationTimelineClipStartEdit
+                  onBeginTimingEdit={
+                    handleBeginAnimationTimelineTimingEdit
                   }
-                  onCommitClipStartEdit={
-                    handleCommitAnimationTimelineClipStartEdit
+                  onUpdateTimingEdit={
+                    handleUpdateAnimationTimelineTimingEdit
                   }
-                  onCancelClipStartEdit={
-                    handleCancelAnimationTimelineClipStartEdit
+                  onCommitTimingEdit={
+                    handleCommitAnimationTimelineTimingEdit
+                  }
+                  onCancelTimingEdit={
+                    handleCancelAnimationTimelineTimingEdit
                   }
                   onPausePlaybackForTimingEdit={
                     handlePauseAnimationTimelineForTimingEdit

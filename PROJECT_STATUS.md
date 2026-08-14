@@ -1,6 +1,6 @@
 # Animify 项目状态
 
-> 最后更新：2026-08-14
+> 最后更新：2026-08-15
 > 仓库：`https://github.com/Sharofanar/Animify`  
 > 主分支：`main`  
 > Stage 6 第一 Batch 开始基线：`e11453d8de06c678f8820394f6a668d2884bf5e8 docs: define module boundary rules`
@@ -12,6 +12,7 @@
 > Stage 7 第二 Batch 开始基线：`afea4efd90df2629ea2f145e97c1f86d81499b61 feat: add timeline view model`
 > Stage 7 第三 Batch 开始基线：`7d8ada20f4875228bef7a993dc4aa14a370b6242 feat: add sequence-local timeline playback`
 > Stage 7 Batch 4A 开始基线：`bf999ca1795c8eb4908e4d8c539fd635eec04c2a feat: add timeline hierarchy and selection`
+> Stage 7 Batch 4B 开始基线：`294ea504be646a6d37661f0c3b05342856c7d00c feat: add timeline clip start editing`
 
 本文档是 Animify 当前开发状态的长期事实来源。
 
@@ -1618,7 +1619,7 @@ Batch 2 当前明确禁止移动：
 
 - 不与第 5 阶段 HTML Click Step 同步混合开发。
 - 不提前实现第 6 阶段 Click Step 编辑 UI 或第 7 阶段 Timeline V2-C。
-- Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成；Batch 2 前置只读架构审计已完成；Pending Media Interaction Fix 已通过自动检查和人工 QA。Batch 3C-3、Batch 4 与 Batch 5 暂缓；Stage 6 第一至第五 Batch 均已验证完成，Stage 6 整体 COMPLETE；Stage 7 第一至第三 Batch 与 Batch 4A 已完成并通过人工 QA，下一入口为 Stage 7 Batch 4B。
+- Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成；Batch 2 前置只读架构审计已完成；Pending Media Interaction Fix 已通过自动检查和人工 QA。Batch 3C-3、Batch 4 与 Batch 5 暂缓；Stage 6 第一至第五 Batch 均已验证完成，Stage 6 整体 COMPLETE；Stage 7 第一至第三 Batch、Batch 4A 与 Batch 4B 已完成并通过人工 QA，下一入口为 Stage 7 Batch 4C。
 
 ### 第 6 阶段：Click Step 编辑界面
 
@@ -1886,7 +1887,7 @@ Stage 6 完成结论：
 
 ### 第 7 阶段：Timeline V2-C
 
-状态：**IN PROGRESS；第一 Batch COMPLETE / MANUAL QA PASSED（2026-08-11）；第二 Batch COMPLETE / MANUAL QA PASSED（2026-08-12）；第三 Batch COMPLETE / MANUAL QA PASSED（2026-08-13）；Batch 4A COMPLETE / MANUAL QA PASSED（2026-08-14）；Stage 7 整体仍未完成**
+状态：**IN PROGRESS；第一 Batch COMPLETE / MANUAL QA PASSED（2026-08-11）；第二 Batch COMPLETE / MANUAL QA PASSED（2026-08-12）；第三 Batch COMPLETE / MANUAL QA PASSED（2026-08-13）；Batch 4A COMPLETE / MANUAL QA PASSED（2026-08-14）；Batch 4B COMPLETE / MANUAL QA PASSED（2026-08-15）；Stage 7 整体仍未完成**
 
 #### 第一 Batch：Timeline View Model Foundation
 
@@ -2069,7 +2070,7 @@ Committed Project
 - pointer lifecycle 完整覆盖 pointerdown、threshold、`setPointerCapture`、pointermove、pointerup、pointercancel、lostpointercapture、Escape、listener cleanup 与 context invalidation；finish guard 防止 duplicate commit。Slide / Project replacement、Clip 删除、ownership / revision 变化、Undo / Redo、Slide 切换和 unmount 均不会把 stale session 提交到新 context。
 - Escape、pointercancel、lost capture 均丢弃 draft并产生 0 个 History entry；一次完整有效 drag 只产生 1 个 History entry，Undo 一次恢复 source start，Redo 一次恢复 final start。same-value no-op 保持 Project / Slide same-ref，不增加 revision、`updatedAt` 或 History，也不误触发 Preview cleanup。
 - active isolated Clip preview 时 direct timing disabled；没有修改 preview lifecycle。`useTimelinePlaybackController.ts`、`SlideCanvas.tsx`、Presentation runtime、standalone Export runtime、Animation Schema 与 Stage 6 commands 均未修改。
-- 本 Batch明确没有实现 duration / left-edge resize、Keyframe drag / offset editing、cross-Sequence move、overlap hint、“接在后面”、“从 0ms 开始”、Marker editing、multi-select timing 或其他 Clip / Keyframe snapping；Stage 7 Batch 4B 与 4C 尚未开始。
+- Batch 4A 明确没有实现 duration / left-edge resize、Keyframe drag / offset editing、cross-Sequence move、overlap hint、“接在后面”、“从 0ms 开始”、Marker editing、multi-select timing 或其他 Clip / Keyframe snapping；其中 right-edge duration resize 后续由独立 Batch 4B 完成，Batch 4C 仍未开始。
 
 最终自动检查（2026-08-14，基于 closeout 源码重新执行）：
 
@@ -2085,9 +2086,56 @@ Committed Project
 2. QA-2 Escape / Undo / Redo / no-op：PASS。Escape / cancel 恢复 source，正常松手只提交一次，Undo / Redo 各一次完整恢复，没有 pointermove History 串，no-op 正常。
 3. QA-3 click-vs-drag / selection / Presentation smoke：PASS。普通 click 不误改 start，同 Sequence selection 正常，Playhead 不异常 reset；Presentation 正常并消费新的 authored start。
 
-下一开发入口：**Stage 7 Batch 4B — Clip Base Duration Resize**。本次只记录，尚未实现；预计处理 right-edge resize、authored `clip.durationMs`、minimum 1ms、base duration 与 effective end、auto / fixed Sequence、iterations / playbackRate / stagger、multi-target、安全 legacy duration mirror，并复用 4A draft / History / pointer infrastructure。
+#### Batch 4B：Clip Base Duration Resize
 
-Stage 7 Batch 4C 前置债务：`getAnimationKeyframeOffsetBounds` 对 non-finite neighbor offset 的防御性处理仍需在 4C 前解决；该债务不阻塞 4B，本 Batch 未触碰。
+状态：**COMPLETE；MANUAL QA PASSED（2026-08-15）**
+
+本 Batch 在 4A 单一 timing infrastructure 上实现同一 normal Sequence 内的 `Clip right-edge drag → clip.durationMs`：
+
+```text
+Committed Project
+→ App typed timing session
+→ pure duration draft Slide
+→ draft Timeline View Model / editor samples
+→ existing SlideCanvas immediate preview
+→ pointerup one real command
+→ one History step
+```
+
+最终实现与语义：
+
+- `animationTimelineTiming.ts` 扩展为 `clip-start | clip-duration` typed timing domain，统一拥有 direct-edit eligibility、source timing / pointer context session、candidate normalization、snapping、pure draft projection、context validation 与 protected-safe commit adapter；没有新增第二套 session、History model 或 duration command module。
+- right-edge resize 只提交 authored base `clip.durationMs`；`clip.startMs`、`Sequence.clipIds`、ownership、Track / Keyframe、fixed Sequence duration、iterations、Clip / Sequence playbackRate、repeat、direction、stagger、targets、Schema 与其他 Clip 均不改变。不同 Clip 即使同 Preset、同名、同 property / timing，也继续按真实 `sequenceId + clipId` 独立修改。
+- authored base end 为 `startMs + durationMs`。effective runtime duration / end 继续由既有 shared helper 根据 iterations、Clip / Sequence playbackRate、Sequence repeat、stagger 与 targets 派生，绝不写回 authored duration；反馈区显示基础时长、authored 结束，并仅在明显不同时补充有效结束。
+- pointermove 只更新 editor-only session 与 pure draft Slide，不修改 Project、committed Slide / Scene、revision、`Project.updatedAt`、History、autosave / persistence source或 legacy mirror。Timeline View Model、editor samples 与现有 `SlideCanvas` 消费 draft，因此固定 Playhead 下 Canvas 即时重新采样且 Playhead 不主动 seek；有效 pointerup 才通过一个 `commitProjectChange` transaction 委托 `updateAnimationClipTimingInSlide` 提交一次真实 mutation。
+- minimum authored duration 锁定为 1ms；普通 candidate 使用 10ms precision，靠近下界时可精确 clamp 到 1ms。0、negative、NaN 与 Infinity 不会写入 document，整数 persistence、revision、same-ref no-op 与安全 legacy duration mirror 继续由既有 timing command负责。
+- duration snapping 只作用于 authored right-edge time，继续复用 ruler grid、current Playhead 与合法情况下有意义的 0ms guide；snap threshold 为 6 CSS px。drag threshold 为 3px，阈值前保持普通 click / selection，阈值后才创建 timing draft并在 playing 时复用既有 `pause()`。
+- direct edit 只允许 normal、live、unique-owner、expected valid Sequence、finite source timing且至少含一个可编译 Track。targeted click、hover、manual、keyboard、media-time、advanced、ambiguous、orphan、additional slide-enter、omitted order、malformed、missing-only、NaN / Infinity 与无可编译 Track 均由 UI gate + commit adapter 双重保护为 read-only / no-op，不执行 repair。
+- `durationMode=fixed` 不 clamp Clip、不重写 `Sequence.durationMs`；`durationMode=auto` 继续通过共享 semantic duration helper自然重算。true multi-target Clip 仍只有一个 canonical entry与一个共享 base duration，stagger及 last-target effective end继续派生。
+- pointer lifecycle完整复用4A的pointerdown、3px threshold、`setPointerCapture`、pointermove、pointerup、pointercancel、lostpointercapture、Escape、context invalidation与unmount cleanup；finish guard避免duplicate commit。Escape / pointercancel / lost capture为0 History，一次有效drag为一个History step，Undo / Redo各一次恢复source / final duration，same-value no-op保持Project / Slide same-ref且不误清Preview。
+- isolated Clip preview active时direct timing仍disabled；selection继续保持parent Clip / Active Sequence且不自动选择Keyframe。Slide / Project replacement、Clip删除、ownership / revision / Sequence变化、Undo / Redo或unmount不会把stale session提交到新context。
+- 人工QA发现并修复minimum visual width interaction bug：authored width仍为`durationMs × pixelsPerMs`，visual width为`max(authoredWidthPx, 12px)`；handle从错误的authored near-left edge改为`clipLeft + visualWidthPx`，即用户看到的visual right edge。约10 CSS px的hit target以更高z-order和独立pointerdown阻止body start-drag，其余body区域继续负责4A start drag。
+- visual edge只负责rendering / hit testing，candidate baseline仍严格使用source authored duration / authored end加当前pointer displacement；因此1ms Clip在visual 12px右边缘pointerdown时保持1ms零跳变，向右按既有precision增长，向左仍clamp 1ms。
+- 极短duration显示修复仅属于formatting：1–99ms使用`1ms`、`5ms`等毫秒文案，较长时间继续显示秒；document minimum和timing precision没有改变。
+- `useTimelinePlaybackController.ts`、`SlideCanvas.tsx`、Presentation runtime、standalone Export runtime、Animation Schema、Stage 6 commands与4C Keyframe rules均未修改。本 Batch没有实现left-edge resize、cross-Sequence move、Keyframe timing / snapping、Marker / neighboring Clip snapping、overlap hint或multi-select timing。
+
+最终自动检查（2026-08-15，基于closeout最终源码重新执行）：
+
+- 4B duration domain、minimum-width geometry / formatting、draft purity / Canvas compile preview、pointer / History contract、fixed / auto / effective timing、same-Preset / multi-target、4A、Stage 6、Stage 7 Batch 1–3、Presentation / Export与UI / App contract：**93项断言**通过；没有把实现阶段135项或minimum-width修复阶段39项历史轮次机械累加。
+- TypeScript import graph：43 modules、118 relative edges、0 cycles。
+- `npm.cmd run lint`：通过。
+- `npm.cmd run build`：通过；仅保留既有`> 500 kB` chunk warning（主JS约550.30 kB），继续视为non-blocking warning。
+- `git diff --check`与提交前`git diff --cached --check`：通过；临时 assertion entry、bundle与cycle-check脚本均已删除。
+
+人工QA（2026-08-15）：
+
+1. QA-1 Duration Resize + Canvas Preview最终PASS：start / Playhead / other Clips不动，right edge与Canvas draft即时变化；首次发现的minimum-width visual/authored edge分叉经修复后复测PASS，1ms显示、visual right-edge resize、零跳变、向右拉长、向左clamp及body start drag均正常。
+2. QA-2 Auto Sequence Semantic Duration：PASS。拉长结束最晚Clip时Sequence总时长自然增加，缩短时合理缩短；fixed、iterations / rate / stagger与true multi-target底层语义由自动断言覆盖。
+3. QA-3 Escape / Undo / Redo / Presentation：PASS。Escape恢复source，松手只提交final value，Undo / Redo各一次恢复，pointermove没有History链；Presentation smoke、正式播放中的新duration与其他trigger顺序正常。
+
+Stage 7整体仍为**IN PROGRESS**。下一开发入口：**Stage 7 Batch 4C — Single Keyframe Timing + Product Closure**；本次只记录入口，不开始实现。
+
+Stage 7 Batch 4C 前置债务：`getAnimationKeyframeOffsetBounds` 对 non-finite neighbor offset 的防御性处理仍需在 4C 开始时解决；该债务未阻塞已完成的 4B，4B 未触碰它。
 
 未来 cross-Sequence move candidate 更新为：默认 preserve existing Sequence-local `startMs`；显式提供“从 0ms 开始”和“接在后面”；overlap 仅给 non-blocking hint，并允许 intentional parallel。此前“默认 startMs=0”不再作为既定候选默认；这仍是 future candidate，不是当前 architecture invariant，4A 没有实现跨 Sequence move。
 
@@ -2111,10 +2159,11 @@ AnimationScene
 Stage 7 后续 timing candidate UX：
 
 - Batch 4A 已完成同一 normal Sequence 内的 Clip start direct editing。
+- Batch 4B 已完成同一 normal Sequence 内的 Clip authored base duration right-edge resize，并保持 start、ownership、effective duration 与 runtime 语义分离。
 - 未来跨 Sequence move 默认候选更新为 preserve existing Sequence-local `startMs`，并显式提供“从 0ms 开始”与“接在后面”；overlap 只提供 non-blocking hint，intentional parallel 继续允许。
-- 该建议不是已锁定 architecture invariant；Batch 4A 没有修改 Stage 6 join / move command，也没有实现 cross-Sequence DnD。
+- 该建议不是已锁定 architecture invariant；Batch 4A / 4B 均没有修改 Stage 6 join / move command，也没有实现 cross-Sequence DnD。
 
-下一开发入口：**Stage 7 Batch 4B — Clip Base Duration Resize**。本次只记录，尚未开始；Batch 4C Keyframe timing 及其 non-finite neighbor offset 防御性债务继续留待后续。
+下一开发入口：**Stage 7 Batch 4C — Single Keyframe Timing + Product Closure**。本次只记录，尚未开始；进入 4C 时先处理 `getAnimationKeyframeOffsetBounds` 的 non-finite neighbor offset 防御性债务。
 
 正式产品设计：
 
@@ -3159,7 +3208,9 @@ GitHub 状态：已 push
 2026-08-13：第三 Batch 收尾基于当前源码重新执行 35 项运行时断言与 22 项静态契约断言，共 57 项；Lint、Build、Diff 与 42 modules / 120 relative edges / 0 cycles 检查全部通过
 2026-08-14：Stage 7 Batch 4A“Timing Edit Infrastructure + Clip startMs Direct Editing”完成；editor-only timing session、pure draft Canvas preview、normal/protected eligibility、0/grid/Playhead snapping、单次 History 与完整 pointer lifecycle 已通过三项人工 QA
 2026-08-14：Batch 4A closeout 先执行 62 项完整覆盖断言，最终审查补强 unmount cleanup 后再对最终源码执行 31 项针对性断言，本轮实际共 93 项；Lint、Build、Diff 与 43 modules / 125 relative edges / 0 cycles 检查全部通过
-当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成；Stage 5.5 架构拆分暂停于稳定边界，Batch 3C-3、Batch 4 与 Batch 5 暂缓；Stage 6 整体 COMPLETE；Stage 7 第一至第三 Batch 与 Batch 4A COMPLETE / MANUAL QA PASSED，Stage 7 整体仍未完成，下一开发入口为 Batch 4B Clip Base Duration Resize，尚未开始
+2026-08-15：Stage 7 Batch 4B“Clip Base Duration Resize”完成；authored base duration right-edge resize、pure draft Canvas preview、fixed / auto Sequence、minimum-width visual / authored geometry 解耦、1ms 显示与完整 pointer / History lifecycle 已通过三项人工 QA（含 QA-1 minimum-width retest）
+2026-08-15：Batch 4B closeout 基于最终源码重新执行 93 项定向回归断言；Lint、Build、Diff 与 43 modules / 118 relative edges / 0 cycles 检查全部通过，Build 仅保留既有 `> 500 kB` non-blocking warning
+当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成；Stage 5.5 架构拆分暂停于稳定边界，Batch 3C-3、Batch 4 与 Batch 5 暂缓；Stage 6 整体 COMPLETE；Stage 7 第一至第三 Batch、Batch 4A 与 Batch 4B COMPLETE / MANUAL QA PASSED，Stage 7 整体仍未完成，下一开发入口为 Batch 4C Single Keyframe Timing + Product Closure，尚未开始
 ```
 
 ---
@@ -3184,7 +3235,7 @@ GitHub 状态：已 push
 - Batch 2 前置只读架构审计已完成。Stage 5.5 Batch 2A“Project persistence adapter”已验证完成并 push；Video Bug Part A 已解决并完成人工 QA / Git 闭环。Export 现象当前无法复现，不启动 speculative repair；Batch 2B“Project document + history transaction”及 final no-op 修复已通过全部人工 QA 并成为稳定架构基线。Batch 3A 最小 Sequence Command Domain 已通过人工 QA，并通过 `d68ce74` 完成独立 Git 闭环；Batch 3B-1 Pure Element Command Facade 已完成自动检查、人工 QA 与独立 Git 闭环。
 - Pending Media Interaction Fix 已完成代码实现、自动检查和人工 QA，并纳入 `fix: sync pending media input ownership` 独立 Git 闭环；Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成。
 - Stage 5.5 architecture refactor paused at a stable boundary。Batch 3C-3、Batch 4 与 Batch 5 为暂缓架构债务，不是当前 required next step；Stage 6 第一至第五 Batch 均已完成并通过人工 QA，Stage 6 整体 COMPLETE。
-- Stage 7 第一 Batch“Timeline View Model Foundation”、第二 Batch“Active Sequence / Sequence-local Playhead + Editor Phase Sampling”、第三 Batch“Hierarchy Shell & Selection Contract”与 Batch 4A“Timing Edit Infrastructure + Clip startMs Direct Editing”均已完成自动检查与人工 QA；下一主要开发入口是 Stage 7 Batch 4B“Clip Base Duration Resize”，尚未开始。
+- Stage 7 第一 Batch“Timeline View Model Foundation”、第二 Batch“Active Sequence / Sequence-local Playhead + Editor Phase Sampling”、第三 Batch“Hierarchy Shell & Selection Contract”、Batch 4A“Timing Edit Infrastructure + Clip startMs Direct Editing”与 Batch 4B“Clip Base Duration Resize”均已完成自动检查与人工 QA；下一主要开发入口是 Stage 7 Batch 4C“Single Keyframe Timing + Product Closure”，尚未开始，进入时先处理 non-finite neighbor offset 防御性债务。
 - Standalone Export Fullscreen Arrow-Key Seeking Fix 已完成根因修复、自动检查和人工 QA；浏览器原生 Video controls 继续负责全屏方向键 seek，Presentation 不消费这些按键。
 - Presentation Element Click Blocking Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 的普通展示元素 click 现在冒泡到统一推进路由，编辑模式选择与媒体控件输入保持不变。
 - Presentation Transient Text Editing / Selection Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 不再拥有双击 / textarea 编辑入口，Text / Shape / SVG 展示文字不再产生原生 Selection，编辑模式 textarea 语义保持不变。
@@ -3242,7 +3293,8 @@ git diff --cached
 33. Stage 7 第一 Batch 已新增纯 `animationTimeline.ts` / `getAnimationTimelineViewModel`，统一 normal / protected Sequence、global Step number、canonical Clip、animated Object row、target、Track / Keyframe、semantic duration 与 diagnostics 读取模型；App 只做 `useMemo` orchestration，Timeline 不再遍历全部元素创建空行。Sequence-local `startMs`、旧 Playhead/controller、Canvas sampling、Presentation 与 Export 语义在第一 Batch 未修改，随后由第二 Batch 单独迁移 editor timing path。
 34. Stage 7 第二 Batch 已建立唯一 editor-only Active Sequence、Slide + Sequence controller context、Sequence-local semantic duration / Playhead，以及 completed / active / pending editor phase samples；pending 对 Canvas 无 contribution，completed + active 继续由既有 compiler / compositor 合成。`SlideCanvas` 普通 V2 editor path 已迁移，isolated preview 恢复 local return frame；Presentation formal samples 与 standalone Export runtime 保持独立且未修改。
 35. Stage 7 第三 Batch 已建立 Sequence → Object/Clip → Track → Keyframe 层级、真实 ID typed selection、pure reconciliation / delete fallback、Sequence 默认展开 / Clip 默认折叠与 external Clip reveal；selection、reveal、playback 分离，same-Preset 独立 Clip 与 true multi-target canonical 规则已通过自动断言和人工 QA。
-36. Stage 7 Batch 4A 已新增 `animationTimelineTiming.ts` 与 App editor-only timing session，使用 pure draft Slide 驱动 Timeline / editor samples / existing SlideCanvas；normal Clip bar body drag 仅提交 Sequence-local `startMs`，pointermove 不修改 document，0/grid/Playhead snapping、3px drag threshold、6px snap threshold、10ms precision、protected gate、cancel、单次 History、Undo / Redo 与 no-op 均通过自动断言和人工 QA。Stage 7 整体仍未完成，下一入口为尚未开始的 Batch 4B Clip Base Duration Resize。
+36. Stage 7 Batch 4A 已新增 `animationTimelineTiming.ts` 与 App editor-only timing session，使用 pure draft Slide 驱动 Timeline / editor samples / existing SlideCanvas；normal Clip bar body drag 仅提交 Sequence-local `startMs`，pointermove 不修改 document，0/grid/Playhead snapping、3px drag threshold、6px snap threshold、10ms precision、protected gate、cancel、单次 History、Undo / Redo 与 no-op 均通过自动断言和人工 QA。
+37. Stage 7 Batch 4B 已在同一 timing session 中增加 normal Clip visual right-edge authored base duration resize；candidate 始终基于 source authored duration 与 pointer delta，最低 1ms，minimum 12px 只属于 rendering / hit testing，fixed / auto Sequence、multi-target / same-Preset、pure draft Canvas、单次 commit、cancel / no-op、protected gate 与 Presentation / Export 隔离均已验证。Stage 7 整体仍为 IN PROGRESS，下一入口为尚未开始的 Batch 4C Single Keyframe Timing + Product Closure。
 
 ### Git 状态说明
 
@@ -3287,5 +3339,7 @@ git diff --cached
 - Stage 7 第三 Batch 最终范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/AnimationTimeline.tsx`、`src/utils/animationTimeline.ts`，提交信息为 `feat: add timeline hierarchy and selection`。
 - Stage 7 Batch 4A 开始基线：`main`、本地 `origin/main` 均为 `bf999ca1795c8eb4908e4d8c539fd635eec04c2a`，ahead 0、behind 0；开始前工作区和暂存区干净。
 - Stage 7 Batch 4A 最终范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/AnimationTimeline.tsx`、`src/utils/animationTimelineTiming.ts`，提交信息为 `feat: add timeline clip start editing`。
+- Stage 7 Batch 4B 开始基线：`main`、本地 `origin/main` 均为 `294ea504be646a6d37661f0c3b05342856c7d00c`，ahead 0、behind 0；closeout 开始前只有 `src/App.tsx`、`src/components/editor/AnimationTimeline.tsx`、`src/utils/animationTimelineTiming.ts` 三个未暂存源码修改，暂存区为空，`PROJECT_STATUS.md` 尚未修改。
+- Stage 7 Batch 4B 最终范围固定为 `PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/AnimationTimeline.tsx`、`src/utils/animationTimelineTiming.ts`，提交信息为 `feat: add timeline clip duration editing`。
 
 未经用户允许，不得 commit 或 push。

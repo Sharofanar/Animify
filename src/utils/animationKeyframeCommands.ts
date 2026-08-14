@@ -17,6 +17,7 @@ import {
   getAnimationKeyframeInsertion,
   getAnimationKeyframeOffsetBounds,
   interpolateAnimationValue,
+  normalizeAnimationKeyframeOffset,
   normalizeAnimationEasing,
   sortAnimationKeyframes,
 } from "./animationKeyframeRules";
@@ -116,11 +117,28 @@ export function updateAnimationKeyframeOffsetInSlide(
   }
 
   const { scene, clip, track, trackIndex, keyframe } = target;
-  const { minimumOffset, maximumOffset } =
-    getAnimationKeyframeOffsetBounds(track.keyframes, command.keyframeId);
+  const bounds = getAnimationKeyframeOffsetBounds(
+    track.keyframes,
+    command.keyframeId,
+  );
+
+  if (!bounds.editable || !Number.isFinite(keyframe.offset)) {
+    return slide;
+  }
+
+  const boundedOffset = Math.min(
+    bounds.maximumOffset,
+    Math.max(bounds.minimumOffset, command.offset),
+  );
+  const normalizedOffset = normalizeAnimationKeyframeOffset(boundedOffset);
+
+  if (normalizedOffset === undefined) {
+    return slide;
+  }
+
   const nextOffset = Math.min(
-    maximumOffset,
-    Math.max(minimumOffset, command.offset),
+    bounds.maximumOffset,
+    Math.max(bounds.minimumOffset, normalizedOffset),
   );
 
   if (Object.is(keyframe.offset, nextOffset)) {

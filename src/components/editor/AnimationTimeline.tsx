@@ -90,6 +90,10 @@ type AnimationTimelineProps = {
   onStopPlayback: () => void;
 };
 
+type AnimationTimelineTimingPointerRequest =
+  | { kind: "clip-start" | "clip-duration" }
+  | { kind: "keyframe-offset"; trackId: string; keyframeId: string };
+
 const LABEL_COLUMN_WIDTH = 168;
 const MIN_CLIP_VISUAL_WIDTH_PX = 12;
 
@@ -1098,7 +1102,7 @@ function AnimationTimelineClipHierarchyRows({
 
   function handleTimingPointerDown(
     event: ReactPointerEvent<HTMLElement>,
-    kind: AnimationTimelineTimingEditSession["kind"],
+    request: AnimationTimelineTimingPointerRequest,
   ) {
     if (event.button !== 0) {
       return;
@@ -1111,8 +1115,8 @@ function AnimationTimelineClipHierarchyRows({
     const sequenceId = clip.sequenceId;
     const sourceClientX = event.clientX;
     const pointerId = event.pointerId;
-    const clipButton = event.currentTarget;
-    clipButton.setPointerCapture(pointerId);
+    const gestureTarget = event.currentTarget;
+    gestureTarget.setPointerCapture(pointerId);
     let activeSession: AnimationTimelineTimingEditSession | null = null;
     let latestSession: AnimationTimelineTimingEditSession | null = null;
     let dragStarted = false;
@@ -1130,10 +1134,10 @@ function AnimationTimelineClipHierarchyRows({
         cancelClipPointerInteractionRef.current = null;
       }
       window.removeEventListener("keydown", handleKeyDown);
-      clipButton.removeEventListener("pointermove", handlePointerMove);
-      clipButton.removeEventListener("pointerup", handlePointerUp);
-      clipButton.removeEventListener("pointercancel", handlePointerCancel);
-      clipButton.removeEventListener(
+      gestureTarget.removeEventListener("pointermove", handlePointerMove);
+      gestureTarget.removeEventListener("pointerup", handlePointerUp);
+      gestureTarget.removeEventListener("pointercancel", handlePointerCancel);
+      gestureTarget.removeEventListener(
         "lostpointercapture",
         handleLostPointerCapture,
       );
@@ -1144,8 +1148,8 @@ function AnimationTimelineClipHierarchyRows({
         onCancelTimingEdit(latestSession);
       }
 
-      if (clipButton.hasPointerCapture(pointerId)) {
-        clipButton.releasePointerCapture(pointerId);
+      if (gestureTarget.hasPointerCapture(pointerId)) {
+        gestureTarget.releasePointerCapture(pointerId);
       }
     }
 
@@ -1180,9 +1184,13 @@ function AnimationTimelineClipHierarchyRows({
       }
 
       if (!dragStarted) {
-        selectClip();
+        if (request.kind === "keyframe-offset") {
+          selectKeyframe(request.trackId, request.keyframeId);
+        } else {
+          selectClip();
+        }
         activeSession = onBeginTimingEdit({
-          kind,
+          ...request,
           sequenceId,
           clipId: clip.id,
           pointerId,
@@ -1229,10 +1237,10 @@ function AnimationTimelineClipHierarchyRows({
       finish("cancel");
     }
 
-    clipButton.addEventListener("pointermove", handlePointerMove);
-    clipButton.addEventListener("pointerup", handlePointerUp);
-    clipButton.addEventListener("pointercancel", handlePointerCancel);
-    clipButton.addEventListener(
+    gestureTarget.addEventListener("pointermove", handlePointerMove);
+    gestureTarget.addEventListener("pointerup", handlePointerUp);
+    gestureTarget.addEventListener("pointercancel", handlePointerCancel);
+    gestureTarget.addEventListener(
       "lostpointercapture",
       handleLostPointerCapture,
     );
@@ -1242,7 +1250,7 @@ function AnimationTimelineClipHierarchyRows({
   function handleClipPointerDown(
     event: ReactPointerEvent<HTMLButtonElement>,
   ) {
-    handleTimingPointerDown(event, "clip-start");
+    handleTimingPointerDown(event, { kind: "clip-start" });
   }
 
   function handleDurationPointerDown(
@@ -1254,7 +1262,20 @@ function AnimationTimelineClipHierarchyRows({
       return;
     }
 
-    handleTimingPointerDown(event, "clip-duration");
+    handleTimingPointerDown(event, { kind: "clip-duration" });
+  }
+
+  function handleKeyframePointerDown(
+    event: ReactPointerEvent<HTMLButtonElement>,
+    trackId: string,
+    keyframeId: string,
+  ) {
+    event.stopPropagation();
+    handleTimingPointerDown(event, {
+      kind: "keyframe-offset",
+      trackId,
+      keyframeId,
+    });
   }
 
   useEffect(
@@ -1480,29 +1501,90 @@ function AnimationTimelineClipHierarchyRows({
                     selection.clipId === clip.id &&
                     selection.trackId === track.id &&
                     selection.keyframeId === keyframe.id;
+                  const keyframeTimingEdit =
+                    activeTimingEdit?.kind === "keyframe-offset" &&
+                    activeTimingEdit.trackId === track.id &&
+                    activeTimingEdit.keyframeId === keyframe.id
+                      ? activeTimingEdit
+                      : undefined;
+                  const keyframeDirectlyEditable =
+                    directlyEditable && keyframe.timingEditable;
 
                   return (
-                    <button
-                      key={keyframe.id}
-                      type="button"
-                      className={`absolute top-1/2 z-30 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[2px] border-2 shadow-sm transition hover:scale-125 ${
-                        selectedKeyframe
-                          ? clip.status === "protected"
-                            ? "border-amber-700 bg-amber-300"
-                            : "border-violet-700 bg-violet-300"
-                          : clip.status === "protected"
-                            ? "border-amber-500 bg-white"
-                            : "border-violet-500 bg-white"
-                      }`}
-                      style={{ left: keyframe.localTimeMs * pixelsPerMs }}
-                      onClick={() => selectKeyframe(track.id, keyframe.id)}
-                      title={`${track.property} · Keyframe ${keyframe.id} · ${formatRulerTime(
-                        keyframe.localTimeMs,
-                      )}`}
-                      aria-label={`选择 ${track.property} 的 ${formatRulerTime(
-                        keyframe.localTimeMs,
-                      )} 关键帧`}
-                    />
+                    <span key={keyframe.id}>
+                      <button
+                        type="button"
+                        className={`absolute top-1/2 z-30 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[2px] border-2 shadow-sm transition hover:scale-125 ${
+                          keyframeTimingEdit?.dragging
+                            ? "border-cyan-700 bg-cyan-300 ring-2 ring-cyan-200"
+                            : selectedKeyframe
+                              ? clip.status === "protected"
+                                ? "border-amber-700 bg-amber-300"
+                                : "border-violet-700 bg-violet-300"
+                              : clip.status === "protected"
+                                ? "border-amber-500 bg-white"
+                                : "border-violet-500 bg-white"
+                        } ${
+                          keyframeDirectlyEditable
+                            ? "touch-none cursor-ew-resize"
+                            : "cursor-default"
+                        }`}
+                        style={{ left: keyframe.localTimeMs * pixelsPerMs }}
+                        onPointerDown={
+                          keyframeDirectlyEditable
+                            ? (event) =>
+                                handleKeyframePointerDown(
+                                  event,
+                                  track.id,
+                                  keyframe.id,
+                                )
+                            : undefined
+                        }
+                        onClick={() => selectKeyframe(track.id, keyframe.id)}
+                        title={`${track.property} · Keyframe ${keyframe.id} · ${formatRulerTime(
+                          keyframe.localTimeMs,
+                        )}${
+                          keyframeDirectlyEditable
+                            ? " · 水平拖动调整时间"
+                            : " · 时间编辑已锁定"
+                        }`}
+                        aria-label={`${
+                          keyframeDirectlyEditable ? "调整" : "选择"
+                        } ${track.property} 的 ${formatRulerTime(
+                          keyframe.localTimeMs,
+                        )} 关键帧`}
+                      />
+                      {keyframeTimingEdit?.dragging ? (
+                        <>
+                          {keyframeTimingEdit.snap ? (
+                            <span
+                              className="pointer-events-none absolute bottom-0 top-0 z-20 w-px -translate-x-1/2 bg-cyan-400"
+                              style={{
+                                left:
+                                  keyframeTimingEdit.candidateLocalTimeMs *
+                                  pixelsPerMs,
+                              }}
+                            />
+                          ) : null}
+                          <span
+                            className="pointer-events-none absolute top-0 z-50 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 font-mono text-[9px] font-bold text-white shadow-lg"
+                            style={{
+                              left:
+                                keyframeTimingEdit.candidateLocalTimeMs *
+                                pixelsPerMs,
+                            }}
+                          >
+                            {formatRulerTime(
+                              keyframeTimingEdit.candidateLocalTimeMs,
+                            )}
+                            {` · offset ${keyframeTimingEdit.candidateOffset.toFixed(
+                              3,
+                            )}`}
+                            {keyframeTimingEdit.snap ? " · SNAP" : ""}
+                          </span>
+                        </>
+                      ) : null}
+                    </span>
                   );
                 })}
               </AnimationTimelineHierarchyRow>

@@ -1,6 +1,17 @@
-import type { AnimationClip, Slide } from "../types/presentation";
+import type {
+  AnimationClip,
+  AnimationKeyframe,
+  AnimationTrack,
+  Slide,
+} from "../types/presentation";
 import { updateAnimationClipTimingInSlide } from "./animationCommands";
 import { compileAnimationSequence } from "./animationCompiler";
+import { updateAnimationKeyframeOffsetInSlide } from "./animationKeyframeCommands";
+import {
+  getAnimationKeyframeOffsetBounds,
+  normalizeAnimationKeyframeOffset,
+  type AnimationKeyframeOffsetBounds,
+} from "./animationKeyframeRules";
 import { getAnimationTimelineViewModel } from "./animationTimeline";
 
 export const ANIMATION_TIMELINE_TIMING_DRAG_THRESHOLD_PX = 3;
@@ -31,6 +42,12 @@ export type AnimationTimelineClipDurationCandidate = {
   snap?: AnimationTimelineTimingSnap;
 };
 
+export type AnimationTimelineKeyframeOffsetCandidate = {
+  offset: number;
+  localTimeMs: number;
+  snap?: AnimationTimelineTimingSnap;
+};
+
 type AnimationTimelineTimingEditSessionBase = {
   slideId: string;
   sequenceId: string;
@@ -58,21 +75,45 @@ export type AnimationTimelineClipDurationEditSession =
     candidateAuthoredEndMs: number;
   };
 
+export type AnimationTimelineKeyframeOffsetEditSession =
+  AnimationTimelineTimingEditSessionBase & {
+    kind: "keyframe-offset";
+    trackId: string;
+    keyframeId: string;
+    sourceOffset: number;
+    sourceLocalTimeMs: number;
+    minimumOffset: number;
+    maximumOffset: number;
+    candidateOffset: number;
+    candidateLocalTimeMs: number;
+  };
+
 export type AnimationTimelineTimingEditSession =
   | AnimationTimelineClipStartEditSession
-  | AnimationTimelineClipDurationEditSession;
+  | AnimationTimelineClipDurationEditSession
+  | AnimationTimelineKeyframeOffsetEditSession;
 
-export type BeginAnimationTimelineTimingEditRequest = {
-  kind: AnimationTimelineTimingEditSession["kind"];
+export type BeginAnimationTimelineTimingEditRequest =
+  | {
+      kind: "clip-start" | "clip-duration";
+      sequenceId: string;
+      clipId: string;
+      pointerId: number;
+    }
+  | {
+      kind: "keyframe-offset";
+      sequenceId: string;
+      clipId: string;
+      trackId: string;
+      keyframeId: string;
+      pointerId: number;
+    };
+
+export type BeginAnimationTimelineClipStartEditRequest = {
   sequenceId: string;
   clipId: string;
   pointerId: number;
 };
-
-export type BeginAnimationTimelineClipStartEditRequest = Omit<
-  BeginAnimationTimelineTimingEditRequest,
-  "kind"
->;
 
 export type GetAnimationTimelineClipStartCandidateRequest = {
   sourceStartMs: number;
@@ -89,6 +130,25 @@ export type GetAnimationTimelineClipDurationCandidateRequest = {
   pixelsPerMs: number;
   rulerGridStepMs: number;
   playheadTimeMs: number;
+};
+
+export type GetAnimationTimelineKeyframeOffsetCandidateRequest = {
+  sourceStartMs: number;
+  sourceDurationMs: number;
+  sourceOffset: number;
+  minimumOffset: number;
+  maximumOffset: number;
+  deltaPixels: number;
+  pixelsPerMs: number;
+  rulerGridStepMs: number;
+  playheadTimeMs: number;
+};
+
+type DirectEditableKeyframe = {
+  clip: AnimationClip;
+  track: AnimationTrack;
+  keyframe: AnimationKeyframe;
+  bounds: Extract<AnimationKeyframeOffsetBounds, { editable: true }>;
 };
 
 function getDirectEditableClip(
@@ -162,22 +222,114 @@ export function canDirectEditAnimationTimelineClipDuration(
   }
 }
 
+function getDirectEditableKeyframe(
+  slide: Slide,
+  sequenceId: string,
+  clipId: string,
+  trackId: string,
+  keyframeId: string,
+): DirectEditableKeyframe | undefined {
+  const clip = getDirectEditableClip(slide, sequenceId, clipId);
+
+  if (
+    !clip ||
+    !Number.isFinite(clip.durationMs) ||
+    clip.durationMs <= 0
+  ) {
+    return undefined;
+  }
+
+  const track = Array.isArray(clip.tracks)
+    ? clip.tracks.find((candidate) => candidate.id === trackId)
+    : undefined;
+  const keyframe = Array.isArray(track?.keyframes)
+    ? track.keyframes.find((candidate) => candidate.id === keyframeId)
+    : undefined;
+
+  if (!track || !keyframe || !Number.isFinite(keyframe.offset)) {
+    return undefined;
+  }
+
+  const bounds = getAnimationKeyframeOffsetBounds(track.keyframes, keyframeId);
+
+  return bounds.editable ? { clip, track, keyframe, bounds } : undefined;
+}
+
+export function canDirectEditAnimationTimelineKeyframeOffset(
+  slide: Slide,
+  sequenceId: string,
+  clipId: string,
+  trackId: string,
+  keyframeId: string,
+) {
+  return (
+    getDirectEditableKeyframe(
+      slide,
+      sequenceId,
+      clipId,
+      trackId,
+      keyframeId,
+    ) !== undefined
+  );
+}
+
 export function createAnimationTimelineTimingEditSession(
   slide: Slide,
   request: BeginAnimationTimelineTimingEditRequest,
 ): AnimationTimelineTimingEditSession | null {
   const clip = getDirectEditableClip(slide, request.sequenceId, request.clipId);
 
+  if (!clip) {
+    return null;
+  }
+
+  if (request.kind === "keyframe-offset") {
+    const target = getDirectEditableKeyframe(
+      slide,
+      request.sequenceId,
+      request.clipId,
+      request.trackId,
+      request.keyframeId,
+    );
+
+    if (!target) {
+      return null;
+    }
+
+    const sourceLocalTimeMs =
+      clip.startMs + clip.durationMs * target.keyframe.offset;
+
+    return {
+      kind: "keyframe-offset",
+      slideId: slide.id,
+      sequenceId: request.sequenceId,
+      clipId: request.clipId,
+      trackId: request.trackId,
+      keyframeId: request.keyframeId,
+      pointerId: request.pointerId,
+      sourceSlide: slide,
+      sourceSceneRevision: slide.animationScene.revision,
+      sourceStartMs: clip.startMs,
+      sourceDurationMs: clip.durationMs,
+      sourceOffset: target.keyframe.offset,
+      sourceLocalTimeMs,
+      minimumOffset: target.bounds.minimumOffset,
+      maximumOffset: target.bounds.maximumOffset,
+      candidateOffset: target.keyframe.offset,
+      candidateLocalTimeMs: sourceLocalTimeMs,
+      dragging: false,
+    };
+  }
+
   if (
-    !clip ||
-    (request.kind === "clip-duration" &&
+    request.kind === "clip-duration" &&
       (!Number.isFinite(clip.durationMs) ||
         clip.durationMs < ANIMATION_TIMELINE_MINIMUM_CLIP_DURATION_MS ||
         !canDirectEditAnimationTimelineClipDuration(
           slide,
           request.sequenceId,
           request.clipId,
-        )))
+        ))
   ) {
     return null;
   }
@@ -239,6 +391,7 @@ function getTimingSnap(
   rulerGridStepMs: number,
   playheadTimeMs: number,
   minimumTimeMs = 0,
+  maximumTimeMs = Number.POSITIVE_INFINITY,
 ) {
   const gridStepMs =
     Number.isFinite(rulerGridStepMs) && rulerGridStepMs > 0
@@ -262,7 +415,11 @@ function getTimingSnap(
   ];
 
   return candidates
-    .filter((candidate) => candidate.timeMs >= minimumTimeMs)
+    .filter(
+      (candidate) =>
+        candidate.timeMs >= minimumTimeMs &&
+        candidate.timeMs <= maximumTimeMs,
+    )
     .map((candidate, priority) => ({
       ...candidate,
       priority,
@@ -390,6 +547,81 @@ export function getAnimationTimelineClipDurationCandidate({
   };
 }
 
+/**
+ * Keyframe gestures operate in Sequence-local milliseconds for pointer and
+ * snap feedback, then map back to the selected Clip's normalized offset.
+ * Neighbor bounds remain authoritative over the visual 10ms precision.
+ */
+export function getAnimationTimelineKeyframeOffsetCandidate({
+  sourceStartMs,
+  sourceDurationMs,
+  sourceOffset,
+  minimumOffset,
+  maximumOffset,
+  deltaPixels,
+  pixelsPerMs,
+  rulerGridStepMs,
+  playheadTimeMs,
+}: GetAnimationTimelineKeyframeOffsetCandidateRequest): AnimationTimelineKeyframeOffsetCandidate {
+  const sourceLocalTimeMs = sourceStartMs + sourceDurationMs * sourceOffset;
+  const validRequest =
+    Number.isFinite(sourceStartMs) &&
+    Number.isFinite(sourceDurationMs) &&
+    sourceDurationMs > 0 &&
+    Number.isFinite(sourceOffset) &&
+    Number.isFinite(minimumOffset) &&
+    Number.isFinite(maximumOffset) &&
+    minimumOffset <= maximumOffset &&
+    Number.isFinite(deltaPixels) &&
+    Number.isFinite(pixelsPerMs) &&
+    pixelsPerMs > 0;
+
+  if (!validRequest) {
+    return { offset: sourceOffset, localTimeMs: sourceLocalTimeMs };
+  }
+
+  if (Math.abs(deltaPixels) < 0.000001) {
+    return { offset: sourceOffset, localTimeMs: sourceLocalTimeMs };
+  }
+
+  const minimumLocalTimeMs = sourceStartMs + sourceDurationMs * minimumOffset;
+  const maximumLocalTimeMs = sourceStartMs + sourceDurationMs * maximumOffset;
+  const rawLocalTimeMs = sourceLocalTimeMs + deltaPixels / pixelsPerMs;
+  const snap = getTimingSnap(
+    rawLocalTimeMs,
+    pixelsPerMs,
+    rulerGridStepMs,
+    playheadTimeMs,
+    minimumLocalTimeMs,
+    maximumLocalTimeMs,
+  );
+  const timelineCandidateMs = snap
+    ? snap.timeMs
+    : normalizeToPrecision(rawLocalTimeMs);
+  const rawOffset = (timelineCandidateMs - sourceStartMs) / sourceDurationMs;
+  const boundedOffset = Math.min(
+    maximumOffset,
+    Math.max(minimumOffset, rawOffset),
+  );
+  const normalizedOffset = normalizeAnimationKeyframeOffset(boundedOffset);
+  const candidateOffset =
+    normalizedOffset === undefined
+      ? sourceOffset
+      : Math.min(maximumOffset, Math.max(minimumOffset, normalizedOffset));
+  const candidateLocalTimeMs =
+    sourceStartMs + sourceDurationMs * candidateOffset;
+  const snapStillApplies =
+    snap && Math.abs(candidateLocalTimeMs - snap.timeMs) < 0.000001;
+
+  return {
+    offset: candidateOffset,
+    localTimeMs: candidateLocalTimeMs,
+    snap: snapStillApplies
+      ? { kind: snap.kind, timeMs: candidateLocalTimeMs }
+      : undefined,
+  };
+}
+
 export function updateAnimationTimelineClipStartEditSession(
   session: AnimationTimelineClipStartEditSession,
   candidate: AnimationTimelineClipStartCandidate,
@@ -432,6 +664,28 @@ export function updateAnimationTimelineClipDurationEditSession(
   };
 }
 
+export function updateAnimationTimelineKeyframeOffsetEditSession(
+  session: AnimationTimelineKeyframeOffsetEditSession,
+  candidate: AnimationTimelineKeyframeOffsetCandidate,
+) {
+  if (
+    !Number.isFinite(candidate.offset) ||
+    !Number.isFinite(candidate.localTimeMs) ||
+    candidate.offset < session.minimumOffset ||
+    candidate.offset > session.maximumOffset
+  ) {
+    return session;
+  }
+
+  return {
+    ...session,
+    candidateOffset: candidate.offset,
+    candidateLocalTimeMs: candidate.localTimeMs,
+    dragging: true,
+    snap: candidate.snap,
+  };
+}
+
 export function getAnimationTimelineTimingDragSession(
   session: AnimationTimelineTimingEditSession,
   request: {
@@ -441,6 +695,20 @@ export function getAnimationTimelineTimingDragSession(
     playheadTimeMs: number;
   },
 ): AnimationTimelineTimingEditSession {
+  if (session.kind === "keyframe-offset") {
+    return updateAnimationTimelineKeyframeOffsetEditSession(
+      session,
+      getAnimationTimelineKeyframeOffsetCandidate({
+        ...request,
+        sourceStartMs: session.sourceStartMs,
+        sourceDurationMs: session.sourceDurationMs,
+        sourceOffset: session.sourceOffset,
+        minimumOffset: session.minimumOffset,
+        maximumOffset: session.maximumOffset,
+      }),
+    );
+  }
+
   if (session.kind === "clip-duration") {
     return updateAnimationTimelineClipDurationEditSession(
       session,
@@ -478,7 +746,7 @@ export function animationTimelineTimingSessionsMatch(
   left: AnimationTimelineTimingEditSession,
   right: AnimationTimelineTimingEditSession,
 ) {
-  return (
+  const baseMatches =
     left.kind === right.kind &&
     left.slideId === right.slideId &&
     left.sequenceId === right.sequenceId &&
@@ -487,8 +755,23 @@ export function animationTimelineTimingSessionsMatch(
     left.sourceSlide === right.sourceSlide &&
     left.sourceSceneRevision === right.sourceSceneRevision &&
     Object.is(left.sourceStartMs, right.sourceStartMs) &&
-    Object.is(left.sourceDurationMs, right.sourceDurationMs)
-  );
+    Object.is(left.sourceDurationMs, right.sourceDurationMs);
+
+  if (!baseMatches) {
+    return false;
+  }
+
+  if (left.kind === "keyframe-offset" && right.kind === "keyframe-offset") {
+    return (
+      left.trackId === right.trackId &&
+      left.keyframeId === right.keyframeId &&
+      Object.is(left.sourceOffset, right.sourceOffset) &&
+      Object.is(left.minimumOffset, right.minimumOffset) &&
+      Object.is(left.maximumOffset, right.maximumOffset)
+    );
+  }
+
+  return true;
 }
 
 function sessionStillMatchesSlide(
@@ -497,19 +780,41 @@ function sessionStillMatchesSlide(
 ) {
   const clip = getDirectEditableClip(slide, session.sequenceId, session.clipId);
 
+  if (
+    slide.id !== session.slideId ||
+    slide !== session.sourceSlide ||
+    slide.animationScene.revision !== session.sourceSceneRevision ||
+    !clip ||
+    !Object.is(clip.startMs, session.sourceStartMs) ||
+    !Object.is(clip.durationMs, session.sourceDurationMs)
+  ) {
+    return false;
+  }
+
+  if (session.kind === "keyframe-offset") {
+    const target = getDirectEditableKeyframe(
+      slide,
+      session.sequenceId,
+      session.clipId,
+      session.trackId,
+      session.keyframeId,
+    );
+
+    return (
+      target !== undefined &&
+      Object.is(target.keyframe.offset, session.sourceOffset) &&
+      Object.is(target.bounds.minimumOffset, session.minimumOffset) &&
+      Object.is(target.bounds.maximumOffset, session.maximumOffset)
+    );
+  }
+
   return (
-    slide.id === session.slideId &&
-    slide === session.sourceSlide &&
-    slide.animationScene.revision === session.sourceSceneRevision &&
-    clip !== undefined &&
-    Object.is(clip.startMs, session.sourceStartMs) &&
-    Object.is(clip.durationMs, session.sourceDurationMs) &&
-    (session.kind !== "clip-duration" ||
-      canDirectEditAnimationTimelineClipDuration(
-        slide,
-        session.sequenceId,
-        session.clipId,
-      ))
+    session.kind !== "clip-duration" ||
+    canDirectEditAnimationTimelineClipDuration(
+      slide,
+      session.sequenceId,
+      session.clipId,
+    )
   );
 }
 
@@ -537,6 +842,56 @@ export function applyAnimationTimelineTimingDraftToSlide(
 
   const scene = slide.animationScene;
   const clip = scene.clips[session.clipId];
+
+  if (session.kind === "keyframe-offset") {
+    if (
+      !Number.isFinite(session.candidateOffset) ||
+      session.candidateOffset < session.minimumOffset ||
+      session.candidateOffset > session.maximumOffset ||
+      Object.is(session.candidateOffset, session.sourceOffset)
+    ) {
+      return slide;
+    }
+
+    const trackIndex = clip.tracks.findIndex(
+      (track) => track.id === session.trackId,
+    );
+
+    if (trackIndex < 0) {
+      return slide;
+    }
+
+    const track = clip.tracks[trackIndex];
+    const keyframeIndex = track.keyframes.findIndex(
+      (keyframe) => keyframe.id === session.keyframeId,
+    );
+
+    if (keyframeIndex < 0) {
+      return slide;
+    }
+
+    const nextKeyframes = [...track.keyframes];
+    nextKeyframes[keyframeIndex] = {
+      ...nextKeyframes[keyframeIndex],
+      offset: session.candidateOffset,
+    };
+    const nextTracks = [...clip.tracks];
+    nextTracks[trackIndex] = { ...track, keyframes: nextKeyframes };
+
+    // Draft ordering stays authored; compiler/View Model already sort by ID +
+    // offset, so no unrelated identity or historical duplicate is rewritten.
+    return {
+      ...slide,
+      animationScene: {
+        ...scene,
+        clips: {
+          ...scene.clips,
+          [clip.id]: { ...clip, tracks: nextTracks },
+        },
+      },
+    };
+  }
+
   const timingUpdate =
     session.kind === "clip-duration"
       ? { durationMs: session.candidateDurationMs }
@@ -566,13 +921,31 @@ export function applyAnimationTimelineTimingDraftToSlide(
   };
 }
 
-/** Revalidate context and delegate authored mutation, revision, and legacy mirror. */
+/** Revalidate context and delegate the one authored document mutation. */
 export function commitAnimationTimelineTimingEditInSlide(
   slide: Slide,
   session: AnimationTimelineTimingEditSession,
 ): Slide {
   if (!session.dragging || !sessionStillMatchesSlide(slide, session)) {
     return slide;
+  }
+
+  if (session.kind === "keyframe-offset") {
+    if (
+      !Number.isFinite(session.candidateOffset) ||
+      session.candidateOffset < session.minimumOffset ||
+      session.candidateOffset > session.maximumOffset ||
+      Object.is(session.candidateOffset, session.sourceOffset)
+    ) {
+      return slide;
+    }
+
+    return updateAnimationKeyframeOffsetInSlide(slide, {
+      clipId: session.clipId,
+      trackId: session.trackId,
+      keyframeId: session.keyframeId,
+      offset: session.candidateOffset,
+    });
   }
 
   if (session.kind === "clip-duration") {

@@ -35,6 +35,7 @@ import {
   canEditAnimationKeyframeEasing,
   getAnimationKeyframeOffsetBounds,
   sortAnimationKeyframes,
+  type AnimationKeyframeOffsetBounds,
 } from "../../utils/animationKeyframeRules";
 
 const CSS_EASING_OPTIONS = [
@@ -1537,10 +1538,7 @@ function KeyframeOffsetInput({
   onFinishChange,
 }: {
   value: number;
-  offsetBounds: {
-    minimumOffset: number;
-    maximumOffset: number;
-  };
+  offsetBounds: AnimationKeyframeOffsetBounds;
   clipId: string;
   trackId: string;
   keyframeId: string;
@@ -1551,7 +1549,9 @@ function KeyframeOffsetInput({
   onBeginChange?: () => void;
   onFinishChange?: () => void;
 }) {
-  const storedPercentage = Number((value * 100).toFixed(4));
+  const storedPercentage = Number.isFinite(value)
+    ? Number((value * 100).toFixed(4))
+    : 0;
 
   const minimumPercentage = Number(
     (offsetBounds.minimumOffset * 100).toFixed(4),
@@ -1567,6 +1567,11 @@ function KeyframeOffsetInput({
   const displayedValue = isEditing ? draftValue : String(storedPercentage);
 
   function commitDraftValue() {
+    if (!offsetBounds.editable) {
+      setDraftValue(String(storedPercentage));
+      return;
+    }
+
     const trimmedValue = draftValue.trim();
 
     if (trimmedValue === "") {
@@ -1612,12 +1617,17 @@ function KeyframeOffsetInput({
       <input
         type="number"
         aria-label="关键帧位置百分比"
-        title={`当前允许范围：${minimumPercentage}% ～ ${maximumPercentage}%`}
-        className="min-w-0 flex-1 rounded-lg bg-violet-50 px-2 py-1 font-black text-violet-600 outline-none ring-1 ring-transparent transition focus:bg-white focus:ring-violet-300"
+        title={
+          offsetBounds.editable
+            ? `当前允许范围：${minimumPercentage}% ～ ${maximumPercentage}%`
+            : "关键帧时间数据无效，位置编辑已锁定"
+        }
+        className="min-w-0 flex-1 rounded-lg bg-violet-50 px-2 py-1 font-black text-violet-600 outline-none ring-1 ring-transparent transition focus:bg-white focus:ring-violet-300 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
         value={displayedValue}
         min={minimumPercentage}
         max={maximumPercentage}
         step={0.1}
+        disabled={!offsetBounds.editable}
         onFocus={() => {
           setDraftValue(String(storedPercentage));
           setIsEditing(true);

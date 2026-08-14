@@ -6,7 +6,11 @@ import type {
   SlideElement,
 } from "../types/presentation";
 import { isAnimationClipLiveForElements } from "./animationLegacyCompatibility";
-import { EASING_OFFSET_MATCH_TOLERANCE, sortAnimationKeyframes } from "./animationKeyframeRules";
+import {
+  EASING_OFFSET_MATCH_TOLERANCE,
+  getAnimationKeyframeOffsetBounds,
+  sortAnimationKeyframes,
+} from "./animationKeyframeRules";
 import {
   getAnimationClipStage6Capabilities,
   getAnimationClipSequenceContext,
@@ -68,6 +72,7 @@ export type AnimationTimelineKeyframeEntry = {
   offset: number;
   displayOffset: number;
   localTimeMs: number;
+  timingEditable: boolean;
 };
 
 export type AnimationTimelineTrackEntry = {
@@ -813,7 +818,13 @@ function createClipEntry(
         property: track.property,
         enabled: track.enabled,
         keyframes: sortAnimationKeyframes(sourceKeyframes).map((keyframe) => {
-          const displayOffset = clamp(keyframe.offset, 0, 1);
+          const displayOffset = Number.isFinite(keyframe.offset)
+            ? clamp(keyframe.offset, 0, 1)
+            : 0;
+          const bounds = getAnimationKeyframeOffsetBounds(
+            sourceKeyframes,
+            keyframe.id,
+          );
 
           return {
             id: keyframe.id,
@@ -822,6 +833,11 @@ function createClipEntry(
             displayOffset,
             localTimeMs:
               localStartMs + safeAuthoredDurationMs * displayOffset,
+            timingEditable:
+              Number.isFinite(clip.startMs) &&
+              Number.isFinite(clip.durationMs) &&
+              clip.durationMs > 0 &&
+              bounds.editable,
           };
         }),
       };

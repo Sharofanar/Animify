@@ -16,10 +16,18 @@ export const MINIMUM_KEYFRAME_OFFSET_GAP = 0.001;
  */
 export const EASING_OFFSET_MATCH_TOLERANCE = 0.000001;
 
-export type AnimationKeyframeOffsetBounds = {
-  minimumOffset: number;
-  maximumOffset: number;
-};
+export type AnimationKeyframeOffsetBounds =
+  | {
+      editable: true;
+      minimumOffset: number;
+      maximumOffset: number;
+    }
+  | {
+      editable: false;
+      minimumOffset: number;
+      maximumOffset: number;
+      reason: "missing-keyframe" | "non-finite-offset" | "no-finite-interval";
+    };
 
 export type AnimationKeyframeInsertion = {
   leftKeyframe: AnimationKeyframe;
@@ -39,12 +47,22 @@ export function sortAnimationKeyframes(
 
 /**
  * Neighbor bounds keep the basic editor from crossing keyframes or removing
- * the minimum gap. Malformed legacy tracks keep the selected frame fixed.
+ * the minimum gap. A malformed track returns an explicit finite lock instead
+ * of leaking NaN / Infinity into UI or command arithmetic.
  */
 export function getAnimationKeyframeOffsetBounds(
   keyframes: readonly AnimationKeyframe[],
   keyframeId: string,
 ): AnimationKeyframeOffsetBounds {
+  if (keyframes.some((keyframe) => !Number.isFinite(keyframe.offset))) {
+    return {
+      editable: false,
+      minimumOffset: 0,
+      maximumOffset: 0,
+      reason: "non-finite-offset",
+    };
+  }
+
   const sortedKeyframes = sortAnimationKeyframes(keyframes);
   const keyframeIndex = sortedKeyframes.findIndex(
     (keyframe) => keyframe.id === keyframeId,
@@ -52,8 +70,10 @@ export function getAnimationKeyframeOffsetBounds(
 
   if (keyframeIndex < 0) {
     return {
+      editable: false,
       minimumOffset: 0,
-      maximumOffset: 1,
+      maximumOffset: 0,
+      reason: "missing-keyframe",
     };
   }
 
@@ -67,17 +87,33 @@ export function getAnimationKeyframeOffsetBounds(
     ? Math.max(0, followingKeyframe.offset - MINIMUM_KEYFRAME_OFFSET_GAP)
     : 1;
 
-  if (minimumOffset > maximumOffset) {
+  if (
+    !Number.isFinite(minimumOffset) ||
+    !Number.isFinite(maximumOffset) ||
+    minimumOffset > maximumOffset
+  ) {
     return {
-      minimumOffset: currentKeyframe.offset,
-      maximumOffset: currentKeyframe.offset,
+      editable: false,
+      minimumOffset: Math.min(1, Math.max(0, currentKeyframe.offset)),
+      maximumOffset: Math.min(1, Math.max(0, currentKeyframe.offset)),
+      reason: "no-finite-interval",
     };
   }
 
   return {
+    editable: true,
     minimumOffset,
     maximumOffset,
   };
+}
+
+/** Keep persisted offsets aligned with the existing six-decimal editor rule. */
+export function normalizeAnimationKeyframeOffset(offset: number) {
+  if (!Number.isFinite(offset)) {
+    return undefined;
+  }
+
+  return Number(Math.min(1, Math.max(0, offset)).toFixed(6));
 }
 
 /**

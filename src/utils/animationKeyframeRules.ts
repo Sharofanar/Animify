@@ -1,6 +1,7 @@
 import type {
   AnimationEasing,
   AnimationKeyframe,
+  AnimationTrack,
   AnimationValue,
 } from "../types/presentation";
 
@@ -27,6 +28,38 @@ export type AnimationKeyframeOffsetBounds =
       minimumOffset: number;
       maximumOffset: number;
       reason: "missing-keyframe" | "non-finite-offset" | "no-finite-interval";
+    };
+
+export type AnimationKeyframeIdentity = {
+  trackId: string;
+  keyframeId: string;
+};
+
+export type AnimationKeyframeGroupMember = AnimationKeyframeIdentity & {
+  offset: number;
+};
+
+export type AnimationKeyframeGroupOffsetBounds =
+  | {
+      editable: true;
+      minimumDeltaOffset: number;
+      maximumDeltaOffset: number;
+      keyframes: AnimationKeyframeGroupMember[];
+    }
+  | {
+      editable: false;
+      minimumDeltaOffset: number;
+      maximumDeltaOffset: number;
+      keyframes: AnimationKeyframeGroupMember[];
+      reason:
+        | "empty-selection"
+        | "duplicate-identity"
+        | "malformed-selection"
+        | "missing-track"
+        | "malformed-track"
+        | "missing-keyframe"
+        | "non-finite-offset"
+        | "no-finite-interval";
     };
 
 export type AnimationKeyframeInsertion = {
@@ -107,6 +140,196 @@ export function getAnimationKeyframeOffsetBounds(
   };
 }
 
+function getLockedAnimationKeyframeGroupBounds(
+  reason: Extract<AnimationKeyframeGroupOffsetBounds, { editable: false }>["reason"],
+  keyframes: AnimationKeyframeGroupMember[] = [],
+): AnimationKeyframeGroupOffsetBounds {
+  return {
+    editable: false,
+    minimumDeltaOffset: 0,
+    maximumDeltaOffset: 0,
+    keyframes,
+    reason,
+  };
+}
+
+/**
+ * Intersect the legal rigid-translation interval for selected Keyframes across
+ * every affected Track. Selected-to-selected neighbors do not constrain one
+ * another; only outside boundaries and the normalized 0..1 range do.
+ */
+export function getAnimationKeyframeGroupOffsetBounds(
+  tracks: readonly AnimationTrack[],
+  selectedKeyframes: readonly AnimationKeyframeIdentity[],
+): AnimationKeyframeGroupOffsetBounds {
+  if (!Array.isArray(tracks)) {
+    return getLockedAnimationKeyframeGroupBounds("malformed-track");
+  }
+
+  if (!Array.isArray(selectedKeyframes)) {
+    return getLockedAnimationKeyframeGroupBounds("malformed-selection");
+  }
+
+  if (selectedKeyframes.length === 0) {
+    return getLockedAnimationKeyframeGroupBounds("empty-selection");
+  }
+
+  const selectedIdentityKeys = new Set<string>();
+
+  for (const selectedKeyframe of selectedKeyframes) {
+    const identityKey = `${selectedKeyframe.trackId}\u0000${selectedKeyframe.keyframeId}`;
+
+    if (selectedIdentityKeys.has(identityKey)) {
+      return getLockedAnimationKeyframeGroupBounds("duplicate-identity");
+    }
+
+    selectedIdentityKeys.add(identityKey);
+  }
+
+  const selectedByTrackId = new Map<string, Set<string>>();
+
+  for (const selectedKeyframe of selectedKeyframes) {
+    const selectedIds = selectedByTrackId.get(selectedKeyframe.trackId);
+
+    if (selectedIds) {
+      selectedIds.add(selectedKeyframe.keyframeId);
+    } else {
+      selectedByTrackId.set(
+        selectedKeyframe.trackId,
+        new Set([selectedKeyframe.keyframeId]),
+      );
+    }
+  }
+
+  let minimumDeltaOffset = Number.NEGATIVE_INFINITY;
+  let maximumDeltaOffset = Number.POSITIVE_INFINITY;
+  const resolvedKeyframes: AnimationKeyframeGroupMember[] = [];
+  const resolvedTrackIds = new Set<string>();
+
+  for (const track of tracks) {
+    const selectedIds = selectedByTrackId.get(track.id);
+
+    if (!selectedIds) {
+      continue;
+    }
+
+    if (resolvedTrackIds.has(track.id)) {
+      return getLockedAnimationKeyframeGroupBounds(
+        "missing-track",
+        resolvedKeyframes,
+      );
+    }
+
+    resolvedTrackIds.add(track.id);
+
+    if (
+      !Array.isArray(
+        (track as { keyframes?: unknown }).keyframes,
+      )
+    ) {
+      return getLockedAnimationKeyframeGroupBounds(
+        "malformed-track",
+        resolvedKeyframes,
+      );
+    }
+
+    const trackKeyframes = track.keyframes as readonly AnimationKeyframe[];
+
+    if (trackKeyframes.some((keyframe) => !Number.isFinite(keyframe.offset))) {
+      return getLockedAnimationKeyframeGroupBounds(
+        "non-finite-offset",
+        resolvedKeyframes,
+      );
+    }
+
+    const sortedKeyframes = sortAnimationKeyframes(trackKeyframes);
+    const resolvedIds = new Set<string>();
+
+    for (const keyframe of sortedKeyframes) {
+      if (!selectedIds.has(keyframe.id)) {
+        continue;
+      }
+
+      if (resolvedIds.has(keyframe.id)) {
+        return getLockedAnimationKeyframeGroupBounds(
+          "duplicate-identity",
+          resolvedKeyframes,
+        );
+      }
+
+      resolvedIds.add(keyframe.id);
+      resolvedKeyframes.push({
+        trackId: track.id,
+        keyframeId: keyframe.id,
+        offset: keyframe.offset,
+      });
+      minimumDeltaOffset = Math.max(
+        minimumDeltaOffset,
+        -keyframe.offset,
+      );
+      maximumDeltaOffset = Math.min(
+        maximumDeltaOffset,
+        1 - keyframe.offset,
+      );
+    }
+
+    if (resolvedIds.size !== selectedIds.size) {
+      return getLockedAnimationKeyframeGroupBounds(
+        "missing-keyframe",
+        resolvedKeyframes,
+      );
+    }
+
+    for (let index = 0; index < sortedKeyframes.length - 1; index += 1) {
+      const leftKeyframe = sortedKeyframes[index];
+      const rightKeyframe = sortedKeyframes[index + 1];
+      const leftSelected = selectedIds.has(leftKeyframe.id);
+      const rightSelected = selectedIds.has(rightKeyframe.id);
+
+      if (!leftSelected && rightSelected) {
+        minimumDeltaOffset = Math.max(
+          minimumDeltaOffset,
+          leftKeyframe.offset +
+            MINIMUM_KEYFRAME_OFFSET_GAP -
+            rightKeyframe.offset,
+        );
+      } else if (leftSelected && !rightSelected) {
+        maximumDeltaOffset = Math.min(
+          maximumDeltaOffset,
+          rightKeyframe.offset -
+            MINIMUM_KEYFRAME_OFFSET_GAP -
+            leftKeyframe.offset,
+        );
+      }
+    }
+  }
+
+  if (resolvedTrackIds.size !== selectedByTrackId.size) {
+    return getLockedAnimationKeyframeGroupBounds(
+      "missing-track",
+      resolvedKeyframes,
+    );
+  }
+
+  if (
+    !Number.isFinite(minimumDeltaOffset) ||
+    !Number.isFinite(maximumDeltaOffset) ||
+    minimumDeltaOffset > maximumDeltaOffset
+  ) {
+    return getLockedAnimationKeyframeGroupBounds(
+      "no-finite-interval",
+      resolvedKeyframes,
+    );
+  }
+
+  return {
+    editable: true,
+    minimumDeltaOffset,
+    maximumDeltaOffset,
+    keyframes: resolvedKeyframes,
+  };
+}
+
 /** Keep persisted offsets aligned with the existing six-decimal editor rule. */
 export function normalizeAnimationKeyframeOffset(offset: number) {
   if (!Number.isFinite(offset)) {
@@ -114,6 +337,15 @@ export function normalizeAnimationKeyframeOffset(offset: number) {
   }
 
   return Number(Math.min(1, Math.max(0, offset)).toFixed(6));
+}
+
+/** Normalize one shared rigid-group delta without clamping its sign. */
+export function normalizeAnimationKeyframeOffsetDelta(deltaOffset: number) {
+  if (!Number.isFinite(deltaOffset)) {
+    return undefined;
+  }
+
+  return Number(deltaOffset.toFixed(6));
 }
 
 /**

@@ -70,6 +70,7 @@ export {
   deleteAnimationKeyframeFromSlide,
   updateAnimationKeyframeEasingInSlide,
   updateAnimationKeyframeOffsetInSlide,
+  updateAnimationKeyframeOffsetsInSlide,
   updateAnimationKeyframeValueInSlide,
 } from "./animationKeyframeCommands";
 export type {
@@ -79,6 +80,7 @@ export type {
   DeleteAnimationKeyframeCommand,
   UpdateAnimationKeyframeEasingCommand,
   UpdateAnimationKeyframeOffsetCommand,
+  UpdateAnimationKeyframeOffsetsCommand,
   UpdateAnimationKeyframeValueCommand,
 } from "./animationKeyframeCommands";
 

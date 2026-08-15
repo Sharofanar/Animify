@@ -9,6 +9,7 @@ import type {
   TimelinePlaybackStatus,
 } from "../../types/editor";
 import type { AnimationScene, SlideElement } from "../../types/presentation";
+import type { AnimationTimelineSelection } from "../../utils/animationTimeline";
 import type {
   AddAnimationClipCommand,
   AddAnimationKeyframeRequest,
@@ -40,6 +41,7 @@ type AnimationFloatingPanelProps = {
   scene?: AnimationScene;
   elements: SlideElement[];
   activeAnimationContext?: ActiveAnimationContext;
+  timelineSelection?: AnimationTimelineSelection;
   onSelectClip?: (elementId: string, clipId: string) => void;
   onClose?: () => void;
   onReplayAnimation?: () => void;
@@ -160,6 +162,7 @@ export function AnimationFloatingPanel({
   scene,
   elements,
   activeAnimationContext,
+  timelineSelection,
   onSelectClip,
   onClose,
   onReplayAnimation,
@@ -418,6 +421,7 @@ export function AnimationFloatingPanel({
                   ? activeAnimationContext.clipId
                   : undefined
               }
+              timelineSelection={timelineSelection}
               requestedClipRequestId={
                 activeAnimationContext?.elementId === focusedElement.id
                   ? activeAnimationContext.requestId
@@ -465,6 +469,7 @@ export function AnimationFloatingPanel({
                 ? activeAnimationContext.clipId
                 : undefined
             }
+            timelineSelection={timelineSelection}
             requestedClipRequestId={
               activeAnimationContext?.elementId === elements[0]?.id
                 ? activeAnimationContext.requestId

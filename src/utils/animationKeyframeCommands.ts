@@ -14,12 +14,15 @@ import {
   canEditAnimationKeyframeEasing,
   cloneAnimationEasing,
   cloneAnimationValue,
+  getAnimationKeyframeGroupOffsetBounds,
   getAnimationKeyframeInsertion,
   getAnimationKeyframeOffsetBounds,
   interpolateAnimationValue,
   normalizeAnimationKeyframeOffset,
+  normalizeAnimationKeyframeOffsetDelta,
   normalizeAnimationEasing,
   sortAnimationKeyframes,
+  type AnimationKeyframeIdentity,
 } from "./animationKeyframeRules";
 
 export type UpdateAnimationKeyframeValueCommand = {
@@ -36,6 +39,12 @@ export type UpdateAnimationKeyframeOffsetCommand = {
 
   /** Normalized local position inside the animation track, from 0 to 1. */
   offset: number;
+};
+
+export type UpdateAnimationKeyframeOffsetsCommand = {
+  clipId: string;
+  keyframes: AnimationKeyframeIdentity[];
+  deltaOffset: number;
 };
 
 export type UpdateAnimationKeyframeEasingCommand = {
@@ -159,6 +168,88 @@ export function updateAnimationKeyframeOffsetInSlide(
   return replaceAnimationTrackInSlide(slide, scene, clip, trackIndex, {
     ...track,
     keyframes: nextKeyframes,
+  });
+}
+
+/** Apply one all-or-nothing rigid Keyframe translation as one Scene mutation. */
+export function updateAnimationKeyframeOffsetsInSlide(
+  slide: Slide,
+  command: UpdateAnimationKeyframeOffsetsCommand,
+): Slide {
+  const scene = slide.animationScene;
+  const clip = scene?.clips[command.clipId];
+
+  if (!scene || scene.schemaVersion !== 2 || !clip) {
+    return slide;
+  }
+
+  const bounds = getAnimationKeyframeGroupOffsetBounds(
+    clip.tracks,
+    command.keyframes,
+  );
+  const normalizedDeltaOffset = normalizeAnimationKeyframeOffsetDelta(
+    command.deltaOffset,
+  );
+
+  if (!bounds.editable || normalizedDeltaOffset === undefined) {
+    return slide;
+  }
+
+  const deltaOffset = Math.min(
+    bounds.maximumDeltaOffset,
+    Math.max(bounds.minimumDeltaOffset, normalizedDeltaOffset),
+  );
+
+  if (Object.is(deltaOffset, 0)) {
+    return slide;
+  }
+
+  const selectedByTrackId = new Map<string, Map<string, number>>();
+
+  for (const keyframe of bounds.keyframes) {
+    const selectedOffsets = selectedByTrackId.get(keyframe.trackId);
+
+    if (selectedOffsets) {
+      selectedOffsets.set(keyframe.keyframeId, keyframe.offset);
+    } else {
+      selectedByTrackId.set(
+        keyframe.trackId,
+        new Map([[keyframe.keyframeId, keyframe.offset]]),
+      );
+    }
+  }
+
+  const nextTracks = clip.tracks.map((track) => {
+    const selectedOffsets = selectedByTrackId.get(track.id);
+
+    if (!selectedOffsets) {
+      return track;
+    }
+
+    return {
+      ...track,
+      keyframes: sortAnimationKeyframes(
+        track.keyframes.map((keyframe) => {
+          const sourceOffset = selectedOffsets.get(keyframe.id);
+
+          return sourceOffset === undefined
+            ? keyframe
+            : {
+                ...keyframe,
+                offset: sourceOffset + deltaOffset,
+              };
+        }),
+      ),
+    };
+  });
+
+  return replaceAnimationClipInSlide(slide, scene, clip, {
+    ...clip,
+    tracks: nextTracks,
+    metadata: {
+      ...clip.metadata,
+      customized: true,
+    },
   });
 }
 

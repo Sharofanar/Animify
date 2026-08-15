@@ -18,10 +18,14 @@ import type {
   AnimationTimelineProtectionReason,
   AnimationTimelineRevealRequest,
   AnimationTimelineSelection,
+  AnimationTimelineKeyframeSelection,
   AnimationTimelineSequenceGroup,
   AnimationTimelineViewModel,
 } from "../../utils/animationTimeline";
-import { getAnimationTimelineHierarchy } from "../../utils/animationTimeline";
+import {
+  getAnimationTimelineHierarchy,
+  getAnimationTimelineKeyframeSelection,
+} from "../../utils/animationTimeline";
 import {
   ANIMATION_TIMELINE_TIMING_DRAG_THRESHOLD_PX,
   ANIMATION_TIMELINE_TIMING_PRECISION_MS,
@@ -64,6 +68,8 @@ type AnimationTimelineProps = {
     selection: Extract<AnimationTimelineSelection, { kind: "keyframe" }>,
   ) => void;
 
+  onClearKeyframeSelection: () => void;
+
   onOpenClipDetails: (elementId: string, clipId: string) => void;
 
   timingEditSession?: AnimationTimelineTimingEditSession;
@@ -92,10 +98,39 @@ type AnimationTimelineProps = {
 
 type AnimationTimelineTimingPointerRequest =
   | { kind: "clip-start" | "clip-duration" }
-  | { kind: "keyframe-offset"; trackId: string; keyframeId: string };
+  | { kind: "keyframe-offset"; trackId: string; keyframeId: string }
+  | {
+      kind: "keyframe-group-offset";
+      anchorTrackId: string;
+      anchorKeyframeId: string;
+      keyframes: AnimationTimelineKeyframeSelection["selectedKeyframes"];
+    };
 
 const LABEL_COLUMN_WIDTH = 168;
 const MIN_CLIP_VISUAL_WIDTH_PX = 12;
+const ANIMATION_TIMELINE_PLAYHEAD_HIT_RADIUS_PX = 6;
+
+function shouldClearAnimationTimelineKeyframeSelectionFromBackgroundClick({
+  pointerDownOnBackground,
+  pointerUpOnBackground,
+  movementExceededThreshold,
+  modified,
+  playheadHit,
+}: {
+  pointerDownOnBackground: boolean;
+  pointerUpOnBackground: boolean;
+  movementExceededThreshold: boolean;
+  modified: boolean;
+  playheadHit: boolean;
+}) {
+  return (
+    pointerDownOnBackground &&
+    pointerUpOnBackground &&
+    !movementExceededThreshold &&
+    !modified &&
+    !playheadHit
+  );
+}
 
 type AnimationTimelineCollapseState = {
   contextKey: string;
@@ -234,6 +269,7 @@ export function AnimationTimeline({
   onSelectClip,
   onSelectTrack,
   onSelectKeyframe,
+  onClearKeyframeSelection,
   onOpenClipDetails,
   timingEditSession,
   timingEditingDisabled = false,
@@ -265,6 +301,13 @@ export function AnimationTimeline({
   const [suppressedRevealRequestKey, setSuppressedRevealRequestKey] = useState<
     string | null
   >(null);
+  const [multiSelectModeState, setMultiSelectModeState] = useState(() => ({
+    contextKey: hierarchyContextKey,
+    enabled: false,
+  }));
+  const multiSelectMode =
+    multiSelectModeState.contextKey === hierarchyContextKey &&
+    multiSelectModeState.enabled;
 
   const collapsedSequenceIds =
     sequenceCollapseState.contextKey === hierarchyContextKey
@@ -641,6 +684,25 @@ export function AnimationTimeline({
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            aria-pressed={multiSelectMode}
+            className={`rounded-full px-3 py-2 text-[10px] font-black transition ${
+              multiSelectMode
+                ? "bg-violet-500 text-white shadow-sm"
+                : "bg-violet-100 text-violet-600 hover:bg-violet-200"
+            }`}
+            onClick={() =>
+              setMultiSelectModeState({
+                contextKey: hierarchyContextKey,
+                enabled: !multiSelectMode,
+              })
+            }
+            title="触控多选：开启后轻点关键帧切换选择；已选关键帧仍可拖动"
+          >
+            多选
+          </button>
+
           <div className="flex items-center rounded-full bg-slate-100 p-1">
             <button
               type="button"
@@ -896,6 +958,7 @@ export function AnimationTimeline({
                         activeSequenceId={activeSequenceId}
                         activeAnimationContext={activeAnimationContext}
                         selection={selection}
+                        multiSelectMode={multiSelectMode}
                         collapsed={!expandedClipIds.has(clipNode.id)}
                         timelineTrackWidth={timelineTrackWidth}
                         pixelsPerMs={pixelsPerMs}
@@ -914,6 +977,7 @@ export function AnimationTimeline({
                         onSelectClip={onSelectClip}
                         onSelectTrack={onSelectTrack}
                         onSelectKeyframe={onSelectKeyframe}
+                        onClearKeyframeSelection={onClearKeyframeSelection}
                         onOpenClipDetails={onOpenClipDetails}
                         timingEditSession={timingEditSession}
                         timingEditingDisabled={timingEditingDisabled}
@@ -963,6 +1027,7 @@ function AnimationTimelineClipHierarchyRows({
   activeSequenceId,
   activeAnimationContext,
   selection,
+  multiSelectMode,
   collapsed,
   timelineTrackWidth,
   pixelsPerMs,
@@ -973,6 +1038,7 @@ function AnimationTimelineClipHierarchyRows({
   onSelectClip,
   onSelectTrack,
   onSelectKeyframe,
+  onClearKeyframeSelection,
   onOpenClipDetails,
   timingEditSession,
   timingEditingDisabled,
@@ -990,6 +1056,7 @@ function AnimationTimelineClipHierarchyRows({
   activeSequenceId?: string;
   activeAnimationContext?: ActiveAnimationContext;
   selection?: AnimationTimelineSelection;
+  multiSelectMode: boolean;
   collapsed: boolean;
   timelineTrackWidth: number;
   pixelsPerMs: number;
@@ -1006,6 +1073,7 @@ function AnimationTimelineClipHierarchyRows({
     elementId: string,
     selection: Extract<AnimationTimelineSelection, { kind: "keyframe" }>,
   ) => void;
+  onClearKeyframeSelection: () => void;
   onOpenClipDetails: (elementId: string, clipId: string) => void;
   timingEditSession?: AnimationTimelineTimingEditSession;
   timingEditingDisabled: boolean;
@@ -1044,6 +1112,7 @@ function AnimationTimelineClipHierarchyRows({
   const visualClipRight = clipLeft + clipWidth;
   const selectionElementId = node.selectionElementId;
   const cancelClipPointerInteractionRef = useRef<(() => void) | null>(null);
+  const suppressKeyframeClickRef = useRef<string | null>(null);
   const directlyEditable =
     clip.status === "normal" &&
     clip.liveForElements &&
@@ -1085,24 +1154,41 @@ function AnimationTimelineClipHierarchyRows({
     });
   }
 
-  function selectKeyframe(trackId: string, keyframeId: string) {
+  function applyKeyframeSelection(
+    nextSelection: AnimationTimelineSelection,
+  ) {
     if (!selectionElementId) {
       return;
     }
 
-    onSelectKeyframe(selectionElementId, {
-      kind: "keyframe",
-      sequenceGroupId: group.id,
-      sequenceId: clip.sequenceId,
-      clipId: clip.id,
-      trackId,
-      keyframeId,
-    });
+    if (nextSelection.kind === "keyframe") {
+      onSelectKeyframe(selectionElementId, nextSelection);
+    } else if (nextSelection.kind === "track") {
+      onSelectTrack(selectionElementId, nextSelection);
+    } else {
+      onSelectClip(selectionElementId, clip.id);
+    }
+  }
+
+  function selectKeyframe(
+    trackId: string,
+    keyframeId: string,
+    toggle = false,
+  ) {
+    applyKeyframeSelection(
+      getAnimationTimelineKeyframeSelection(
+        clip,
+        selection,
+        { trackId, keyframeId },
+        toggle,
+      ),
+    );
   }
 
   function handleTimingPointerDown(
     event: ReactPointerEvent<HTMLElement>,
     request: AnimationTimelineTimingPointerRequest,
+    keyframeSelection?: AnimationTimelineKeyframeSelection,
   ) {
     if (event.button !== 0) {
       return;
@@ -1141,6 +1227,23 @@ function AnimationTimelineClipHierarchyRows({
         "lostpointercapture",
         handleLostPointerCapture,
       );
+
+      if (
+        kind === "commit" &&
+        dragStarted &&
+        (request.kind === "keyframe-offset" ||
+          request.kind === "keyframe-group-offset")
+      ) {
+        const trackId =
+          request.kind === "keyframe-group-offset"
+            ? request.anchorTrackId
+            : request.trackId;
+        const keyframeId =
+          request.kind === "keyframe-group-offset"
+            ? request.anchorKeyframeId
+            : request.keyframeId;
+        suppressKeyframeClickRef.current = `${trackId}\u0000${keyframeId}`;
+      }
 
       if (kind === "commit" && dragStarted && latestSession) {
         onCommitTimingEdit(latestSession);
@@ -1184,8 +1287,8 @@ function AnimationTimelineClipHierarchyRows({
       }
 
       if (!dragStarted) {
-        if (request.kind === "keyframe-offset") {
-          selectKeyframe(request.trackId, request.keyframeId);
+        if (keyframeSelection) {
+          applyKeyframeSelection(keyframeSelection);
         } else {
           selectClip();
         }
@@ -1197,6 +1300,21 @@ function AnimationTimelineClipHierarchyRows({
         });
 
         if (!activeSession) {
+          if (
+            request.kind === "keyframe-offset" ||
+            request.kind === "keyframe-group-offset"
+          ) {
+            const trackId =
+              request.kind === "keyframe-group-offset"
+                ? request.anchorTrackId
+                : request.trackId;
+            const keyframeId =
+              request.kind === "keyframe-group-offset"
+                ? request.anchorKeyframeId
+                : request.keyframeId;
+            suppressKeyframeClickRef.current = `${trackId}\u0000${keyframeId}`;
+          }
+
           finish("cancel");
           return;
         }
@@ -1271,11 +1389,65 @@ function AnimationTimelineClipHierarchyRows({
     keyframeId: string,
   ) {
     event.stopPropagation();
-    handleTimingPointerDown(event, {
-      kind: "keyframe-offset",
-      trackId,
-      keyframeId,
-    });
+
+    if (event.ctrlKey || event.metaKey) {
+      return;
+    }
+
+    const identity = { trackId, keyframeId };
+    const markerSelected =
+      selection?.kind === "keyframe" &&
+      selection.clipId === clip.id &&
+      selection.selectedKeyframes.some(
+        (selectedKeyframe) =>
+          selectedKeyframe.trackId === trackId &&
+          selectedKeyframe.keyframeId === keyframeId,
+      );
+
+    if (multiSelectMode && !markerSelected) {
+      return;
+    }
+
+    const dragSelection =
+      markerSelected && selection?.kind === "keyframe"
+        ? {
+            ...selection,
+            primary: identity,
+          }
+        : getAnimationTimelineKeyframeSelection(
+            clip,
+            selection,
+            identity,
+            false,
+          );
+
+    if (dragSelection.kind !== "keyframe") {
+      return;
+    }
+
+    if (dragSelection.selectedKeyframes.length > 1) {
+      handleTimingPointerDown(
+        event,
+        {
+          kind: "keyframe-group-offset",
+          anchorTrackId: trackId,
+          anchorKeyframeId: keyframeId,
+          keyframes: dragSelection.selectedKeyframes,
+        },
+        dragSelection,
+      );
+      return;
+    }
+
+    handleTimingPointerDown(
+      event,
+      {
+        kind: "keyframe-offset",
+        trackId,
+        keyframeId,
+      },
+      dragSelection,
+    );
   }
 
   useEffect(
@@ -1345,6 +1517,11 @@ function AnimationTimelineClipHierarchyRows({
         pixelsPerMs={pixelsPerMs}
         rowClassName={
           clip.status === "protected" ? "bg-amber-50/40" : "bg-white"
+        }
+        onEmptyTimelineClick={
+          selection?.kind === "keyframe"
+            ? onClearKeyframeSelection
+            : undefined
         }
       >
         <button
@@ -1448,8 +1625,11 @@ function AnimationTimelineClipHierarchyRows({
               selection.trackId === track.id;
             const trackContainsSelection =
               selection?.clipId === clip.id &&
-              selection.kind !== "clip" &&
-              selection.trackId === track.id;
+              ((selection.kind === "track" && selection.trackId === track.id) ||
+                (selection.kind === "keyframe" &&
+                  selection.selectedKeyframes.some(
+                    (keyframe) => keyframe.trackId === track.id,
+                  )));
 
             return (
               <AnimationTimelineHierarchyRow
@@ -1486,9 +1666,14 @@ function AnimationTimelineClipHierarchyRows({
                 rowClassName={
                   clip.status === "protected" ? "bg-amber-50/20" : "bg-white"
                 }
+                onEmptyTimelineClick={
+                  selection?.kind === "keyframe"
+                    ? onClearKeyframeSelection
+                    : undefined
+                }
               >
                 <div
-                  className={`absolute top-1/2 h-0.5 -translate-y-1/2 rounded-full ${
+                  className={`pointer-events-none absolute top-1/2 h-0.5 -translate-y-1/2 rounded-full ${
                     clip.status === "protected"
                       ? "bg-amber-200"
                       : "bg-violet-200"
@@ -1499,25 +1684,65 @@ function AnimationTimelineClipHierarchyRows({
                   const selectedKeyframe =
                     selection?.kind === "keyframe" &&
                     selection.clipId === clip.id &&
-                    selection.trackId === track.id &&
-                    selection.keyframeId === keyframe.id;
-                  const keyframeTimingEdit =
+                    selection.selectedKeyframes.some(
+                      (selectedIdentity) =>
+                        selectedIdentity.trackId === track.id &&
+                        selectedIdentity.keyframeId === keyframe.id,
+                    );
+                  const primaryKeyframe =
+                    selectedKeyframe &&
+                    selection?.kind === "keyframe" &&
+                    selection.primary.trackId === track.id &&
+                    selection.primary.keyframeId === keyframe.id;
+                  const singleKeyframeTimingEdit =
                     activeTimingEdit?.kind === "keyframe-offset" &&
                     activeTimingEdit.trackId === track.id &&
                     activeTimingEdit.keyframeId === keyframe.id
                       ? activeTimingEdit
                       : undefined;
+                  const groupKeyframeTimingEdit =
+                    activeTimingEdit?.kind === "keyframe-group-offset" &&
+                    activeTimingEdit.keyframes.some(
+                      (selectedIdentity) =>
+                        selectedIdentity.trackId === track.id &&
+                        selectedIdentity.keyframeId === keyframe.id,
+                    )
+                      ? activeTimingEdit
+                      : undefined;
+                  const keyframeTimingDragging =
+                    singleKeyframeTimingEdit?.dragging ||
+                    groupKeyframeTimingEdit?.dragging;
+                  const keyframeTimingAnchor =
+                    singleKeyframeTimingEdit ??
+                    (groupKeyframeTimingEdit?.anchorTrackId === track.id &&
+                    groupKeyframeTimingEdit.anchorKeyframeId === keyframe.id
+                      ? groupKeyframeTimingEdit
+                      : undefined);
+                  const candidateLocalTimeMs =
+                    keyframeTimingAnchor?.kind === "keyframe-group-offset"
+                      ? keyframeTimingAnchor.candidateAnchorLocalTimeMs
+                      : keyframeTimingAnchor?.candidateLocalTimeMs;
+                  const candidateOffset =
+                    keyframeTimingAnchor?.kind === "keyframe-group-offset"
+                      ? keyframeTimingAnchor.sourceAnchorOffset +
+                        keyframeTimingAnchor.candidateDeltaOffset
+                      : keyframeTimingAnchor?.candidateOffset;
                   const keyframeDirectlyEditable =
                     directlyEditable && keyframe.timingEditable;
+                  const keyframeIdentityKey = `${track.id}\u0000${keyframe.id}`;
 
                   return (
                     <span key={keyframe.id}>
                       <button
                         type="button"
                         className={`absolute top-1/2 z-30 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[2px] border-2 shadow-sm transition hover:scale-125 ${
-                          keyframeTimingEdit?.dragging
+                          keyframeTimingDragging
                             ? "border-cyan-700 bg-cyan-300 ring-2 ring-cyan-200"
-                            : selectedKeyframe
+                            : primaryKeyframe
+                              ? clip.status === "protected"
+                                ? "border-amber-700 bg-amber-300 ring-2 ring-amber-200"
+                                : "border-violet-700 bg-violet-300 ring-2 ring-violet-200"
+                              : selectedKeyframe
                               ? clip.status === "protected"
                                 ? "border-amber-700 bg-amber-300"
                                 : "border-violet-700 bg-violet-300"
@@ -1540,7 +1765,23 @@ function AnimationTimelineClipHierarchyRows({
                                 )
                             : undefined
                         }
-                        onClick={() => selectKeyframe(track.id, keyframe.id)}
+                        onClick={(event) => {
+                          event.stopPropagation();
+
+                          if (
+                            suppressKeyframeClickRef.current ===
+                            keyframeIdentityKey
+                          ) {
+                            suppressKeyframeClickRef.current = null;
+                            return;
+                          }
+
+                          selectKeyframe(
+                            track.id,
+                            keyframe.id,
+                            multiSelectMode || event.ctrlKey || event.metaKey,
+                          );
+                        }}
                         title={`${track.property} · Keyframe ${keyframe.id} · ${formatRulerTime(
                           keyframe.localTimeMs,
                         )}${
@@ -1554,33 +1795,31 @@ function AnimationTimelineClipHierarchyRows({
                           keyframe.localTimeMs,
                         )} 关键帧`}
                       />
-                      {keyframeTimingEdit?.dragging ? (
+                      {keyframeTimingAnchor?.dragging &&
+                      candidateLocalTimeMs !== undefined &&
+                      candidateOffset !== undefined ? (
                         <>
-                          {keyframeTimingEdit.snap ? (
+                          {keyframeTimingAnchor.snap ? (
                             <span
                               className="pointer-events-none absolute bottom-0 top-0 z-20 w-px -translate-x-1/2 bg-cyan-400"
                               style={{
-                                left:
-                                  keyframeTimingEdit.candidateLocalTimeMs *
-                                  pixelsPerMs,
+                                left: candidateLocalTimeMs * pixelsPerMs,
                               }}
                             />
                           ) : null}
                           <span
                             className="pointer-events-none absolute top-0 z-50 -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-md bg-slate-900 px-2 py-1 font-mono text-[9px] font-bold text-white shadow-lg"
                             style={{
-                              left:
-                                keyframeTimingEdit.candidateLocalTimeMs *
-                                pixelsPerMs,
+                              left: candidateLocalTimeMs * pixelsPerMs,
                             }}
                           >
-                            {formatRulerTime(
-                              keyframeTimingEdit.candidateLocalTimeMs,
-                            )}
-                            {` · offset ${keyframeTimingEdit.candidateOffset.toFixed(
-                              3,
-                            )}`}
-                            {keyframeTimingEdit.snap ? " · SNAP" : ""}
+                            {formatRulerTime(candidateLocalTimeMs)}
+                            {` · offset ${candidateOffset.toFixed(3)}`}
+                            {keyframeTimingAnchor.kind ===
+                            "keyframe-group-offset"
+                              ? ` · ${keyframeTimingAnchor.keyframes.length} 帧`
+                              : ""}
+                            {keyframeTimingAnchor.snap ? " · SNAP" : ""}
                           </span>
                         </>
                       ) : null}
@@ -1604,6 +1843,7 @@ function AnimationTimelineHierarchyRow({
   majorTicks,
   pixelsPerMs,
   rowClassName,
+  onEmptyTimelineClick,
 }: {
   rowRef?: (node: HTMLDivElement | null) => void;
   label: ReactNode;
@@ -1613,7 +1853,96 @@ function AnimationTimelineHierarchyRow({
   majorTicks: number[];
   pixelsPerMs: number;
   rowClassName: string;
+  onEmptyTimelineClick?: () => void;
 }) {
+  function handleEmptyTimelinePointerDown(
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) {
+    if (
+      !onEmptyTimelineClick ||
+      event.button !== 0 ||
+      !event.isPrimary ||
+      event.target !== event.currentTarget ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return;
+    }
+
+    const background = event.currentTarget;
+    const backgroundRect = background.getBoundingClientRect();
+    const sourceClientX = event.clientX;
+    const sourceClientY = event.clientY;
+    const pointerId = event.pointerId;
+    let movementExceededThreshold = false;
+
+    const isPlayheadHit = (clientX: number) =>
+      Math.abs(clientX - backgroundRect.left - playheadX) <=
+      ANIMATION_TIMELINE_PLAYHEAD_HIT_RADIUS_PX;
+
+    if (isPlayheadHit(sourceClientX)) {
+      return;
+    }
+
+    const cleanup = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerCancel);
+    };
+    const handlePointerMove = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId !== pointerId) {
+        return;
+      }
+      if (
+        Math.hypot(
+          pointerEvent.clientX - sourceClientX,
+          pointerEvent.clientY - sourceClientY,
+        ) >= ANIMATION_TIMELINE_TIMING_DRAG_THRESHOLD_PX
+      ) {
+        movementExceededThreshold = true;
+      }
+    };
+    const handlePointerUp = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId !== pointerId) {
+        return;
+      }
+      cleanup();
+      const finalMovementExceededThreshold =
+        movementExceededThreshold ||
+        Math.hypot(
+          pointerEvent.clientX - sourceClientX,
+          pointerEvent.clientY - sourceClientY,
+        ) >= ANIMATION_TIMELINE_TIMING_DRAG_THRESHOLD_PX;
+
+      if (
+        shouldClearAnimationTimelineKeyframeSelectionFromBackgroundClick({
+          pointerDownOnBackground: true,
+          pointerUpOnBackground: pointerEvent.target === background,
+          movementExceededThreshold: finalMovementExceededThreshold,
+          modified:
+            pointerEvent.ctrlKey ||
+            pointerEvent.metaKey ||
+            pointerEvent.shiftKey ||
+            pointerEvent.altKey,
+          playheadHit: isPlayheadHit(pointerEvent.clientX),
+        })
+      ) {
+        onEmptyTimelineClick();
+      }
+    };
+    const handlePointerCancel = (pointerEvent: PointerEvent) => {
+      if (pointerEvent.pointerId === pointerId) {
+        cleanup();
+      }
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerCancel);
+  }
+
   return (
     <div
       ref={rowRef}
@@ -1625,7 +1954,10 @@ function AnimationTimelineHierarchyRow({
       <div className="sticky left-0 z-50 h-9 min-w-0 border-r border-slate-200 bg-slate-50 shadow-[1px_0_0_rgba(15,23,42,0.06)]">
         {label}
       </div>
-      <div className={`relative h-9 overflow-hidden ${rowClassName}`}>
+      <div
+        className={`relative h-9 overflow-hidden ${rowClassName}`}
+        onPointerDown={handleEmptyTimelinePointerDown}
+      >
         {majorTicks.map((timeMs) => (
           <div
             key={`guide-${timeMs}`}

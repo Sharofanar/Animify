@@ -4759,6 +4759,12 @@ function App() {
     setAnimationTimelineSelection(selection);
   }
 
+  function handleClearAnimationTimelineKeyframeSelection() {
+    setAnimationTimelineSelection((currentSelection) =>
+      currentSelection?.kind === "keyframe" ? null : currentSelection,
+    );
+  }
+
   function handleSelectAnimationTimelineSequence(sequenceId: string) {
     setActiveAnimationSequenceId(sequenceId);
   }
@@ -5589,6 +5595,9 @@ function App() {
                   onSelectClip={handleFocusTimelineClip}
                   onSelectTrack={handleSelectAnimationTimelineDescendant}
                   onSelectKeyframe={handleSelectAnimationTimelineDescendant}
+                  onClearKeyframeSelection={
+                    handleClearAnimationTimelineKeyframeSelection
+                  }
                   onOpenClipDetails={handleOpenAnimationClipDetails}
                   timingEditSession={
                     activeAnimationTimelineTimingEditSession ?? undefined
@@ -5665,6 +5674,7 @@ function App() {
         scene={activeSlide.animationScene}
         elements={selectedElements}
         activeAnimationContext={effectiveActiveAnimationContext ?? undefined}
+        timelineSelection={resolvedAnimationTimelineSelection ?? undefined}
         onSelectClip={handleSelectAnimationClipFromWorkspace}
         onClose={() => setAnimationPanelOpen(false)}
         onReplayAnimation={handleReplayCurrentSlideAnimation}

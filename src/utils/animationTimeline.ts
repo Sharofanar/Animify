@@ -224,9 +224,20 @@ export type AnimationTimelineSelection =
       sequenceGroupId: string;
       sequenceId?: string;
       clipId: string;
-      trackId: string;
-      keyframeId: string;
+      primary: {
+        trackId: string;
+        keyframeId: string;
+      };
+      selectedKeyframes: Array<{
+        trackId: string;
+        keyframeId: string;
+      }>;
     };
+
+export type AnimationTimelineKeyframeSelection = Extract<
+  AnimationTimelineSelection,
+  { kind: "keyframe" }
+>;
 
 /**
  * External navigation intent stays separate from selection and playback.
@@ -356,6 +367,144 @@ export function getAnimationTimelineSelectionForClip(
   return clip ? getAnimationTimelineClipSelection(clip) : null;
 }
 
+function getAnimationTimelineKeyframeIdentityKey(
+  identity: AnimationTimelineKeyframeSelection["primary"],
+) {
+  return `${identity.trackId}\u0000${identity.keyframeId}`;
+}
+
+function getOrderedAnimationTimelineKeyframeIdentities(
+  clip: AnimationTimelineClipEntry,
+  identityKeys: ReadonlySet<string>,
+) {
+  return clip.tracks.flatMap((track) =>
+    track.keyframes.flatMap((keyframe) => {
+      const identity = { trackId: track.id, keyframeId: keyframe.id };
+
+      return identityKeys.has(getAnimationTimelineKeyframeIdentityKey(identity))
+        ? [identity]
+        : [];
+    }),
+  );
+}
+
+function canJoinAnimationTimelineKeyframeMultiSelection(
+  clip: AnimationTimelineClipEntry,
+  trackId: string,
+  keyframeId: string,
+) {
+  const keyframe = clip.tracks
+    .find((track) => track.id === trackId)
+    ?.keyframes.find((entry) => entry.id === keyframeId);
+
+  return (
+    clip.status === "normal" &&
+    clip.liveForElements &&
+    clip.sequenceId !== undefined &&
+    clip.ownerSequenceIds.length === 1 &&
+    clip.ownerSequenceIds[0] === clip.sequenceId &&
+    keyframe?.timingEditable === true
+  );
+}
+
+/**
+ * Derive replace/toggle Keyframe selection from the one Timeline selection
+ * source. View-model order owns deterministic member and primary fallback order.
+ */
+export function getAnimationTimelineKeyframeSelection(
+  clip: AnimationTimelineClipEntry,
+  requestedSelection: AnimationTimelineSelection | null | undefined,
+  identity: AnimationTimelineKeyframeSelection["primary"],
+  toggle: boolean,
+): AnimationTimelineSelection {
+  const context = {
+    sequenceGroupId: clip.sequenceGroupId,
+    sequenceId: clip.sequenceId,
+    clipId: clip.id,
+  };
+  const targetExists = clip.tracks
+    .find((track) => track.id === identity.trackId)
+    ?.keyframes.some((keyframe) => keyframe.id === identity.keyframeId);
+
+  if (!targetExists) {
+    return { kind: "clip", ...context };
+  }
+
+  const singleton: AnimationTimelineKeyframeSelection = {
+    kind: "keyframe",
+    ...context,
+    primary: identity,
+    selectedKeyframes: [identity],
+  };
+
+  if (
+    !toggle ||
+    requestedSelection?.kind !== "keyframe" ||
+    requestedSelection.clipId !== clip.id
+  ) {
+    return singleton;
+  }
+
+  const targetCanJoin = canJoinAnimationTimelineKeyframeMultiSelection(
+    clip,
+    identity.trackId,
+    identity.keyframeId,
+  );
+  const currentCanJoin = requestedSelection.selectedKeyframes.every(
+    (selectedKeyframe) =>
+      canJoinAnimationTimelineKeyframeMultiSelection(
+        clip,
+        selectedKeyframe.trackId,
+        selectedKeyframe.keyframeId,
+      ),
+  );
+
+  if (!targetCanJoin || !currentCanJoin) {
+    return requestedSelection;
+  }
+
+  const targetKey = getAnimationTimelineKeyframeIdentityKey(identity);
+  const selectedIdentityKeys = new Set(
+    requestedSelection.selectedKeyframes.map(
+      getAnimationTimelineKeyframeIdentityKey,
+    ),
+  );
+  const removing = selectedIdentityKeys.delete(targetKey);
+
+  if (!removing) {
+    selectedIdentityKeys.add(targetKey);
+  }
+
+  const selectedKeyframes = getOrderedAnimationTimelineKeyframeIdentities(
+    clip,
+    selectedIdentityKeys,
+  );
+
+  if (selectedKeyframes.length === 0) {
+    return {
+      kind: "track",
+      ...context,
+      trackId: identity.trackId,
+    };
+  }
+
+  const requestedPrimaryKey = getAnimationTimelineKeyframeIdentityKey(
+    requestedSelection.primary,
+  );
+  const primary = !removing
+    ? identity
+    : selectedIdentityKeys.has(requestedPrimaryKey)
+      ? requestedSelection.primary
+      : selectedKeyframes[0];
+
+  return {
+    kind: "keyframe",
+    ...context,
+    primary,
+    selectedKeyframes,
+  };
+}
+
 /**
  * Reconcile transient Timeline selection against the latest pure read model.
  *
@@ -409,43 +558,79 @@ export function reconcileAnimationTimelineSelection(
       : { kind: "clip", ...currentContext };
   }
 
-  const track = clip.tracks.find(
-    (entry) => entry.id === requestedSelection.trackId,
-  );
-
-  if (!track) {
-    return { kind: "clip", ...currentContext };
-  }
-
-  const trackSelection = {
-    kind: "track" as const,
-    ...currentContext,
-    trackId: track.id,
-  };
-
   if (requestedSelection.kind === "track") {
+    const track = clip.tracks.find(
+      (entry) => entry.id === requestedSelection.trackId,
+    );
+
+    if (!track) {
+      return { kind: "clip", ...currentContext };
+    }
+
+    const trackSelection = {
+      kind: "track" as const,
+      ...currentContext,
+      trackId: track.id,
+    };
+
     return requestedSelection.sequenceGroupId === currentContext.sequenceGroupId &&
       requestedSelection.sequenceId === currentContext.sequenceId
       ? requestedSelection
       : trackSelection;
   }
 
-  const keyframe = track.keyframes.find(
-    (entry) => entry.id === requestedSelection.keyframeId,
+  const requestedIdentityKeys = new Set(
+    requestedSelection.selectedKeyframes.map(
+      getAnimationTimelineKeyframeIdentityKey,
+    ),
+  );
+  const selectedKeyframes = getOrderedAnimationTimelineKeyframeIdentities(
+    clip,
+    requestedIdentityKeys,
   );
 
-  if (!keyframe) {
-    return trackSelection;
+  if (selectedKeyframes.length === 0) {
+    const primaryTrack = clip.tracks.find(
+      (entry) => entry.id === requestedSelection.primary.trackId,
+    );
+
+    return primaryTrack
+      ? {
+          kind: "track",
+          ...currentContext,
+          trackId: primaryTrack.id,
+        }
+      : { kind: "clip", ...currentContext };
   }
 
-  return requestedSelection.sequenceGroupId === currentContext.sequenceGroupId &&
-    requestedSelection.sequenceId === currentContext.sequenceId
+  const primaryKey = getAnimationTimelineKeyframeIdentityKey(
+    requestedSelection.primary,
+  );
+  const primary = requestedIdentityKeys.has(primaryKey)
+    ? selectedKeyframes.find(
+        (identity) =>
+          getAnimationTimelineKeyframeIdentityKey(identity) === primaryKey,
+      ) ?? selectedKeyframes[0]
+    : selectedKeyframes[0];
+  const selectionAlreadyCanonical =
+    requestedSelection.sequenceGroupId === currentContext.sequenceGroupId &&
+    requestedSelection.sequenceId === currentContext.sequenceId &&
+    requestedSelection.primary.trackId === primary.trackId &&
+    requestedSelection.primary.keyframeId === primary.keyframeId &&
+    requestedSelection.selectedKeyframes.length === selectedKeyframes.length &&
+    requestedSelection.selectedKeyframes.every(
+      (identity, index) =>
+        identity.trackId === selectedKeyframes[index].trackId &&
+        identity.keyframeId === selectedKeyframes[index].keyframeId,
+    );
+
+  return selectionAlreadyCanonical
     ? requestedSelection
     : {
         kind: "keyframe",
         ...currentContext,
-        trackId: track.id,
-        keyframeId: keyframe.id,
+        primary,
+        selectedKeyframes,
       };
 }
 

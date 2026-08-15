@@ -29,6 +29,10 @@ import {
   type UpdateAnimationKeyframeValueCommand,
 } from "../../utils/animationCommands";
 import { animationPresets } from "../../utils/animationPresets";
+import type {
+  AnimationTimelineKeyframeSelection,
+  AnimationTimelineSelection,
+} from "../../utils/animationTimeline";
 import {
   canAddAnimationKeyframe,
   canDeleteAnimationKeyframe,
@@ -78,6 +82,7 @@ type AnimationTrackInspectorProps = {
   elements: SlideElement[];
   requestedClipId?: string;
   requestedClipRequestId?: number;
+  timelineSelection?: AnimationTimelineSelection;
   onSelectClip?: (elementId: string, clipId: string) => void;
   onAddClip?: (command: AddAnimationClipCommand) => void;
   onDuplicateClip?: (command: DuplicateAnimationClipCommand) => void;
@@ -138,6 +143,7 @@ export function AnimationTrackInspector({
   elements,
   requestedClipId,
   requestedClipRequestId,
+  timelineSelection,
   onSelectClip,
   onAddClip,
   onDuplicateClip,
@@ -390,6 +396,13 @@ export function AnimationTrackInspector({
                           : groupIndex === 0 && clipIndex === 0
                       }
                       active={item.clip.id === resolvedActiveClipId}
+                      keyframeSelection={
+                        timelineSelection?.kind === "keyframe" &&
+                        timelineSelection.clipId === item.clip.id &&
+                        timelineSelection.selectedKeyframes.length > 0
+                          ? timelineSelection
+                          : undefined
+                      }
                       focusRequestId={
                         requested ? requestedClipRequestId : undefined
                       }
@@ -444,6 +457,7 @@ function AnimationClipCard({
   item,
   defaultOpen,
   active,
+  keyframeSelection,
   focusRequestId,
   onActivate,
   onDuplicateClip,
@@ -463,6 +477,7 @@ function AnimationClipCard({
   item: VisibleClip;
   defaultOpen: boolean;
   active: boolean;
+  keyframeSelection?: AnimationTimelineKeyframeSelection;
   focusRequestId?: number;
   onActivate: () => void;
   onDuplicateClip?: (command: DuplicateAnimationClipCommand) => void;
@@ -512,6 +527,8 @@ function AnimationClipCard({
       : editableTriggerType === "click" && sequenceContext
         ? `step:${sequenceContext.sequenceId}`
         : "unsupported";
+  const multiSelectedKeyframeCount =
+    keyframeSelection?.selectedKeyframes.length ?? 0;
 
   /**
    * Scrolling is a DOM synchronization side effect, so it does not duplicate
@@ -863,12 +880,20 @@ function AnimationClipCard({
           ) : null}
 
           <div className="mt-3 space-y-3">
+            {multiSelectedKeyframeCount > 1 ? (
+              <p className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-black text-violet-700">
+                已选择 {multiSelectedKeyframeCount} 个关键帧；单帧位置、值、缓动与删除编辑暂时锁定。
+              </p>
+            ) : null}
+
             {clip.tracks.length > 0 ? (
               clip.tracks.map((track) => (
                 <AnimationTrackCard
                   key={track.id}
                   clipId={clip.id}
                   track={track}
+                  keyframeEditingDisabled={multiSelectedKeyframeCount > 1}
+                  keyframeSelection={keyframeSelection}
                   onUpdateKeyframeValue={onUpdateKeyframeValue}
                   onUpdateKeyframeEasing={onUpdateKeyframeEasing}
                   onUpdateKeyframeOffset={onUpdateKeyframeOffset}
@@ -1000,6 +1025,8 @@ function ClipNumberInput({
 function AnimationTrackCard({
   clipId,
   track,
+  keyframeEditingDisabled,
+  keyframeSelection,
   onUpdateKeyframeValue,
   onUpdateKeyframeEasing,
   onUpdateKeyframeOffset,
@@ -1010,6 +1037,8 @@ function AnimationTrackCard({
 }: {
   clipId: string;
   track: AnimationTrack;
+  keyframeEditingDisabled: boolean;
+  keyframeSelection?: AnimationTimelineKeyframeSelection;
   onUpdateKeyframeValue?: (
     command: UpdateAnimationKeyframeValueCommand,
     options?: InspectorUpdateOptions,
@@ -1093,11 +1122,26 @@ function AnimationTrackCard({
             sortedKeyframes,
             keyframe.id,
           );
+          const keyframeSelected = keyframeSelection?.selectedKeyframes.some(
+            (identity) =>
+              identity.trackId === track.id &&
+              identity.keyframeId === keyframe.id,
+          );
+          const keyframePrimary =
+            keyframeSelected &&
+            keyframeSelection?.primary.trackId === track.id &&
+            keyframeSelection.primary.keyframeId === keyframe.id;
 
           return (
             <div
               key={keyframe.id}
-              className="grid grid-cols-[78px_minmax(0,1fr)] gap-2 rounded-lg bg-white px-2.5 py-2 text-[11px]"
+              className={`grid grid-cols-[78px_minmax(0,1fr)] gap-2 rounded-lg px-2.5 py-2 text-[11px] ${
+                keyframePrimary
+                  ? "bg-violet-100 ring-2 ring-violet-300"
+                  : keyframeSelected
+                    ? "bg-violet-50 ring-1 ring-violet-200"
+                    : "bg-white"
+              }`}
             >
               <KeyframeOffsetInput
                 value={keyframe.offset}
@@ -1108,7 +1152,11 @@ function AnimationTrackCard({
                 clipId={clipId}
                 trackId={track.id}
                 keyframeId={keyframe.id}
-                onUpdateKeyframeOffset={onUpdateKeyframeOffset}
+                onUpdateKeyframeOffset={
+                  keyframeEditingDisabled
+                    ? undefined
+                    : onUpdateKeyframeOffset
+                }
                 onBeginChange={onBeginChange}
                 onFinishChange={onFinishChange}
               />
@@ -1123,7 +1171,11 @@ function AnimationTrackCard({
                         clipId={clipId}
                         trackId={track.id}
                         keyframeId={keyframe.id}
-                        onUpdateKeyframeValue={onUpdateKeyframeValue}
+                        onUpdateKeyframeValue={
+                          keyframeEditingDisabled
+                            ? undefined
+                            : onUpdateKeyframeValue
+                        }
                         onBeginChange={onBeginChange}
                         onFinishChange={onFinishChange}
                       />
@@ -1137,7 +1189,11 @@ function AnimationTrackCard({
                   <button
                     type="button"
                     className="shrink-0 rounded-lg bg-rose-50 px-2 py-1 text-[10px] font-black text-rose-500 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-300"
-                    disabled={!onDeleteKeyframe || !canDeleteKeyframe}
+                    disabled={
+                      keyframeEditingDisabled ||
+                      !onDeleteKeyframe ||
+                      !canDeleteKeyframe
+                    }
                     title={
                       canDeleteKeyframe
                         ? "删除此关键帧"
@@ -1145,7 +1201,9 @@ function AnimationTrackCard({
                     }
                     aria-label={`删除 ${formatOffset(keyframe.offset)} 关键帧`}
                     onClick={() =>
-                      onDeleteKeyframe?.({
+                      (keyframeEditingDisabled
+                        ? undefined
+                        : onDeleteKeyframe)?.({
                         clipId,
                         trackId: track.id,
                         keyframeId: keyframe.id,
@@ -1163,7 +1221,11 @@ function AnimationTrackCard({
                     clipId={clipId}
                     trackId={track.id}
                     keyframeId={keyframe.id}
-                    onUpdateKeyframeEasing={onUpdateKeyframeEasing}
+                    onUpdateKeyframeEasing={
+                      keyframeEditingDisabled
+                        ? undefined
+                        : onUpdateKeyframeEasing
+                    }
                     onBeginChange={onBeginChange}
                     onFinishChange={onFinishChange}
                   />

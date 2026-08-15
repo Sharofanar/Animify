@@ -5,6 +5,7 @@ import {
   useState,
   type Dispatch,
   type ReactNode,
+  type RefObject,
   type PointerEvent as ReactPointerEvent,
   type SetStateAction,
 } from "react";
@@ -33,6 +34,12 @@ import {
   type AnimationTimelineTimingEditSession,
   type BeginAnimationTimelineTimingEditRequest,
 } from "../../utils/animationTimelineTiming";
+import {
+  useAnimationTimelineBoxSelection,
+  type AnimationTimelineBoxBackgroundRequest,
+  type AnimationTimelineBoxMarkerRegistration,
+  type AnimationTimelineBoxSelectionPreview,
+} from "./useAnimationTimelineBoxSelection";
 
 type AnimationTimelineProps = {
   viewModel: AnimationTimelineViewModel;
@@ -109,28 +116,6 @@ type AnimationTimelineTimingPointerRequest =
 const LABEL_COLUMN_WIDTH = 168;
 const MIN_CLIP_VISUAL_WIDTH_PX = 12;
 const ANIMATION_TIMELINE_PLAYHEAD_HIT_RADIUS_PX = 6;
-
-function shouldClearAnimationTimelineKeyframeSelectionFromBackgroundClick({
-  pointerDownOnBackground,
-  pointerUpOnBackground,
-  movementExceededThreshold,
-  modified,
-  playheadHit,
-}: {
-  pointerDownOnBackground: boolean;
-  pointerUpOnBackground: boolean;
-  movementExceededThreshold: boolean;
-  modified: boolean;
-  playheadHit: boolean;
-}) {
-  return (
-    pointerDownOnBackground &&
-    pointerUpOnBackground &&
-    !movementExceededThreshold &&
-    !modified &&
-    !playheadHit
-  );
-}
 
 type AnimationTimelineCollapseState = {
   contextKey: string;
@@ -240,6 +225,55 @@ function formatCurrentTime(timeMs: number) {
     2,
     "0",
   )}.${String(milliseconds).padStart(3, "0")}`;
+}
+
+type AnimationTimelineBoxSelectionBoundaryProps = {
+  contextKey: string;
+  contextVersion: AnimationTimelineViewModel;
+  selection?: AnimationTimelineSelection;
+  scrollViewportRef: RefObject<HTMLDivElement | null>;
+  onEmptyTimelineClick: () => void;
+  onSelectClip: (elementId: string, clipId: string) => void;
+  onSelectKeyframe: AnimationTimelineProps["onSelectKeyframe"];
+  children: (
+    boxSelection: ReturnType<typeof useAnimationTimelineBoxSelection>,
+  ) => ReactNode;
+};
+
+/**
+ * Keep the Box gesture's hook signature isolated from the long-lived Timeline
+ * component so Fast Refresh never has to splice new hooks into that fiber.
+ */
+function AnimationTimelineBoxSelectionBoundary({
+  contextKey,
+  contextVersion,
+  selection,
+  scrollViewportRef,
+  onEmptyTimelineClick,
+  onSelectClip,
+  onSelectKeyframe,
+  children,
+}: AnimationTimelineBoxSelectionBoundaryProps) {
+  const boxSelection = useAnimationTimelineBoxSelection({
+    contextKey,
+    contextVersion,
+    selection,
+    scrollViewportRef,
+    dragThresholdPx: ANIMATION_TIMELINE_TIMING_DRAG_THRESHOLD_PX,
+    viewportLeftInsetPx: LABEL_COLUMN_WIDTH,
+    viewportTopInsetPx: 36,
+    onEmptyTimelineClick,
+    onCommitBoxSelection: (scope, nextSelection) => {
+      if (nextSelection) {
+        onSelectKeyframe(scope.selectionElementId, nextSelection);
+      } else {
+        onSelectClip(scope.selectionElementId, scope.clipId);
+        onEmptyTimelineClick();
+      }
+    },
+  });
+
+  return children(boxSelection);
 }
 
 /**
@@ -426,6 +460,14 @@ export function AnimationTimeline({
     suppressedRevealRequestKey !== revealRequestKey
       ? revealSequenceNode?.id
       : undefined;
+  const boxSelectionContextKey = [
+    hierarchyContextKey,
+    activeSequenceId ?? "",
+    activeAnimationContext?.clipId ?? "",
+    [...collapsedSequenceIds].sort().join(","),
+    [...expandedClipIds].sort().join(","),
+    pixelsPerMs,
+  ].join("\u0000");
 
   /**
    * Reveal external Clip navigation without touching selection or local time.
@@ -633,7 +675,21 @@ export function AnimationTimeline({
   }
 
   return (
-    <section
+    <AnimationTimelineBoxSelectionBoundary
+      contextKey={boxSelectionContextKey}
+      contextVersion={viewModel}
+      selection={selection}
+      scrollViewportRef={scrollViewportRef}
+      onEmptyTimelineClick={onClearKeyframeSelection}
+      onSelectClip={onSelectClip}
+      onSelectKeyframe={onSelectKeyframe}
+    >
+      {({
+        preview: boxSelectionPreview,
+        registerMarker: registerBoxSelectionMarker,
+        handleBackgroundPointerDown: handleTimelineBackgroundPointerDown,
+      }) => (
+        <section
       className="mt-3 flex shrink-0 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white p-4 shadow-sm"
       style={{
         height: 260,
@@ -791,7 +847,9 @@ export function AnimationTimeline({
 
       <div
         ref={scrollViewportRef}
-        className="mt-3 min-h-0 flex-1 overflow-auto rounded-2xl border border-slate-200 bg-slate-50"
+        className={`mt-3 min-h-0 flex-1 overflow-auto rounded-2xl border border-slate-200 bg-slate-50 ${
+          boxSelectionPreview ? "select-none" : ""
+        }`}
       >
         <div
           className="relative"
@@ -800,6 +858,23 @@ export function AnimationTimeline({
             minWidth: "100%",
           }}
         >
+          {boxSelectionPreview ? (
+            <div
+              className="pointer-events-none absolute z-20 border border-violet-500 bg-violet-300/20 shadow-[0_0_0_1px_rgba(255,255,255,0.65)]"
+              style={{
+                left: boxSelectionPreview.overlayRect.left,
+                top: boxSelectionPreview.overlayRect.top,
+                width:
+                  boxSelectionPreview.overlayRect.right -
+                  boxSelectionPreview.overlayRect.left,
+                height:
+                  boxSelectionPreview.overlayRect.bottom -
+                  boxSelectionPreview.overlayRect.top,
+              }}
+              aria-hidden="true"
+            />
+          ) : null}
+
           {/* Time ruler */}
           <div
             className="sticky top-0 z-60 grid border-b border-slate-200 bg-white shadow-[0_1px_0_rgba(15,23,42,0.06)]"
@@ -977,7 +1052,13 @@ export function AnimationTimeline({
                         onSelectClip={onSelectClip}
                         onSelectTrack={onSelectTrack}
                         onSelectKeyframe={onSelectKeyframe}
-                        onClearKeyframeSelection={onClearKeyframeSelection}
+                        boxSelectionPreview={boxSelectionPreview}
+                        registerBoxSelectionMarker={
+                          registerBoxSelectionMarker
+                        }
+                        onTimelineBackgroundPointerDown={
+                          handleTimelineBackgroundPointerDown
+                        }
                         onOpenClipDetails={onOpenClipDetails}
                         timingEditSession={timingEditSession}
                         timingEditingDisabled={timingEditingDisabled}
@@ -1017,7 +1098,9 @@ export function AnimationTimeline({
           ) : null}
         </div>
       </div>
-    </section>
+        </section>
+      )}
+    </AnimationTimelineBoxSelectionBoundary>
   );
 }
 
@@ -1038,7 +1121,9 @@ function AnimationTimelineClipHierarchyRows({
   onSelectClip,
   onSelectTrack,
   onSelectKeyframe,
-  onClearKeyframeSelection,
+  boxSelectionPreview,
+  registerBoxSelectionMarker,
+  onTimelineBackgroundPointerDown,
   onOpenClipDetails,
   timingEditSession,
   timingEditingDisabled,
@@ -1073,7 +1158,14 @@ function AnimationTimelineClipHierarchyRows({
     elementId: string,
     selection: Extract<AnimationTimelineSelection, { kind: "keyframe" }>,
   ) => void;
-  onClearKeyframeSelection: () => void;
+  boxSelectionPreview: AnimationTimelineBoxSelectionPreview | null;
+  registerBoxSelectionMarker: (
+    registration: AnimationTimelineBoxMarkerRegistration,
+  ) => void;
+  onTimelineBackgroundPointerDown: (
+    event: ReactPointerEvent<HTMLDivElement>,
+    request: AnimationTimelineBoxBackgroundRequest,
+  ) => void;
   onOpenClipDetails: (elementId: string, clipId: string) => void;
   timingEditSession?: AnimationTimelineTimingEditSession;
   timingEditingDisabled: boolean;
@@ -1126,6 +1218,18 @@ function AnimationTimelineClipHierarchyRows({
       : undefined;
   const durationEditActive =
     activeTimingEdit?.kind === "clip-duration" && activeTimingEdit.dragging;
+  const activeBoxSelectionPreview =
+    boxSelectionPreview?.scopeClipId === clip.id
+      ? boxSelectionPreview
+      : undefined;
+  const boxPreviewIdentityKeys = new Set(
+    activeBoxSelectionPreview?.selectedKeyframes.map(
+      (identity) => `${identity.trackId}\u0000${identity.keyframeId}`,
+    ),
+  );
+  const boxPreviewPrimaryKey = activeBoxSelectionPreview?.primary
+    ? `${activeBoxSelectionPreview.primary.trackId}\u0000${activeBoxSelectionPreview.primary.keyframeId}`
+    : undefined;
   const effectiveEndDiffersFromAuthoredEnd =
     clip.effectiveEndMs !== undefined &&
     Number.isFinite(clip.effectiveEndMs) &&
@@ -1518,10 +1622,14 @@ function AnimationTimelineClipHierarchyRows({
         rowClassName={
           clip.status === "protected" ? "bg-amber-50/40" : "bg-white"
         }
-        onEmptyTimelineClick={
-          selection?.kind === "keyframe"
-            ? onClearKeyframeSelection
-            : undefined
+        onTimelineBackgroundPointerDown={(event) =>
+          onTimelineBackgroundPointerDown(event, {
+            boxAllowed: false,
+            multiSelectMode,
+            playheadX,
+            playheadHitRadiusPx:
+              ANIMATION_TIMELINE_PLAYHEAD_HIT_RADIUS_PX,
+          })
         }
       >
         <button
@@ -1618,7 +1726,7 @@ function AnimationTimelineClipHierarchyRows({
       </AnimationTimelineHierarchyRow>
 
       {!collapsed
-        ? clip.tracks.map((track) => {
+        ? clip.tracks.map((track, trackOrder) => {
             const selectedTrack =
               selection?.clipId === clip.id &&
               selection.kind === "track" &&
@@ -1666,10 +1774,25 @@ function AnimationTimelineClipHierarchyRows({
                 rowClassName={
                   clip.status === "protected" ? "bg-amber-50/20" : "bg-white"
                 }
-                onEmptyTimelineClick={
-                  selection?.kind === "keyframe"
-                    ? onClearKeyframeSelection
-                    : undefined
+                onTimelineBackgroundPointerDown={(event) =>
+                  onTimelineBackgroundPointerDown(event, {
+                    scope: selectionElementId
+                      ? {
+                          sequenceGroupId: group.id,
+                          sequenceId: clip.sequenceId,
+                          clipId: clip.id,
+                          selectionElementId,
+                        }
+                      : undefined,
+                    boxAllowed: directlyEditable && Boolean(selectionElementId),
+                    multiSelectMode,
+                    playheadX,
+                    playheadHitRadiusPx:
+                      ANIMATION_TIMELINE_PLAYHEAD_HIT_RADIUS_PX,
+                  })
+                }
+                boxSelectionTouchEnabled={
+                  multiSelectMode && directlyEditable
                 }
               >
                 <div
@@ -1680,7 +1803,7 @@ function AnimationTimelineClipHierarchyRows({
                   }`}
                   style={{ left: clipLeft, width: clipWidth }}
                 />
-                {track.keyframes.map((keyframe) => {
+                {track.keyframes.map((keyframe, keyframeOrder) => {
                   const selectedKeyframe =
                     selection?.kind === "keyframe" &&
                     selection.clipId === clip.id &&
@@ -1730,14 +1853,39 @@ function AnimationTimelineClipHierarchyRows({
                   const keyframeDirectlyEditable =
                     directlyEditable && keyframe.timingEditable;
                   const keyframeIdentityKey = `${track.id}\u0000${keyframe.id}`;
+                  const boxPreviewSelected =
+                    boxPreviewIdentityKeys.has(keyframeIdentityKey);
+                  const boxPreviewPrimary =
+                    boxPreviewSelected &&
+                    boxPreviewPrimaryKey === keyframeIdentityKey;
 
                   return (
                     <span key={keyframe.id}>
                       <button
+                        ref={(markerNode) =>
+                          registerBoxSelectionMarker({
+                            clipId: clip.id,
+                            sequenceId: clip.sequenceId,
+                            trackId: track.id,
+                            keyframeId: keyframe.id,
+                            trackOrder,
+                            keyframeOrder,
+                            editable: keyframeDirectlyEditable,
+                            node: markerNode,
+                          })
+                        }
                         type="button"
                         className={`absolute top-1/2 z-30 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rotate-45 rounded-[2px] border-2 shadow-sm transition hover:scale-125 ${
                           keyframeTimingDragging
                             ? "border-cyan-700 bg-cyan-300 ring-2 ring-cyan-200"
+                            : activeBoxSelectionPreview && boxPreviewPrimary
+                              ? "border-cyan-700 bg-cyan-300 ring-2 ring-cyan-200"
+                              : activeBoxSelectionPreview && boxPreviewSelected
+                                ? "border-cyan-600 bg-cyan-200 ring-1 ring-cyan-200"
+                                : activeBoxSelectionPreview
+                                  ? clip.status === "protected"
+                                    ? "border-amber-500 bg-white"
+                                    : "border-violet-500 bg-white"
                             : primaryKeyframe
                               ? clip.status === "protected"
                                 ? "border-amber-700 bg-amber-300 ring-2 ring-amber-200"
@@ -1843,7 +1991,8 @@ function AnimationTimelineHierarchyRow({
   majorTicks,
   pixelsPerMs,
   rowClassName,
-  onEmptyTimelineClick,
+  onTimelineBackgroundPointerDown,
+  boxSelectionTouchEnabled = false,
 }: {
   rowRef?: (node: HTMLDivElement | null) => void;
   label: ReactNode;
@@ -1853,96 +2002,11 @@ function AnimationTimelineHierarchyRow({
   majorTicks: number[];
   pixelsPerMs: number;
   rowClassName: string;
-  onEmptyTimelineClick?: () => void;
-}) {
-  function handleEmptyTimelinePointerDown(
+  onTimelineBackgroundPointerDown?: (
     event: ReactPointerEvent<HTMLDivElement>,
-  ) {
-    if (
-      !onEmptyTimelineClick ||
-      event.button !== 0 ||
-      !event.isPrimary ||
-      event.target !== event.currentTarget ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.shiftKey ||
-      event.altKey
-    ) {
-      return;
-    }
-
-    const background = event.currentTarget;
-    const backgroundRect = background.getBoundingClientRect();
-    const sourceClientX = event.clientX;
-    const sourceClientY = event.clientY;
-    const pointerId = event.pointerId;
-    let movementExceededThreshold = false;
-
-    const isPlayheadHit = (clientX: number) =>
-      Math.abs(clientX - backgroundRect.left - playheadX) <=
-      ANIMATION_TIMELINE_PLAYHEAD_HIT_RADIUS_PX;
-
-    if (isPlayheadHit(sourceClientX)) {
-      return;
-    }
-
-    const cleanup = () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-      window.removeEventListener("pointercancel", handlePointerCancel);
-    };
-    const handlePointerMove = (pointerEvent: PointerEvent) => {
-      if (pointerEvent.pointerId !== pointerId) {
-        return;
-      }
-      if (
-        Math.hypot(
-          pointerEvent.clientX - sourceClientX,
-          pointerEvent.clientY - sourceClientY,
-        ) >= ANIMATION_TIMELINE_TIMING_DRAG_THRESHOLD_PX
-      ) {
-        movementExceededThreshold = true;
-      }
-    };
-    const handlePointerUp = (pointerEvent: PointerEvent) => {
-      if (pointerEvent.pointerId !== pointerId) {
-        return;
-      }
-      cleanup();
-      const finalMovementExceededThreshold =
-        movementExceededThreshold ||
-        Math.hypot(
-          pointerEvent.clientX - sourceClientX,
-          pointerEvent.clientY - sourceClientY,
-        ) >= ANIMATION_TIMELINE_TIMING_DRAG_THRESHOLD_PX;
-
-      if (
-        shouldClearAnimationTimelineKeyframeSelectionFromBackgroundClick({
-          pointerDownOnBackground: true,
-          pointerUpOnBackground: pointerEvent.target === background,
-          movementExceededThreshold: finalMovementExceededThreshold,
-          modified:
-            pointerEvent.ctrlKey ||
-            pointerEvent.metaKey ||
-            pointerEvent.shiftKey ||
-            pointerEvent.altKey,
-          playheadHit: isPlayheadHit(pointerEvent.clientX),
-        })
-      ) {
-        onEmptyTimelineClick();
-      }
-    };
-    const handlePointerCancel = (pointerEvent: PointerEvent) => {
-      if (pointerEvent.pointerId === pointerId) {
-        cleanup();
-      }
-    };
-
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp);
-    window.addEventListener("pointercancel", handlePointerCancel);
-  }
-
+  ) => void;
+  boxSelectionTouchEnabled?: boolean;
+}) {
   return (
     <div
       ref={rowRef}
@@ -1955,8 +2019,10 @@ function AnimationTimelineHierarchyRow({
         {label}
       </div>
       <div
-        className={`relative h-9 overflow-hidden ${rowClassName}`}
-        onPointerDown={handleEmptyTimelinePointerDown}
+        className={`relative h-9 overflow-hidden ${rowClassName} ${
+          boxSelectionTouchEnabled ? "touch-none" : ""
+        }`}
+        onPointerDown={onTimelineBackgroundPointerDown}
       >
         {majorTicks.map((timeMs) => (
           <div

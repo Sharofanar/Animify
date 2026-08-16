@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TimelinePlaybackStatus } from "../types/editor";
+import {
+  normalizeAnimationTimelinePlaybackLoopRange,
+  wrapAnimationTimelineRegionTime,
+  type AnimationTimelinePlaybackLoopRange,
+} from "../utils/animationTimelineRegion";
 
 export type { TimelinePlaybackStatus } from "../types/editor";
 
@@ -20,6 +25,7 @@ type TimelinePlaybackAnchor = {
 type UseTimelinePlaybackControllerOptions = {
   contextKey: string;
   durationMs: number;
+  loopRange?: AnimationTimelinePlaybackLoopRange | null;
   onRangeComplete?: () => void;
 };
 
@@ -41,6 +47,7 @@ function clampTime(value: number, durationMs: number) {
 export function useTimelinePlaybackController({
   contextKey,
   durationMs,
+  loopRange,
   onRangeComplete,
 }: UseTimelinePlaybackControllerOptions) {
   const safeDurationMs = Number.isFinite(durationMs)
@@ -56,6 +63,13 @@ export function useTimelinePlaybackController({
   const animationFrameRef = useRef<number | null>(null);
 
   const playbackAnchorRef = useRef<TimelinePlaybackAnchor | null>(null);
+
+  const previousLoopRangeKeyRef = useRef<string | null>(null);
+
+  const normalizedLoopRange = normalizeAnimationTimelinePlaybackLoopRange(
+    loopRange,
+    safeDurationMs,
+  );
 
   const snapshotHasPlaybackRange =
     snapshot.rangeStartTimeMs !== undefined &&
@@ -103,6 +117,15 @@ export function useTimelinePlaybackController({
     playbackRangeEndTimeMs !== undefined &&
     playbackRangeEndTimeMs > playbackRangeStartTimeMs;
 
+  /** Isolated Clip preview owns its one-shot range while it is active. */
+  const activeLoopRange = hasPlaybackRange ? null : normalizedLoopRange;
+  const hasLoopRange = activeLoopRange !== null;
+  const activeLoopRangeKey = hasPlaybackRange
+    ? null
+    : activeLoopRange
+      ? `${activeLoopRange.startTimeMs}:${activeLoopRange.endTimeMs}`
+      : "";
+
   const currentTimelineLimitMs = Math.max(
     safeDurationMs,
     hasPlaybackRange ? playbackRangeEndTimeMs : 0,
@@ -139,8 +162,8 @@ export function useTimelinePlaybackController({
   /**
    * Seek immediately.
    *
-   * Seeking while playing keeps playback running from the new position.
-   * Seeking while stopped enters a paused inspection state.
+   * Loop-constrained seeking pauses so users may inspect outside the range.
+   * Otherwise seeking while playing keeps the existing playback state.
    */
   const seek = useCallback(
     (timeMs: number) => {
@@ -163,9 +186,10 @@ export function useTimelinePlaybackController({
       };
 
       setSnapshot((currentSnapshot) => {
-        const currentStatus =
-          currentSnapshot.contextKey === contextKey &&
-          currentSnapshot.status === "playing"
+        const currentStatus = hasLoopRange
+          ? "paused"
+          : currentSnapshot.contextKey === contextKey &&
+              currentSnapshot.status === "playing"
             ? "playing"
             : "paused";
 
@@ -176,7 +200,7 @@ export function useTimelinePlaybackController({
         };
       });
     },
-    [cancelAnimationFrame, contextKey, safeDurationMs],
+    [cancelAnimationFrame, contextKey, hasLoopRange, safeDurationMs],
   );
 
   /**
@@ -187,11 +211,15 @@ export function useTimelinePlaybackController({
   const play = useCallback(() => {
     const playbackStartTimeMs = hasPlaybackRange
       ? playbackRangeStartTimeMs
-      : 0;
+      : hasLoopRange
+        ? (activeLoopRange?.startTimeMs ?? 0)
+        : 0;
 
     const playbackEndTimeMs = hasPlaybackRange
       ? playbackRangeEndTimeMs
-      : safeDurationMs;
+      : hasLoopRange
+        ? (activeLoopRange?.endTimeMs ?? safeDurationMs)
+        : safeDurationMs;
 
     if (playbackEndTimeMs <= playbackStartTimeMs) {
       return;
@@ -226,6 +254,8 @@ export function useTimelinePlaybackController({
     cancelAnimationFrame,
     currentTimeMs,
     hasPlaybackRange,
+    hasLoopRange,
+    activeLoopRange,
     playbackRangeEndTimeMs,
     playbackRangeReturnTimeMs,
     playbackRangeStartTimeMs,
@@ -278,7 +308,7 @@ export function useTimelinePlaybackController({
     });
   }, [cancelAnimationFrame, contextKey]);
 
-  /** Explicit playback-context replay always starts from zero. */
+  /** Replay starts at the active normal-playback boundary, otherwise zero. */
   const replay = useCallback(() => {
     if (safeDurationMs <= 0) {
       stop();
@@ -287,17 +317,25 @@ export function useTimelinePlaybackController({
 
     cancelAnimationFrame();
 
+    const replayStartTimeMs = normalizedLoopRange?.startTimeMs ?? 0;
+
     playbackAnchorRef.current = {
       wallClockMs: performance.now(),
-      timelineTimeMs: 0,
+      timelineTimeMs: replayStartTimeMs,
     };
 
     setSnapshot({
       contextKey,
-      currentTimeMs: 0,
+      currentTimeMs: replayStartTimeMs,
       status: "playing",
     });
-  }, [cancelAnimationFrame, contextKey, safeDurationMs, stop]);
+  }, [
+    cancelAnimationFrame,
+    contextKey,
+    normalizedLoopRange,
+    safeDurationMs,
+    stop,
+  ]);
 
   /**
    * Start one isolated Clip preview on the shared context-local Timeline.
@@ -359,6 +397,45 @@ export function useTimelinePlaybackController({
   );
 
   /**
+   * Loop bounds are a playback constraint, not a new Slide/Sequence context.
+   * Re-anchor a running clock when the constraint changes so removing a Region
+   * cannot reveal accumulated, previously wrapped wall-clock time as a jump.
+   */
+  useEffect(() => {
+    const previousLoopRangeKey = previousLoopRangeKeyRef.current;
+
+    previousLoopRangeKeyRef.current = activeLoopRangeKey;
+
+    if (
+      previousLoopRangeKey === null ||
+      previousLoopRangeKey === activeLoopRangeKey ||
+      hasPlaybackRange ||
+      status !== "playing"
+    ) {
+      return;
+    }
+
+    const nextTimeMs =
+      activeLoopRange &&
+      (currentTimeMs < activeLoopRange.startTimeMs ||
+        currentTimeMs >= activeLoopRange.endTimeMs)
+        ? activeLoopRange.startTimeMs
+        : currentTimeMs;
+
+    playbackAnchorRef.current = {
+      wallClockMs: performance.now(),
+      timelineTimeMs: nextTimeMs,
+    };
+  }, [
+    activeLoopRange,
+    activeLoopRangeKey,
+    contextKey,
+    currentTimeMs,
+    hasPlaybackRange,
+    status,
+  ]);
+
+  /**
    * Advance the single shared Timeline clock.
    *
    * SlideCanvas never owns another playback timer in controlled editor mode.
@@ -366,7 +443,7 @@ export function useTimelinePlaybackController({
   useEffect(() => {
     const playbackEndTimeMs = hasPlaybackRange
       ? playbackRangeEndTimeMs
-      : safeDurationMs;
+      : activeLoopRange?.endTimeMs ?? safeDurationMs;
 
     if (status !== "playing" || playbackEndTimeMs <= 0) {
       return;
@@ -392,10 +469,31 @@ export function useTimelinePlaybackController({
         return;
       }
 
-      const nextTimeMs = clampTime(
-        anchor.timelineTimeMs + (now - anchor.wallClockMs),
-        playbackEndTimeMs,
-      );
+      const candidateTimeMs =
+        anchor.timelineTimeMs + (now - anchor.wallClockMs);
+
+      if (activeLoopRange) {
+        const nextTimeMs =
+          candidateTimeMs < activeLoopRange.startTimeMs
+            ? activeLoopRange.startTimeMs
+            : candidateTimeMs >= activeLoopRange.endTimeMs
+              ? wrapAnimationTimelineRegionTime(
+                  candidateTimeMs,
+                  activeLoopRange,
+                )
+              : candidateTimeMs;
+
+        setSnapshot({
+          contextKey,
+          currentTimeMs: nextTimeMs,
+          status: "playing",
+        });
+
+        animationFrameRef.current = window.requestAnimationFrame(updateFrame);
+        return;
+      }
+
+      const nextTimeMs = clampTime(candidateTimeMs, playbackEndTimeMs);
 
       const reachedEnd = nextTimeMs >= playbackEndTimeMs;
 
@@ -448,6 +546,7 @@ export function useTimelinePlaybackController({
       cancelAnimationFrame();
     };
   }, [
+    activeLoopRange,
     cancelAnimationFrame,
     currentTimeMs,
     hasPlaybackRange,

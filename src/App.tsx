@@ -31,6 +31,11 @@ import {
   type AnimationTimelineSelection,
 } from "./utils/animationTimeline";
 import {
+  getAnimationTimelinePlaybackLoopRange,
+  reconcileAnimationTimelineRegion,
+  type AnimationTimelineRegion,
+} from "./utils/animationTimelineRegion";
+import {
   animationTimelineTimingSessionsMatch,
   applyAnimationTimelineTimingDraftToSlide,
   canDirectEditAnimationTimelineClipDuration,
@@ -812,6 +817,10 @@ function App() {
     string | null
   >(null);
 
+  /** One transient Region bound to the current Slide + normal Sequence only. */
+  const [animationTimelineRegion, setAnimationTimelineRegion] =
+    useState<AnimationTimelineRegion | null>(null);
+
   /**
    * One editor-only descendant selection for the Timeline hierarchy.
    * Active Clip and Active Sequence remain owned by their existing App states.
@@ -1013,6 +1022,29 @@ function App() {
       ? Math.max(0, activeAnimationSequenceGroup.semanticDurationMs)
       : 0;
 
+  const animationTimelineRegionDisplayDurationMs =
+    animationTimelineViewModel.sequenceGroups.find(
+      (group) =>
+        group.status === "normal" &&
+        group.sequenceId === resolvedActiveAnimationSequenceId,
+    )?.semanticDurationMs ?? 0;
+
+  const reconciledAnimationTimelineRegion =
+    reconcileAnimationTimelineRegion(animationTimelineRegion, {
+      slideId: project.activeSlideId,
+      sequenceId: resolvedActiveAnimationSequenceId,
+      durationMs: animationPlaybackDurationMs,
+    });
+
+  const animationTimelineLoopRange = getAnimationTimelinePlaybackLoopRange(
+    reconciledAnimationTimelineRegion,
+    {
+      slideId: project.activeSlideId,
+      sequenceId: resolvedActiveAnimationSequenceId,
+      durationMs: animationPlaybackDurationMs,
+    },
+  );
+
   const animationPlaybackContextKey = JSON.stringify([
     project.activeSlideId,
     resolvedActiveAnimationSequenceId,
@@ -1025,6 +1057,10 @@ function App() {
    */
   if (activeAnimationSequenceId !== resolvedActiveAnimationSequenceId) {
     setActiveAnimationSequenceId(resolvedActiveAnimationSequenceId);
+  }
+
+  if (animationTimelineRegion !== reconciledAnimationTimelineRegion) {
+    setAnimationTimelineRegion(reconciledAnimationTimelineRegion);
   }
 
   if (animationTimelineSelection !== resolvedAnimationTimelineSelection) {
@@ -1065,6 +1101,7 @@ function App() {
   const timelinePlayback = useTimelinePlaybackController({
     contextKey: animationPlaybackContextKey,
     durationMs: animationPlaybackDurationMs,
+    loopRange: animationTimelineLoopRange,
     onRangeComplete: handleAnimationClipPreviewRangeComplete,
   });
 
@@ -4845,6 +4882,28 @@ function App() {
     });
   }
 
+  function handleChangeAnimationTimelineRegion(
+    nextRegion: AnimationTimelineRegion,
+  ) {
+    if (effectiveAnimationClipPreview) {
+      return;
+    }
+
+    setAnimationTimelineRegion(
+      reconcileAnimationTimelineRegion(nextRegion, {
+        slideId: project.activeSlideId,
+        sequenceId: resolvedActiveAnimationSequenceId,
+        durationMs: animationPlaybackDurationMs,
+      }),
+    );
+  }
+
+  function handleClearAnimationTimelineRegion() {
+    if (!effectiveAnimationClipPreview) {
+      setAnimationTimelineRegion(null);
+    }
+  }
+
   /**
    * Seek the shared editor Timeline.
    *
@@ -4868,7 +4927,7 @@ function App() {
     timelinePlayback.seek(timeMs);
   }
 
-  /** Replay the Active Sequence from local zero. */
+  /** Replay from the Region start when active, otherwise local zero. */
   function handleReplayCurrentSlideAnimation() {
     setMode("animation");
     setAnimationClipPreview(null);
@@ -5585,6 +5644,15 @@ function App() {
                     resolvedActiveAnimationSequenceId ?? undefined
                   }
                   playbackDurationMs={animationPlaybackDurationMs}
+                  region={reconciledAnimationTimelineRegion ?? undefined}
+                  regionDisplayDurationMs={
+                    animationTimelineRegionDisplayDurationMs
+                  }
+                  regionEditingDisabled={
+                    Boolean(effectiveAnimationClipPreview) ||
+                    Boolean(activeAnimationTimelineTimingEditSession)
+                  }
+                  regionInactive={Boolean(effectiveAnimationClipPreview)}
                   activeAnimationContext={
                     effectiveActiveAnimationContext ?? undefined
                   }
@@ -5619,6 +5687,11 @@ function App() {
                     handleCancelAnimationTimelineTimingEdit
                   }
                   onPausePlaybackForTimingEdit={
+                    handlePauseAnimationTimelineForTimingEdit
+                  }
+                  onChangeRegion={handleChangeAnimationTimelineRegion}
+                  onClearRegion={handleClearAnimationTimelineRegion}
+                  onPausePlaybackForRegionEdit={
                     handlePauseAnimationTimelineForTimingEdit
                   }
                   onTogglePlayback={handleToggleTimelinePlayback}

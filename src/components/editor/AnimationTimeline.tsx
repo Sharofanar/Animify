@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -35,6 +36,12 @@ import {
   type BeginAnimationTimelineTimingEditRequest,
 } from "../../utils/animationTimelineTiming";
 import {
+  getAnimationTimelineRegionCandidate,
+  getAnimationTimelineRegionHandleCandidate,
+  reconcileAnimationTimelineRegion,
+  type AnimationTimelineRegion,
+} from "../../utils/animationTimelineRegion";
+import {
   useAnimationTimelineBoxSelection,
   type AnimationTimelineBoxBackgroundRequest,
   type AnimationTimelineBoxMarkerRegistration,
@@ -54,6 +61,10 @@ type AnimationTimelineProps = {
 
   activeSequenceId?: string;
   playbackDurationMs: number;
+  region?: AnimationTimelineRegion;
+  regionDisplayDurationMs: number;
+  regionEditingDisabled?: boolean;
+  regionInactive?: boolean;
 
   activeAnimationContext?: ActiveAnimationContext;
   selection?: AnimationTimelineSelection;
@@ -95,6 +106,9 @@ type AnimationTimelineProps = {
     session: AnimationTimelineTimingEditSession,
   ) => void;
   onPausePlaybackForTimingEdit: () => void;
+  onChangeRegion: (region: AnimationTimelineRegion) => void;
+  onClearRegion: () => void;
+  onPausePlaybackForRegionEdit: () => void;
 
   onTogglePlayback: () => void;
   onToggleClipPreview: () => void;
@@ -116,6 +130,11 @@ type AnimationTimelineTimingPointerRequest =
 const LABEL_COLUMN_WIDTH = 168;
 const MIN_CLIP_VISUAL_WIDTH_PX = 12;
 const ANIMATION_TIMELINE_PLAYHEAD_HIT_RADIUS_PX = 6;
+const ANIMATION_TIMELINE_RULER_HEIGHT_PX = 36;
+const ANIMATION_TIMELINE_REGION_LANE_HEIGHT_PX = 20;
+const ANIMATION_TIMELINE_STICKY_HEADER_HEIGHT_PX =
+  ANIMATION_TIMELINE_RULER_HEIGHT_PX +
+  ANIMATION_TIMELINE_REGION_LANE_HEIGHT_PX;
 
 type AnimationTimelineCollapseState = {
   contextKey: string;
@@ -261,7 +280,7 @@ function AnimationTimelineBoxSelectionBoundary({
     scrollViewportRef,
     dragThresholdPx: ANIMATION_TIMELINE_TIMING_DRAG_THRESHOLD_PX,
     viewportLeftInsetPx: LABEL_COLUMN_WIDTH,
-    viewportTopInsetPx: 36,
+    viewportTopInsetPx: ANIMATION_TIMELINE_STICKY_HEADER_HEIGHT_PX,
     onEmptyTimelineClick,
     onCommitBoxSelection: (scope, nextSelection) => {
       if (nextSelection) {
@@ -274,6 +293,527 @@ function AnimationTimelineBoxSelectionBoundary({
   });
 
   return children(boxSelection);
+}
+
+type AnimationTimelineRegionGestureKind = "create" | "start" | "end";
+
+type AnimationTimelineRegionPointerSession = {
+  pointerId: number;
+  gestureTarget: HTMLElement;
+  kind: AnimationTimelineRegionGestureKind;
+  sourceClientX: number;
+  sourceClientY: number;
+  anchorTimeMs: number;
+  sourceRegion?: AnimationTimelineRegion;
+  dragging: boolean;
+  finished: boolean;
+};
+
+type AnimationTimelineRegionInteraction = {
+  armed: boolean;
+  draftActive: boolean;
+  draftRegion: AnimationTimelineRegion | null;
+  setLaneNode: (node: HTMLDivElement | null) => void;
+  setArmed: (armed: boolean) => void;
+  handleCreatePointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  handleStartPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+  handleEndPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+};
+
+type AnimationTimelineRegionInteractionBoundaryProps = {
+  contextKey: string;
+  slideId: string;
+  sequenceId?: string;
+  durationMs: number;
+  pixelsPerMs: number;
+  region?: AnimationTimelineRegion;
+  disabled: boolean;
+  onChangeRegion: (region: AnimationTimelineRegion) => void;
+  onPausePlayback: () => void;
+  children: (interaction: AnimationTimelineRegionInteraction) => ReactNode;
+};
+
+/**
+ * Mount Region hooks in a fresh child fiber so adding the feature never changes
+ * AnimationTimeline's long-lived Fast Refresh hook signature.
+ */
+function AnimationTimelineRegionInteractionBoundary({
+  contextKey,
+  slideId,
+  sequenceId,
+  durationMs,
+  pixelsPerMs,
+  region,
+  disabled,
+  onChangeRegion,
+  onPausePlayback,
+  children,
+}: AnimationTimelineRegionInteractionBoundaryProps) {
+  const [armedContextKey, setArmedContextKey] = useState<string | null>(null);
+  const [draftState, setDraftState] = useState<{
+    contextKey: string;
+    region: AnimationTimelineRegion | null;
+  } | null>(null);
+  const laneRef = useRef<HTMLDivElement | null>(null);
+  const setLaneNode = useCallback((node: HTMLDivElement | null) => {
+    laneRef.current = node;
+  }, []);
+  const cancelSessionRef = useRef<(() => void) | null>(null);
+  const interactionEnabled =
+    !disabled && Boolean(sequenceId) && Number.isFinite(durationMs) && durationMs >= 1;
+  const armed = interactionEnabled && armedContextKey === contextKey;
+  const activeDraftState =
+    draftState?.contextKey === contextKey ? draftState : null;
+  const regionIdentityKey = region
+    ? `${region.slideId}:${region.sequenceId}:${region.startMs}:${region.endMs}`
+    : "";
+
+  if (
+    armedContextKey !== null &&
+    (!interactionEnabled || armedContextKey !== contextKey)
+  ) {
+    setArmedContextKey(null);
+  }
+
+  const setArmed = useCallback((nextArmed: boolean) => {
+    if (!nextArmed) {
+      cancelSessionRef.current?.();
+      setArmedContextKey(null);
+      return;
+    }
+
+    if (interactionEnabled) {
+      setArmedContextKey(contextKey);
+    }
+  }, [contextKey, interactionEnabled]);
+
+  const getPointerTimeMs = useCallback((clientX: number) => {
+    const lane = laneRef.current;
+
+    if (!lane || !Number.isFinite(pixelsPerMs) || pixelsPerMs <= 0) {
+      return null;
+    }
+
+    const laneRect = lane.getBoundingClientRect();
+    const localX = clamp(clientX - laneRect.left, 0, laneRect.width);
+
+    return localX / pixelsPerMs;
+  }, [pixelsPerMs]);
+
+  const beginPointerSession = useCallback(
+    (
+      event: ReactPointerEvent<HTMLElement>,
+      kind: AnimationTimelineRegionGestureKind,
+    ) => {
+    if (
+      event.button !== 0 ||
+      !event.isPrimary ||
+      !interactionEnabled ||
+      !sequenceId ||
+      (kind === "create" && (!armed || event.target !== event.currentTarget)) ||
+      (kind !== "create" && !region)
+    ) {
+      return;
+    }
+
+    const anchorTimeMs = getPointerTimeMs(event.clientX);
+
+    if (anchorTimeMs === null) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    cancelSessionRef.current?.();
+
+    const gestureTarget = event.currentTarget;
+    const session: AnimationTimelineRegionPointerSession = {
+      pointerId: event.pointerId,
+      gestureTarget,
+      kind,
+      sourceClientX: event.clientX,
+      sourceClientY: event.clientY,
+      anchorTimeMs,
+      sourceRegion: kind === "create" ? undefined : region,
+      dragging: false,
+      finished: false,
+    };
+
+    const getCandidate = (clientX: number) => {
+      const pointerTimeMs = getPointerTimeMs(clientX);
+
+      if (pointerTimeMs === null) {
+        return null;
+      }
+
+      return session.kind === "create"
+        ? getAnimationTimelineRegionCandidate({
+            slideId,
+            sequenceId,
+            anchorTimeMs: session.anchorTimeMs,
+            pointerTimeMs,
+            durationMs,
+          })
+        : session.sourceRegion
+          ? getAnimationTimelineRegionHandleCandidate({
+              region: session.sourceRegion,
+              handle: session.kind,
+              pointerTimeMs,
+              durationMs,
+            })
+          : null;
+    };
+
+    const cleanup = () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      window.removeEventListener("pointercancel", handlePointerCancel);
+      window.removeEventListener("keydown", handleKeyDown);
+      gestureTarget.removeEventListener(
+        "lostpointercapture",
+        handleLostPointerCapture,
+      );
+
+      if (cancelSessionRef.current === cancelCurrentSession) {
+        cancelSessionRef.current = null;
+      }
+    };
+
+    const finish = (
+      outcome: "commit" | "cancel",
+      finalClientX = session.sourceClientX,
+    ) => {
+      if (session.finished) {
+        return;
+      }
+
+      session.finished = true;
+      const candidate = session.dragging ? getCandidate(finalClientX) : null;
+      cleanup();
+      setDraftState(null);
+
+      if (gestureTarget.hasPointerCapture(session.pointerId)) {
+        gestureTarget.releasePointerCapture(session.pointerId);
+      }
+
+      if (outcome === "commit" && session.dragging && candidate) {
+        onChangeRegion(candidate);
+
+        if (session.kind === "create") {
+          setArmedContextKey(null);
+        }
+      }
+    };
+
+    const cancelCurrentSession = () => finish("cancel");
+
+    const promoteToDrag = (moveEvent: PointerEvent) => {
+      try {
+        gestureTarget.setPointerCapture(session.pointerId);
+      } catch {
+        finish("cancel");
+        return false;
+      }
+
+      session.dragging = true;
+      gestureTarget.addEventListener(
+        "lostpointercapture",
+        handleLostPointerCapture,
+      );
+      onPausePlayback();
+      moveEvent.preventDefault();
+      return true;
+    };
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== session.pointerId || session.finished) {
+        return;
+      }
+
+      const movement = Math.hypot(
+        moveEvent.clientX - session.sourceClientX,
+        moveEvent.clientY - session.sourceClientY,
+      );
+
+      if (
+        !session.dragging &&
+        movement < ANIMATION_TIMELINE_TIMING_DRAG_THRESHOLD_PX
+      ) {
+        return;
+      }
+
+      if (!session.dragging && !promoteToDrag(moveEvent)) {
+        return;
+      }
+
+      moveEvent.preventDefault();
+      setDraftState({
+        contextKey,
+        region: getCandidate(moveEvent.clientX),
+      });
+    };
+
+    const handlePointerUp = (upEvent: PointerEvent) => {
+      if (upEvent.pointerId === session.pointerId) {
+        finish("commit", upEvent.clientX);
+      }
+    };
+
+    const handlePointerCancel = (cancelEvent: PointerEvent) => {
+      if (cancelEvent.pointerId === session.pointerId) {
+        finish("cancel");
+      }
+    };
+
+    const handleLostPointerCapture = () => {
+      if (!session.finished) {
+        finish("cancel");
+      }
+    };
+
+    const handleKeyDown = (keyEvent: KeyboardEvent) => {
+      if (keyEvent.key !== "Escape") {
+        return;
+      }
+
+      keyEvent.preventDefault();
+      finish("cancel");
+
+      if (session.kind === "create") {
+        setArmedContextKey(null);
+      }
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    window.addEventListener("pointercancel", handlePointerCancel);
+    window.addEventListener("keydown", handleKeyDown);
+    cancelSessionRef.current = cancelCurrentSession;
+    },
+    [
+      armed,
+      contextKey,
+      durationMs,
+      getPointerTimeMs,
+      interactionEnabled,
+      onChangeRegion,
+      onPausePlayback,
+      region,
+      sequenceId,
+      slideId,
+    ],
+  );
+
+  const handleCreatePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) =>
+      beginPointerSession(event, "create"),
+    [beginPointerSession],
+  );
+  const handleStartPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) =>
+      beginPointerSession(event, "start"),
+    [beginPointerSession],
+  );
+  const handleEndPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) =>
+      beginPointerSession(event, "end"),
+    [beginPointerSession],
+  );
+
+  useEffect(() => {
+    cancelSessionRef.current?.();
+  }, [contextKey, disabled, durationMs, regionIdentityKey]);
+
+  useEffect(() => {
+    if (!armed || cancelSessionRef.current) {
+      return;
+    }
+
+    function handleArmedKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setArmedContextKey(null);
+      }
+    }
+
+    window.addEventListener("keydown", handleArmedKeyDown);
+    return () => window.removeEventListener("keydown", handleArmedKeyDown);
+  }, [armed]);
+
+  useEffect(
+    () => () => {
+      cancelSessionRef.current?.();
+      cancelSessionRef.current = null;
+    },
+    [],
+  );
+
+  // The callback receives stable state/callback values, not ref.current. The
+  // compiler's refs rule conservatively taints this object because some event
+  // callbacks use refs later, inside events.
+  // eslint-disable-next-line react-hooks/refs
+  return children({
+    armed,
+    draftActive: activeDraftState !== null,
+    draftRegion: activeDraftState?.region ?? null,
+    setLaneNode,
+    setArmed,
+    handleCreatePointerDown,
+    handleStartPointerDown,
+    handleEndPointerDown,
+  });
+}
+
+function AnimationTimelineRegionToolbarControls({
+  region,
+  interactionDisabled,
+  editingDisabled,
+  onClearRegion,
+  interaction,
+}: {
+  region?: AnimationTimelineRegion;
+  interactionDisabled: boolean;
+  editingDisabled: boolean;
+  onClearRegion: () => void;
+  interaction: AnimationTimelineRegionInteraction;
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        aria-pressed={interaction.armed}
+        disabled={interactionDisabled}
+        className={`rounded-full px-3 py-2 text-[10px] font-black transition disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-300 ${
+          interaction.armed
+            ? "bg-emerald-500 text-white shadow-sm"
+            : region
+              ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+              : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+        }`}
+        onClick={() => interaction.setArmed(!interaction.armed)}
+        title="进入一次性循环区间创建模式，然后在绿色 Region lane 中拖动"
+      >
+        循环区间
+      </button>
+
+      {region ? (
+        <button
+          type="button"
+          disabled={editingDisabled}
+          className="rounded-full bg-emerald-50 px-3 py-2 text-[10px] font-black text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-300"
+          onClick={() => {
+            interaction.setArmed(false);
+            onClearRegion();
+          }}
+          title="清除循环区间；播放中清除会从当前时间继续普通 Sequence 播放"
+        >
+          清除循环
+        </button>
+      ) : null}
+    </>
+  );
+}
+
+function AnimationTimelineRegionLane({
+  displayedRegion,
+  region,
+  pixelsPerMs,
+  interactionDisabled,
+  inactive,
+  armed,
+  draftActive,
+  draftRegion,
+  setLaneNode,
+  handleCreatePointerDown,
+  handleStartPointerDown,
+  handleEndPointerDown,
+}: {
+  displayedRegion: AnimationTimelineRegion | null;
+  region?: AnimationTimelineRegion;
+  pixelsPerMs: number;
+  interactionDisabled: boolean;
+  inactive: boolean;
+  armed: boolean;
+  draftActive: boolean;
+  draftRegion: AnimationTimelineRegion | null;
+  setLaneNode: (node: HTMLDivElement | null) => void;
+  handleCreatePointerDown: (
+    event: ReactPointerEvent<HTMLDivElement>,
+  ) => void;
+  handleStartPointerDown: (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => void;
+  handleEndPointerDown: (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => void;
+}) {
+  const visibleRegion = draftActive ? draftRegion : displayedRegion;
+
+  return (
+    <div
+      ref={setLaneNode}
+      className={`relative h-5 select-none overflow-hidden bg-emerald-50/40 ${
+        armed
+          ? "cursor-crosshair ring-1 ring-inset ring-emerald-300"
+          : "cursor-default"
+      } ${inactive ? "opacity-45" : ""}`}
+      onPointerDown={handleCreatePointerDown}
+      title={
+        armed
+          ? "拖动创建循环区间；短点击保持创建模式"
+          : region
+            ? `${formatRulerTime(region.startMs)} – ${formatRulerTime(region.endMs)}`
+            : "点击工具栏“循环区间”后在此拖动"
+      }
+    >
+      {visibleRegion ? (
+        <>
+          <div
+            className="pointer-events-none absolute bottom-1 top-1 rounded-sm border border-emerald-500 bg-emerald-300/60 shadow-sm"
+            style={{
+              left: visibleRegion.startMs * pixelsPerMs,
+              width: Math.max(
+                1,
+                (visibleRegion.endMs - visibleRegion.startMs) * pixelsPerMs,
+              ),
+            }}
+          />
+
+          {region ? (
+            <>
+              <button
+                type="button"
+                disabled={interactionDisabled}
+                className="absolute bottom-0 top-0 z-30 w-2 -translate-x-1/2 cursor-ew-resize border-0 bg-transparent p-0 disabled:cursor-not-allowed"
+                style={{
+                  left: visibleRegion.startMs * pixelsPerMs,
+                }}
+                onPointerDown={handleStartPointerDown}
+                title="调整循环开始"
+                aria-label="调整循环开始"
+              >
+                <span className="pointer-events-none absolute bottom-0 left-1/2 top-0 w-0.5 -translate-x-1/2 bg-emerald-600" />
+              </button>
+
+              <button
+                type="button"
+                disabled={interactionDisabled}
+                className="absolute bottom-0 top-0 z-30 w-2 -translate-x-1/2 cursor-ew-resize border-0 bg-transparent p-0 disabled:cursor-not-allowed"
+                style={{
+                  left: visibleRegion.endMs * pixelsPerMs,
+                }}
+                onPointerDown={handleEndPointerDown}
+                title="调整循环结束"
+                aria-label="调整循环结束"
+              >
+                <span className="pointer-events-none absolute bottom-0 left-1/2 top-0 w-0.5 -translate-x-1/2 bg-emerald-600" />
+              </button>
+            </>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 /**
@@ -295,6 +835,10 @@ export function AnimationTimeline({
   clipPreviewAvailable = false,
   activeSequenceId,
   playbackDurationMs,
+  region,
+  regionDisplayDurationMs,
+  regionEditingDisabled = false,
+  regionInactive = false,
   activeAnimationContext,
   selection,
   revealRequest,
@@ -313,6 +857,9 @@ export function AnimationTimeline({
   onCommitTimingEdit,
   onCancelTimingEdit,
   onPausePlaybackForTimingEdit,
+  onChangeRegion,
+  onClearRegion,
+  onPausePlaybackForRegionEdit,
   onTogglePlayback,
   onToggleClipPreview,
   onReplayClipPreview,
@@ -442,6 +989,18 @@ export function AnimationTimeline({
 
   const pixelsPerMs = pixelsPerSecond / 1000;
 
+  const regionContextKey = `${hierarchyContextKey}\u0000${activeSequenceId ?? ""}`;
+  const regionInteractionDisabled =
+    regionEditingDisabled ||
+    !activeSequenceId ||
+    !Number.isFinite(playbackDurationMs) ||
+    playbackDurationMs < 1;
+  const displayedRegion = reconcileAnimationTimelineRegion(region ?? null, {
+    slideId: hierarchyContextKey,
+    sequenceId: activeSequenceId ?? null,
+    durationMs: regionDisplayDurationMs,
+  });
+
   const timelineTrackWidth = Math.max(320, timelineDurationMs * pixelsPerMs);
 
   const effectiveCurrentTimeMs = clamp(currentTimeMs, 0, timelineDurationMs);
@@ -506,7 +1065,8 @@ export function AnimationTimeline({
 
       const viewportRect = viewport.getBoundingClientRect();
       const clipRowRect = clipRow.getBoundingClientRect();
-      const visibleTop = viewportRect.top + 36;
+      const visibleTop =
+        viewportRect.top + ANIMATION_TIMELINE_STICKY_HEADER_HEIGHT_PX;
       const visibleBottom = viewportRect.bottom;
 
       if (clipRowRect.top < visibleTop) {
@@ -689,7 +1249,19 @@ export function AnimationTimeline({
         registerMarker: registerBoxSelectionMarker,
         handleBackgroundPointerDown: handleTimelineBackgroundPointerDown,
       }) => (
-        <section
+        <AnimationTimelineRegionInteractionBoundary
+          contextKey={regionContextKey}
+          slideId={hierarchyContextKey}
+          sequenceId={activeSequenceId}
+          durationMs={playbackDurationMs}
+          pixelsPerMs={pixelsPerMs}
+          region={region}
+          disabled={regionInteractionDisabled}
+          onChangeRegion={onChangeRegion}
+          onPausePlayback={onPausePlaybackForRegionEdit}
+        >
+          {(regionInteraction) => (
+            <section
       className="mt-3 flex shrink-0 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white p-4 shadow-sm"
       style={{
         height: 260,
@@ -740,6 +1312,14 @@ export function AnimationTimeline({
         </div>
 
         <div className="flex items-center gap-2">
+          <AnimationTimelineRegionToolbarControls
+            region={region}
+            interactionDisabled={regionInteractionDisabled}
+            editingDisabled={regionEditingDisabled}
+            onClearRegion={onClearRegion}
+            interaction={regionInteraction}
+          />
+
           <button
             type="button"
             aria-pressed={multiSelectMode}
@@ -875,58 +1455,92 @@ export function AnimationTimeline({
             />
           ) : null}
 
-          {/* Time ruler */}
-          <div
-            className="sticky top-0 z-60 grid border-b border-slate-200 bg-white shadow-[0_1px_0_rgba(15,23,42,0.06)]"
-            style={{
-              gridTemplateColumns: `${LABEL_COLUMN_WIDTH}px ${timelineTrackWidth}px`,
-            }}
-          >
-            <div className="sticky left-0 z-70 flex h-9 items-center border-r border-slate-200 bg-slate-100 px-3 text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">
-              LAYERS
+          {/* Ruler and Region are one sticky header but keep separate gestures. */}
+          <div className="sticky top-0 z-60 bg-white shadow-[0_1px_0_rgba(15,23,42,0.06)]">
+            <div
+              className="grid border-b border-slate-200"
+              style={{
+                gridTemplateColumns: `${LABEL_COLUMN_WIDTH}px ${timelineTrackWidth}px`,
+              }}
+            >
+              <div className="sticky left-0 z-70 flex h-9 items-center border-r border-slate-200 bg-slate-100 px-3 text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">
+                LAYERS
+              </div>
+
+              <div
+                ref={rulerRef}
+                className={`relative h-9 select-none bg-white ${
+                  normalPlaybackAvailable
+                    ? "cursor-ew-resize"
+                    : "cursor-not-allowed"
+                }`}
+                onPointerDown={handleRulerPointerDown}
+                title="点击或拖动 Playhead · 滚轮横向浏览时间轴"
+              >
+                {ticks.map((timeMs) => {
+                  const major = majorTicks.includes(timeMs);
+
+                  return (
+                    <div
+                      key={timeMs}
+                      className={`pointer-events-none absolute bottom-0 border-l ${
+                        major
+                          ? "h-5 border-slate-400"
+                          : "h-2.5 border-slate-200"
+                      }`}
+                      style={{
+                        left: timeMs * pixelsPerMs,
+                      }}
+                    >
+                      {major ? (
+                        <span className="absolute left-1 top-0 whitespace-nowrap text-[9px] font-bold text-slate-400">
+                          {formatRulerTime(timeMs)}
+                        </span>
+                      ) : null}
+                    </div>
+                  );
+                })}
+
+                {/* Playhead handle */}
+                <div
+                  className="pointer-events-none absolute bottom-0 top-0 z-40 w-px bg-rose-500"
+                  style={{
+                    left: playheadX,
+                  }}
+                >
+                  <span className="absolute -left-1.5 top-0 h-3 w-3 rotate-45 rounded-sm bg-rose-500 shadow-sm" />
+                </div>
+              </div>
             </div>
 
             <div
-              ref={rulerRef}
-              className={`relative h-9 select-none bg-white ${
-                normalPlaybackAvailable
-                  ? "cursor-ew-resize"
-                  : "cursor-not-allowed"
-              }`}
-              onPointerDown={handleRulerPointerDown}
-              title="点击或拖动 Playhead · 滚轮横向浏览时间轴"
+              className="grid border-b border-emerald-100"
+              style={{
+                gridTemplateColumns: `${LABEL_COLUMN_WIDTH}px ${timelineTrackWidth}px`,
+              }}
             >
-              {ticks.map((timeMs) => {
-                const major = majorTicks.includes(timeMs);
-
-                return (
-                  <div
-                    key={timeMs}
-                    className={`pointer-events-none absolute bottom-0 border-l ${
-                      major ? "h-5 border-slate-400" : "h-2.5 border-slate-200"
-                    }`}
-                    style={{
-                      left: timeMs * pixelsPerMs,
-                    }}
-                  >
-                    {major ? (
-                      <span className="absolute left-1 top-0 whitespace-nowrap text-[9px] font-bold text-slate-400">
-                        {formatRulerTime(timeMs)}
-                      </span>
-                    ) : null}
-                  </div>
-                );
-              })}
-
-              {/* Playhead handle */}
-              <div
-                className="pointer-events-none absolute bottom-0 top-0 z-40 w-px bg-rose-500"
-                style={{
-                  left: playheadX,
-                }}
-              >
-                <span className="absolute -left-1.5 top-0 h-3 w-3 rotate-45 rounded-sm bg-rose-500 shadow-sm" />
+              <div className="sticky left-0 z-70 flex h-5 items-center border-r border-emerald-100 bg-emerald-50 px-3 text-[9px] font-black uppercase tracking-[0.16em] text-emerald-600">
+                REGION LOOP
               </div>
+
+              <AnimationTimelineRegionLane
+                displayedRegion={displayedRegion}
+                region={region}
+                pixelsPerMs={pixelsPerMs}
+                interactionDisabled={regionInteractionDisabled}
+                inactive={regionInactive}
+                armed={regionInteraction.armed}
+                draftActive={regionInteraction.draftActive}
+                draftRegion={regionInteraction.draftRegion}
+                setLaneNode={regionInteraction.setLaneNode}
+                handleCreatePointerDown={
+                  regionInteraction.handleCreatePointerDown
+                }
+                handleStartPointerDown={
+                  regionInteraction.handleStartPointerDown
+                }
+                handleEndPointerDown={regionInteraction.handleEndPointerDown}
+              />
             </div>
           </div>
 
@@ -1098,7 +1712,9 @@ export function AnimationTimeline({
           ) : null}
         </div>
       </div>
-        </section>
+            </section>
+          )}
+        </AnimationTimelineRegionInteractionBoundary>
       )}
     </AnimationTimelineBoxSelectionBoundary>
   );

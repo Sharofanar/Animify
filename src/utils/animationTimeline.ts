@@ -188,8 +188,9 @@ export type AnimationTimelineEditorSequencePhase =
 /**
  * One derived Sequence-local editor sample.
  *
- * Pending samples remain useful to the Timeline UI, but the Canvas must only
- * compile completed and active entries. Nothing in this contract is persisted.
+ * Pending samples never actively participate, but the Canvas may compile them
+ * so the shared per-element resolver can derive a low-priority pre-trigger
+ * baseline when no completed or active history exists. Nothing is persisted.
  */
 export type AnimationTimelineEditorSequenceSample = {
   sequenceId: string;
@@ -694,8 +695,9 @@ export function resolveAnimationTimelineActiveSequenceId(
  * Derive the editor frame from ordered normal Sequence groups.
  *
  * Earlier Sequences sample their semantic completion, the current Sequence
- * samples its local Playhead, and later Sequences remain pending with no Canvas
- * contribution. Cross-Sequence Clip offsets are never accumulated.
+ * samples its local Playhead, and later Sequences remain pending. A later sample
+ * can only become a contextual baseline through the shared per-element resolver;
+ * it never actively participates. Cross-Sequence offsets are never accumulated.
  */
 export function getAnimationTimelineEditorSamples(
   model: AnimationTimelineViewModel,

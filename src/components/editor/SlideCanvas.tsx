@@ -218,7 +218,7 @@ type SlideCanvasProps = {
 
   /**
    * Derived Sequence-local samples for the editor Timeline. Pending entries are
-   * descriptive only and never become Canvas animation contributions.
+   * compiled for contextual baseline resolution but never actively participate.
    */
   editorTimelineSequenceSamples?: AnimationTimelineEditorSequenceSample[];
 
@@ -291,16 +291,10 @@ export function SlideCanvas({
   const animationSequenceCompilationKey =
     editorTimelineSequenceSamples !== undefined
       ? JSON.stringify(
-          editorTimelineSequenceSamples.flatMap((sample) =>
-            sample.phase === "pending"
-              ? []
-              : [
-                  {
-                    sequenceId: sample.sequenceId,
-                    normalClipIds: sample.normalClipIds,
-                  },
-                ],
-          ),
+          editorTimelineSequenceSamples.map((sample) => ({
+            sequenceId: sample.sequenceId,
+            normalClipIds: sample.normalClipIds,
+          })),
         )
       : animationSequenceSamples === undefined
         ? undefined
@@ -387,28 +381,6 @@ export function SlideCanvas({
             ]),
           ),
     [animationSequenceSamples],
-  );
-
-  const editorTimelineSequenceSamplesById = useMemo(
-    () =>
-      editorTimelineSequenceSamples === undefined
-        ? undefined
-        : Object.fromEntries(
-            editorTimelineSequenceSamples.flatMap((sample) =>
-              sample.phase === "pending"
-                ? []
-                : [
-                    [
-                      sample.sequenceId,
-                      {
-                        ...sample,
-                        localTimeMs: Math.max(0, sample.localTimeMs),
-                      },
-                    ] as const,
-                  ],
-            ),
-          ),
-    [editorTimelineSequenceSamples],
   );
 
   /**
@@ -835,9 +807,7 @@ export function SlideCanvas({
             scale={scale}
             compiledAnimations={compiledAnimations}
             animationTimelineTimeMs={animationTimelineTimeMs}
-            editorTimelineSequenceSamplesById={
-              editorTimelineSequenceSamplesById
-            }
+            editorTimelineSequenceSamples={editorTimelineSequenceSamples}
             animationSequenceSamples={animationSequenceSamples}
             animationSequenceSamplesById={animationSequenceSamplesById}
             legacyAnimationFallback={legacyAnimationFallback}
@@ -1029,6 +999,17 @@ function createBrowserAnimationKeyframes(
   );
 }
 
+/** Resolve the compiled endpoint shown at runtime elapsed=0. */
+function getInitialRuntimeFrame(compiledAnimation: CompiledElementAnimation) {
+  const startsAtEnd =
+    compiledAnimation.timing.direction === "reverse" ||
+    compiledAnimation.timing.direction === "alternate-reverse";
+
+  return startsAtEnd
+    ? compiledAnimation.keyframes[compiledAnimation.keyframes.length - 1]
+    : compiledAnimation.keyframes[0];
+}
+
 function SlideElementView({
   element,
   asset,
@@ -1039,7 +1020,7 @@ function SlideElementView({
   scale,
   compiledAnimations,
   animationTimelineTimeMs,
-  editorTimelineSequenceSamplesById,
+  editorTimelineSequenceSamples,
   animationSequenceSamples,
   animationSequenceSamplesById,
   legacyAnimationFallback,
@@ -1069,10 +1050,7 @@ function SlideElementView({
   scale: number;
   compiledAnimations: CompiledElementAnimation[];
   animationTimelineTimeMs?: number;
-  editorTimelineSequenceSamplesById?: Record<
-    string,
-    AnimationTimelineEditorSequenceSample
-  >;
+  editorTimelineSequenceSamples?: AnimationTimelineEditorSequenceSample[];
   animationSequenceSamples?: PresentationSequenceSample[];
   animationSequenceSamplesById?: Record<string, PresentationSequenceSample>;
   legacyAnimationFallback: boolean;
@@ -1113,25 +1091,39 @@ function SlideElementView({
     );
   }, [animationSequenceSamples, compiledAnimations]);
 
+  const editorAnimationSamples = useMemo(() => {
+    if (editorTimelineSequenceSamples === undefined) {
+      return undefined;
+    }
+
+    return getPresentationRenderableAnimationSamples(
+      editorTimelineSequenceSamples,
+      compiledAnimations,
+    );
+  }, [compiledAnimations, editorTimelineSequenceSamples]);
+
+  const deterministicAnimationSamples =
+    presentationAnimationSamples ?? editorAnimationSamples;
+
   const renderableCompiledAnimations = useMemo(
     () =>
-      presentationAnimationSamples?.map(
+      deterministicAnimationSamples?.map(
         (sample) => sample.compiledAnimation,
       ) ?? compiledAnimations,
-    [compiledAnimations, presentationAnimationSamples],
+    [compiledAnimations, deterministicAnimationSamples],
   );
 
-  const presentationAnimationSamplesById = useMemo(
+  const deterministicAnimationSamplesById = useMemo(
     () =>
-      presentationAnimationSamples === undefined
+      deterministicAnimationSamples === undefined
         ? undefined
         : new Map(
-            presentationAnimationSamples.map((sample) => [
+            deterministicAnimationSamples.map((sample) => [
               sample.compiledAnimation.id,
               sample,
             ]),
           ),
-    [presentationAnimationSamples],
+    [deterministicAnimationSamples],
   );
 
   const legacyAnimation = element.animations[0];
@@ -1404,7 +1396,7 @@ function SlideElementView({
     const presentationSequenceControlled =
       animationSequenceSamplesById !== undefined;
     const editorSequenceControlled =
-      editorTimelineSequenceSamplesById !== undefined;
+      editorTimelineSequenceSamples !== undefined;
     const sequenceControlled =
       presentationSequenceControlled || editorSequenceControlled;
 
@@ -1421,21 +1413,15 @@ function SlideElementView({
     const visibleAnimationIds = new Set<string>();
 
     for (const compiledAnimation of renderableCompiledAnimations) {
-      const presentationAnimationSample = presentationSequenceControlled
-        ? presentationAnimationSamplesById?.get(compiledAnimation.id)
-        : undefined;
-      const sequenceSample = presentationAnimationSample?.sequenceSample;
-      const editorSequenceSample = editorSequenceControlled
-        ? editorTimelineSequenceSamplesById?.[compiledAnimation.sequenceId]
-        : undefined;
+      const deterministicAnimationSample =
+        deterministicAnimationSamplesById?.get(compiledAnimation.id);
+      const sequenceSample = deterministicAnimationSample?.sequenceSample;
       const startTimeMs = Math.max(0, compiledAnimation.timing.delay);
-      const sampledTimeMs = presentationSequenceControlled
-        ? presentationAnimationSample?.pendingBaseline
+      const sampledTimeMs = sequenceControlled
+        ? deterministicAnimationSample?.pendingBaseline
           ? startTimeMs
           : sequenceSample?.localTimeMs
-        : editorSequenceControlled
-          ? editorSequenceSample?.localTimeMs
-          : animationTimelineTimeMs;
+        : animationTimelineTimeMs;
 
       if (sampledTimeMs === undefined) {
         const existingAnimation = managedAnimations.get(compiledAnimation.id);
@@ -1453,10 +1439,10 @@ function SlideElementView({
       const elapsedTimelineMs = currentTimeMs - startTimeMs;
 
       /**
-       * Presentation sampling excludes delayed active Clips before this effect.
-       * A retained pending baseline arrives with sampledTimeMs=startTimeMs, so
-       * it can establish an untouched element's initial visual without giving a
-       * delayed active Clip control over earlier completed history.
+       * Sequence sampling excludes delayed active Clips before this effect. A
+       * retained baseline arrives with sampledTimeMs=startTimeMs, establishing
+       * an untouched element's initial visual without giving a delayed or future
+       * Clip control over earlier completed/active history.
        */
       if (elapsedTimelineMs < 0) {
         const existingAnimation = managedAnimations.get(compiledAnimation.id);
@@ -1539,9 +1525,9 @@ function SlideElementView({
   }, [
     animationSequenceSamplesById,
     animationTimelineTimeMs,
-    editorTimelineSequenceSamplesById,
+    deterministicAnimationSamplesById,
+    editorTimelineSequenceSamples,
     isEditing,
-    presentationAnimationSamplesById,
     renderableCompiledAnimations,
   ]);
 
@@ -1572,7 +1558,7 @@ function SlideElementView({
 
     const playbackControlled =
       animationTimelineTimeMs !== undefined ||
-      editorTimelineSequenceSamplesById !== undefined ||
+      editorTimelineSequenceSamples !== undefined ||
       animationSequenceSamplesById !== undefined;
 
     if (
@@ -1641,25 +1627,33 @@ function SlideElementView({
   }, [
     animationSequenceSamplesById,
     animationTimelineTimeMs,
-    editorTimelineSequenceSamplesById,
+    editorTimelineSequenceSamples,
     isEditing,
     renderableCompiledAnimations,
   ]);
 
   /**
-   * Only a Clip using backwards fill should affect the element before its start
-   * time. Select the earliest matching Clip for the initial no-flash frame.
+   * Sequence-controlled editor baselines are explicit runtime samples and do not
+   * depend on fill. Autonomous/editor-presentation compatibility keeps its
+   * existing backwards-fill first-paint behavior.
    */
-  const initialCompiledAnimation =
-    !isEditing && editorTimelineSequenceSamplesById === undefined
-      ? renderableCompiledAnimations.find(
-          (compiledAnimation) =>
-            compiledAnimation.timing.fill === "backwards" ||
-            compiledAnimation.timing.fill === "both",
-        )
-      : undefined;
-
-  const initialCompiledFrame = initialCompiledAnimation?.keyframes[0];
+  const editorInitialBaselineAnimation = !isEditing
+    ? editorAnimationSamples?.find((sample) => sample.pendingBaseline)
+        ?.compiledAnimation
+    : undefined;
+  const initialCompiledAnimation = !isEditing
+    ? (editorInitialBaselineAnimation ??
+      (editorTimelineSequenceSamples === undefined
+        ? renderableCompiledAnimations.find(
+            (compiledAnimation) =>
+              compiledAnimation.timing.fill === "backwards" ||
+              compiledAnimation.timing.fill === "both",
+          )
+        : undefined))
+    : undefined;
+  const initialCompiledFrame = editorInitialBaselineAnimation
+    ? getInitialRuntimeFrame(editorInitialBaselineAnimation)
+    : initialCompiledAnimation?.keyframes[0];
 
   const outerStyle: CSSProperties = {
     left: style.x * scale,

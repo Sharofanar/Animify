@@ -1892,7 +1892,7 @@ Stage 6 完成结论：
 
 ### 第 7 阶段：Timeline V2-C
 
-状态：**IN PROGRESS；第一 Batch COMPLETE / MANUAL QA PASSED（2026-08-11）；第二 Batch COMPLETE / MANUAL QA PASSED（2026-08-12）；第三 Batch COMPLETE / MANUAL QA PASSED（2026-08-13）；Batch 4A COMPLETE / MANUAL QA PASSED（2026-08-14）；Batch 4B COMPLETE / MANUAL QA PASSED（2026-08-15）；Batch 4C COMPLETE / MANUAL QA PASSED（2026-08-15）；Batch 5A COMPLETE / MANUAL QA PASSED（2026-08-16）；Batch 5B COMPLETE / MANUAL QA PASSED（2026-08-16）；Batch 6 COMPLETE / MANUAL QA PASSED（2026-08-17）；Batch 7 COMPLETE / MANUAL QA PASSED（2026-08-18）；Stage 7 整体仍未完成**
+状态：**IN PROGRESS；第一 Batch COMPLETE / MANUAL QA PASSED（2026-08-11）；第二 Batch COMPLETE / MANUAL QA PASSED（2026-08-12）；第三 Batch COMPLETE / MANUAL QA PASSED（2026-08-13）；Batch 4A COMPLETE / MANUAL QA PASSED（2026-08-14）；Batch 4B COMPLETE / MANUAL QA PASSED（2026-08-15）；Batch 4C COMPLETE / MANUAL QA PASSED（2026-08-15）；Batch 5A COMPLETE / MANUAL QA PASSED（2026-08-16）；Batch 5B COMPLETE / MANUAL QA PASSED（2026-08-16）；Batch 6 COMPLETE / MANUAL QA PASSED（2026-08-17）；Batch 7 COMPLETE / MANUAL QA PASSED（2026-08-18）；Batch 8A COMPLETE / MANUAL QA PASSED（2026-08-21）；Batch 8B COMPLETE / MANUAL QA PASSED（2026-08-21）；Batch 8C COMPLETE / MANUAL QA PASSED（2026-08-22）；Stage 7 整体仍未完成**
 
 #### 第一 Batch：Timeline View Model Foundation
 
@@ -2368,9 +2368,41 @@ Current Slide ID + current normal Active Sequence ID
 2. QA-2 Future Sequence Context：PASS。future entrance不提前出现；用opacity `1 → 0`构造的exit-like动画在前一步保持可见、到所属Step才执行，证明没有future target统一隐藏；generic / emphasis由自动断言覆盖。
 3. QA-3 Authoring / Text Editing：PASS。pre-trigger隐藏文本仍可进入editing，static editing representation正常，退出后恢复Timeline sample。
 
+#### Batch 8A：All Elements View / 全部显示
+
+状态：**COMPLETE；MANUAL QA PASSED（2026-08-21）**
+
+- `activeAnimationSequenceId`采用`undefined / null / string`三态：`undefined`执行初始、失效与跨Slide fallback，`null`表示editor-only显式“全部显示”，有效string表示normal Active Sequence；显式`null`不会被Active Clip或默认resolver抢回。
+- “全部显示”清除Sequence-local Active Clip、Timeline descendant selection / reveal、Region、timing draft与Clip preview，同时保留Canvas element selection和property targets；editor samples严格为空，Canvas显示全部元素的static design state，Playhead / controller收敛到idle 0ms。
+- 该状态不进入Project、History、revision、`updatedAt`、autosave或persistence；Presentation、Export、schema、commands、controller与Batch 7 sampling语义未修改。
+- 用户人工QA确认future Step元素在“全部显示”下完整可见、无Step active、Canvas selection保留、Region清除、Play禁用且console无错误。
+
+#### Batch 8B：Resizable Animation Workspace
+
+状态：**COMPLETE；MANUAL QA PASSED（2026-08-21）**
+
+- 新增`AnimationWorkspaceLayout`作为Canvas / splitter / Timeline垂直布局的唯一owner；高度是组件内部editor-session-only React state，跨Slide、Project object替换与Edit / Animation mode切换保留，reload恢复默认，不进入Project、History、revision、`updatedAt`、autosave或localStorage。
+- splitter使用12px Pointer Events hit area与2px visual line，支持primary pointer capture、rAF合并更新、pointerup commit，以及Escape、pointercancel、lost capture、window blur、mode hide与unmount cancel / cleanup；Timeline内部Box Selection、Region、timing drag等gesture不参与该布局交互。
+- Timeline默认高度约为workspace可用高度38%，初始范围320–440px，最终最大值同时受600px、available height 62%与Canvas required-fit height约束；原固定260px Timeline外壳已改为填满layout wrapper，zoom、horizontal / vertical scroll、sticky ruler、56px inset、Region lane、Box Selection与external reveal geometry不变。
+- Canvas继续沿用既有`ResizeObserver → canvasAreaSize → fit scale`路径，不dispatch人工resize、不新增zoom state、不修改SlideCanvas。follow-up将Canvas真实fit boundary锁为`ceil(vertical chrome + project logical height × minimum editor scale)`，并复用fit算法同一个`0.24`最低scale常量；Timeline扩大到上限时Canvas不会因scale触底而进入正常内部滚动。
+- 用户人工QA确认Timeline扩大与缩小正常、Canvas自动适配并保持完整fit可见、最大高度边界修复有效，且Batch 5A / 5B / 6 / 7 / 8A回归保持。
+- 最终closeout检查：`git diff --check`、Lint与Build通过；Build仅有既有`> 500 kB`non-blocking warning；TypeScript relative import graph为46 modules / 135 relative edges / 0 cycles。
+
+#### Batch 8C：Animation Text Editing Boundary
+
+状态：**COMPLETE；MANUAL QA PASSED（2026-08-22）**
+
+- `SlideCanvas`继续拥有`editingElementId`与textarea编辑生命周期，并通过可选`onRequestTextEditing`上报text intent；只有text Element会发出该intent，Shape / SVG与bare Presentation路径保持既有行为。
+- Animation mode下单次text double-click会选择目标Element、请求Animation → Edit mode transition、进入Canvas editing state，并沿用既有textarea focus + select-all语义；Enter与blur提交、Escape取消保持不变。
+- normal playback仅pause当前Playhead，不stop、不归零；paused / idle保持原状态。isolated preview优先clear并恢复return time，不破坏其原上下文。
+- 返回Animation mode后Active Sequence、Playhead、Region与All Elements View上下文保持，不自动播放、不重置Sequence-local状态。
+- intent与mode transition自身不修改Project / History / revision / `updatedAt`或persistence；实际文字提交继续走既有document / History边界。Presentation、Export、controller、schema、commands、compiler、animation sampling及Batch 8A / 8B contract均未修改。
+- 用户人工QA确认上述Animation text editing、playback pause、isolated preview、提交 / 取消与返回上下文行为全部通过。
+- 最终closeout检查：`git diff --check`、Lint与Build通过；Build仅有既有`> 500 kB`non-blocking warning；TypeScript relative import graph为46 modules / 136 relative edges / 0 cycles。
+
 Stage 7 Batch 4 direct timing editing现已**COMPLETE**：4A负责Clip start、4B负责Clip authored base duration、4C负责single Keyframe offset；三者共用editor-only timing draft → Timeline / Canvas preview → one final command → one History infrastructure。
 
-Stage 7整体仍为**IN PROGRESS**。Batch 7已完成Editor pre-trigger baseline / Presentation sampling parity；下一targeted audit候选为Animation Workspace UX，其后仍有Marker minimum ownership / display / edit contract与finite advanced snapping / conflict-feedback closure。
+Stage 7整体仍为**IN PROGRESS**。Batch 8A已完成All Elements View，Batch 8B已完成Resizable Animation Workspace，Batch 8C已完成Animation Text Editing Boundary；下一正式开发入口为Marker minimum ownership / display / edit contract，其后仍有finite advanced snapping / conflict-feedback closure。
 
 未来cross-Sequence move仍只是candidate：默认preserve existing Sequence-local`startMs`，显式提供“从0ms开始”和“接在后面”，overlap仅给non-blocking hint并允许intentional parallel；它不是当前architecture invariant，也未在4A / 4B / 4C实现。
 
@@ -2399,10 +2431,14 @@ Stage 7 后续 timing candidate UX：
 - Batch 5A 已完成同一 Clip 内跨 Track multi-Keyframe selection与rigid group move，并保持atomic command、editor-only draft、single History与既有runtime隔离。
 - Batch 5B 已完成同一 Clip 内跨 Track Box Selection、visible / editable DOM rect hit、replacement / zero-hit fallback、local preview与完整cancel lifecycle；首版no edge auto-scroll，且直接复用5A selection / group move。
 - Batch 6 已完成当前normal Active Sequence内的editor-only Region Loop、dedicated lane、half-open modulo playback、outside seek、isolated preview priority与committed-duration reconciliation；无whole-region drag、无snapping。
+- Batch 7 已完成Editor pre-trigger baseline / Presentation sampling parity，future entrance在无participating history时使用compiled elapsed=0低优先级baseline，exact delay后才active。
+- Batch 8A 已完成editor-only“全部显示”状态，使用Active Sequence显式`null`锁定static all-elements Canvas view，并与初始 / stale fallback分离。
+- Batch 8B 已完成Canvas / Timeline垂直splitter、editor-session height、完整pointer cancel lifecycle与Canvas dynamic required-fit boundary；Timeline geometry、Canvas sampling与document/runtime语义保持不变。
+- Batch 8C 已完成Animation Text Editing Boundary；text double-click从Animation mode进入Edit mode，normal playback仅pause，isolated preview恢复return time，既有Canvas editing与History / document边界保持。
 - 未来跨 Sequence move 默认候选更新为 preserve existing Sequence-local `startMs`，并显式提供“从 0ms 开始”与“接在后面”；overlap 只提供 non-blocking hint，intentional parallel 继续允许。
 - 该建议不是已锁定 architecture invariant；Batch 4A / 4B / 4C 均没有修改 Stage 6 join / move command，也没有实现 cross-Sequence DnD。
 
-下一targeted audit候选：**Stage 7 — Animation Workspace UX**。候选范围仅记录为“全部显示”（Active Sequence = null / Canvas static all-elements view）、Canvas / Timeline resizable splitter，以及Animation-mode text editing boundary；本次closeout不实现这些UX，也不开始Marker或advanced snapping。
+下一正式开发入口：**Stage 7 Marker minimum ownership / display / edit contract**。Batch 8A“全部显示”、Batch 8B Canvas / Timeline resizable splitter与Batch 8C Animation Text Editing Boundary均已完成并通过人工QA；本次closeout不开始Marker或advanced snapping。
 
 正式产品设计：
 
@@ -3460,7 +3496,12 @@ GitHub 状态：已 push
 2026-08-17：Region QA同时观察到独立Editor pre-trigger baseline / Presentation sampling parity问题：delayed entrance Clip在start前no-contribution会保留static design state并提前可见；Batch 6未修改sampling，下一入口改为targeted boundary audit
 2026-08-18：Stage 7 Batch 7“Editor Pre-trigger Baseline / Presentation Sampling Parity”完成；pending normal compile、shared per-Element resolver、compiled elapsed=0 baseline、history priority、reverse / stagger、first-paint与text editing override通过三项人工QA
 2026-08-18：Batch 7 closeout基于最终源码重新执行46项定向断言；Lint、Build、Diff与45 modules / 126 local edges / 0 cycles检查全部通过，Build仅保留既有`> 500 kB`non-blocking warning。浏览器控制实例为空，未虚报closeout browser automation；用户真实browser QA全部PASS
-当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成；Stage 5.5 架构拆分暂停于稳定边界，Batch 3C-3、Batch 4 与 Batch 5 暂缓；Stage 6 整体 COMPLETE；Stage 7 第一至第三 Batch、Batch 4A、Batch 4B、Batch 4C、Batch 5A、Batch 5B、Batch 6与Batch 7 COMPLETE / MANUAL QA PASSED。Stage 7整体仍为IN PROGRESS，下一targeted audit候选为“Animation Workspace UX”，其后仍有Marker minimum ownership / display / edit contract与finite advanced snapping / conflict-feedback closure
+2026-08-21：Stage 7 Batch 8A“All Elements View / 全部显示”完成；Active Sequence三态、显式null static all-elements view、Sequence-local context cleanup与Canvas / property selection preservation通过人工QA
+2026-08-21：Stage 7 Batch 8B“Resizable Animation Workspace”完成；独立workspace layout owner、editor-session height、pointer capture / cancel lifecycle、Timeline clamp与Canvas dynamic required-fit boundary通过人工QA
+2026-08-21：Batch 8B closeout确认Lint、Build、Diff与46 modules / 135 relative edges / 0 cycles检查全部通过，Build仅保留既有`> 500 kB`non-blocking warning；用户真实Canvas fit与Timeline geometry QA全部PASS
+2026-08-22：Stage 7 Batch 8C“Animation Text Editing Boundary”完成；text intent callback、Animation → Edit mode transition、normal playback pause、isolated preview return-time restoration与既有Canvas editing / History边界通过人工QA
+2026-08-22：Batch 8C closeout确认Lint、Build、Diff与46 modules / 136 relative edges / 0 cycles检查全部通过，Build仅保留既有`> 500 kB`non-blocking warning
+当前状态：第 5.5 阶段 Batch 1、Batch 2A、Batch 2B、Batch 3A、Batch 3B-1、Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成；Stage 5.5 架构拆分暂停于稳定边界，Batch 3C-3、Batch 4 与 Batch 5 暂缓；Stage 6 整体 COMPLETE；Stage 7 第一至第三 Batch、Batch 4A、Batch 4B、Batch 4C、Batch 5A、Batch 5B、Batch 6、Batch 7、Batch 8A、Batch 8B与Batch 8C COMPLETE / MANUAL QA PASSED。Stage 7整体仍为IN PROGRESS，下一正式开发入口为Marker minimum ownership / display / edit contract，其后仍有finite advanced snapping / conflict-feedback closure
 ```
 
 ---
@@ -3485,7 +3526,7 @@ GitHub 状态：已 push
 - Batch 2 前置只读架构审计已完成。Stage 5.5 Batch 2A“Project persistence adapter”已验证完成并 push；Video Bug Part A 已解决并完成人工 QA / Git 闭环。Export 现象当前无法复现，不启动 speculative repair；Batch 2B“Project document + history transaction”及 final no-op 修复已通过全部人工 QA 并成为稳定架构基线。Batch 3A 最小 Sequence Command Domain 已通过人工 QA，并通过 `d68ce74` 完成独立 Git 闭环；Batch 3B-1 Pure Element Command Facade 已完成自动检查、人工 QA 与独立 Git 闭环。
 - Pending Media Interaction Fix 已完成代码实现、自动检查和人工 QA，并纳入 `fix: sync pending media input ownership` 独立 Git 闭环；Batch 3B-2A、Batch 3B-2B、Batch 3C-1 与 Batch 3C-2 已验证完成。
 - Stage 5.5 architecture refactor paused at a stable boundary。Batch 3C-3、Batch 4 与 Batch 5 为暂缓架构债务，不是当前 required next step；Stage 6 第一至第五 Batch 均已完成并通过人工 QA，Stage 6 整体 COMPLETE。
-- Stage 7 第一 Batch“Timeline View Model Foundation”、第二 Batch“Active Sequence / Sequence-local Playhead + Editor Phase Sampling”、第三 Batch“Hierarchy Shell & Selection Contract”、Batch 4A“Timing Edit Infrastructure + Clip startMs Direct Editing”、Batch 4B“Clip Base Duration Resize”、Batch 4C“Single Keyframe Timing + Product Closure”、Batch 5A“Multi-Keyframe Selection & Group Move”、Batch 5B“Box Selection & Advanced Interaction Closure”、Batch 6“Region Loop”与Batch 7“Editor Pre-trigger Baseline / Presentation Sampling Parity”均已完成自动检查与人工QA；下一targeted audit候选为“Animation Workspace UX”。cross-Sequence move仍只是future candidate，Marker与advanced snapping / conflict-feedback仍待处理，Waveform继续Stage 11。
+- Stage 7 第一 Batch“Timeline View Model Foundation”、第二 Batch“Active Sequence / Sequence-local Playhead + Editor Phase Sampling”、第三 Batch“Hierarchy Shell & Selection Contract”、Batch 4A“Timing Edit Infrastructure + Clip startMs Direct Editing”、Batch 4B“Clip Base Duration Resize”、Batch 4C“Single Keyframe Timing + Product Closure”、Batch 5A“Multi-Keyframe Selection & Group Move”、Batch 5B“Box Selection & Advanced Interaction Closure”、Batch 6“Region Loop”、Batch 7“Editor Pre-trigger Baseline / Presentation Sampling Parity”、Batch 8A“All Elements View”、Batch 8B“Resizable Animation Workspace”与Batch 8C“Animation Text Editing Boundary”均已完成自动检查与人工QA；下一正式开发入口为Marker minimum ownership / display / edit contract。cross-Sequence move仍只是future candidate，advanced snapping / conflict-feedback仍待处理，Waveform继续Stage 11。
 - Standalone Export Fullscreen Arrow-Key Seeking Fix 已完成根因修复、自动检查和人工 QA；浏览器原生 Video controls 继续负责全屏方向键 seek，Presentation 不消费这些按键。
 - Presentation Element Click Blocking Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 的普通展示元素 click 现在冒泡到统一推进路由，编辑模式选择与媒体控件输入保持不变。
 - Presentation Transient Text Editing / Selection Fix 已完成根因修复、自动检查和人工 QA；bare Presentation 不再拥有双击 / textarea 编辑入口，Text / Shape / SVG 展示文字不再产生原生 Selection，编辑模式 textarea 语义保持不变。
@@ -3550,6 +3591,9 @@ git diff --cached
 40. Stage 7 Batch 5B 已新增co-located Box hook与稳定Hooks Boundary，从展开Track empty time background以multi-select drag或desktop Shift+drag启动same-Clip / cross-Track框选；只命中visible editable DOM marker rect，使用replacement、deterministic primary与zero-hit Clip fallback，pointermove仅local preview，pointerup一次semantic selection，external scroll / Escape / cancel / lost capture / context / unmount安全清理。首版no edge auto-scroll，直接复用5A selection / rigid group move，不修改Project / History / revision；Region Loop、Marker与advanced snapping仍未开始。
 41. Stage 7 Batch 6 已新增App-owned editor-only Region `{slideId, sequenceId, startMs, endMs}`与纯`animationTimelineRegion`规则；Region绑定当前Slide + normal Active Sequence且无cache，使用semantic duration、1ms minimum、10ms precision与`[start,end)`modulo wrap。controller optional loopRange不进入context，manual outside seek、Stop 0、playing Clear、isolated preview priority、dedicated Region lane、one-shot create、non-crossing handles、committed duration reconciliation、shared sticky inset与0 History / revision / persistence均已通过自动检查和人工QA；无whole-region drag、无snapping。
 42. Stage 7 Batch 7 已将pending normal Sequences纳入Editor structural compile set，并让`SlideCanvas`直接复用`getPresentationRenderableAnimationSamples`执行per-Element baseline resolution；delayed/current/future Animation只在无participating history时提供compiled runtime elapsed=0低优先级baseline，exact delay后才active。Element-level all-or-nothing、reverse / stagger、manual seek / playback、Region无分支、isolated preview、first-paint与text editing override均已验证；Presentation、Export、compiler、schema、commands / History与revision未修改。下一targeted audit候选为Animation Workspace UX，Marker与advanced snapping / conflict-feedback仍待处理。
+43. Stage 7 Batch 8A 已建立Active Sequence `undefined / null / string`三态，其中显式`null`锁定editor-only All Elements View；该状态清除Sequence-local Clip / descendant selection / reveal / Region / timing draft / preview，但保留Canvas selection与property targets，并以strict empty editor samples显示所有元素static design state。初始、stale与Slide切换fallback保持，Presentation / Export与Batch 7 sampling未修改。
+44. Stage 7 Batch 8B 已新增`AnimationWorkspaceLayout`统一拥有Canvas / splitter / Timeline垂直布局与editor-session-only height；12px Pointer Events splitter使用capture、rAF与完整cancel lifecycle。Timeline最大高度同时受600px、available 62%和Canvas `ceil(vertical chrome + logical height × 0.24)`required-fit boundary约束；Canvas继续通过既有ResizeObserver自然fit，SlideCanvas、Timeline geometry、sampling、Project / History / persistence与runtime未修改。
+45. Stage 7 Batch 8C 已在`SlideCanvas`保留text editing ownership，并以可选text intent callback让Animation mode协调进入Edit mode；normal playback只pause当前Playhead，isolated preview clear并恢复return time，paused / idle与返回Animation后的Active Sequence / Playhead / Region保持。transition自身不产生document / History / persistence mutation，Presentation / Export、controller、schema、commands、compiler与sampling未修改。下一正式开发入口为Marker minimum ownership / display / edit contract；advanced snapping / conflict-feedback仍待处理。
 
 ### Git 状态说明
 
@@ -3606,5 +3650,8 @@ git diff --cached
 - Stage 7 Batch 6 最终范围固定为`PROJECT_STATUS.md`与上述四个源码文件，提交信息为`feat: add timeline region looping`。
 - Stage 7 Batch 7 开始基线：`main`、本地`origin/main`均为`e6d6ccc0d642ec194b02ae52e9f6eb39da5bfe69`，ahead 0、behind 0；closeout开始前只有`src/components/editor/SlideCanvas.tsx`与`src/utils/animationTimeline.ts`两个未暂存源码修改，暂存区为空，`PROJECT_STATUS.md`尚未修改。
 - Stage 7 Batch 7 最终范围固定为`PROJECT_STATUS.md`与上述两个源码文件，提交信息为`fix: align editor pre-trigger sampling`。
+- Stage 7 Batch 8A / 8B / 8C 共用开始基线：`main`、本地`origin/main`均为`30c57c25598baa5c8484bd1db6647110acf6b687`，ahead 0、behind 0；8A、8B与8C实现及closeout连续保留在同一未暂存工作树中。
+- Stage 7 Batch 8B closeout最终范围为`PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/AnimationTimeline.tsx`、`src/utils/animationTimeline.ts`与新增`src/components/editor/AnimationWorkspaceLayout.tsx`；暂存区为空，本次按用户要求不执行commit或push。
+- Stage 7 Batch 8C closeout最终提交范围固定为`PROJECT_STATUS.md`、`src/App.tsx`、`src/components/editor/AnimationTimeline.tsx`、`src/components/editor/SlideCanvas.tsx`、`src/utils/animationTimeline.ts`与新增`src/components/editor/AnimationWorkspaceLayout.tsx`；提交信息为`feat: complete Stage 7 Batch 8C animation text editing boundary`。
 
 未经用户允许，不得 commit 或 push。

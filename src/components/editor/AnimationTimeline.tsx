@@ -59,7 +59,7 @@ type AnimationTimelineProps = {
   clipPreviewStatus?: TimelinePlaybackStatus;
   clipPreviewAvailable?: boolean;
 
-  activeSequenceId?: string;
+  activeSequenceId: string | null;
   playbackDurationMs: number;
   region?: AnimationTimelineRegion;
   regionDisplayDurationMs: number;
@@ -71,6 +71,8 @@ type AnimationTimelineProps = {
   revealRequest?: AnimationTimelineRevealRequest;
 
   onCurrentTimeChange: (timeMs: number) => void;
+
+  onShowAllElements: () => void;
 
   onSelectSequence: (sequenceId: string) => void;
 
@@ -843,6 +845,7 @@ export function AnimationTimeline({
   selection,
   revealRequest,
   onCurrentTimeChange,
+  onShowAllElements,
   onSelectSequence,
   onSelectClip,
   onSelectTrack,
@@ -1252,7 +1255,7 @@ export function AnimationTimeline({
         <AnimationTimelineRegionInteractionBoundary
           contextKey={regionContextKey}
           slideId={hierarchyContextKey}
-          sequenceId={activeSequenceId}
+          sequenceId={activeSequenceId ?? undefined}
           durationMs={playbackDurationMs}
           pixelsPerMs={pixelsPerMs}
           region={region}
@@ -1261,12 +1264,7 @@ export function AnimationTimeline({
           onPausePlayback={onPausePlaybackForRegionEdit}
         >
           {(regionInteraction) => (
-            <section
-      className="mt-3 flex shrink-0 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white p-4 shadow-sm"
-      style={{
-        height: 260,
-      }}
-    >
+            <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex shrink-0 items-center justify-between gap-4">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.2em] text-violet-500">
@@ -1288,8 +1286,22 @@ export function AnimationTimeline({
               }`}
               title="Playhead 使用当前 Sequence 的本地时间"
             >
-              当前：{activeSequence?.label ?? "无可播放 Sequence"}
+              当前：{activeSequence?.label ?? "全部显示"}
             </span>
+
+            <button
+              type="button"
+              aria-pressed={activeSequenceId === null}
+              className={`rounded-full px-2.5 py-1 text-[10px] font-black transition ${
+                activeSequenceId === null
+                  ? "bg-violet-500 text-white shadow-sm"
+                  : "bg-violet-100 text-violet-600 hover:bg-violet-200"
+              }`}
+              onClick={onShowAllElements}
+              title="退出当前 Sequence 上下文，显示所有元素的静态设计状态"
+            >
+              全部显示
+            </button>
 
             {viewModel.protectedClipCount > 0 ? (
               <span
@@ -1754,7 +1766,7 @@ function AnimationTimelineClipHierarchyRows({
 }: {
   node: AnimationTimelineHierarchyClipNode;
   group: AnimationTimelineSequenceGroup;
-  activeSequenceId?: string;
+  activeSequenceId: string | null;
   activeAnimationContext?: ActiveAnimationContext;
   selection?: AnimationTimelineSelection;
   multiSelectMode: boolean;
@@ -2175,7 +2187,7 @@ function AnimationTimelineClipHierarchyRows({
       cancelClipPointerInteractionRef.current?.();
       cancelClipPointerInteractionRef.current = null;
     },
-    [],
+    [directlyEditable],
   );
 
   return (

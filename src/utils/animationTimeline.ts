@@ -667,10 +667,15 @@ export function getAnimationTimelineNormalSequenceIdForClip(
  */
 export function resolveAnimationTimelineActiveSequenceId(
   model: AnimationTimelineViewModel,
-  requestedSequenceId: string | null,
+  requestedSequenceId: string | null | undefined,
   activeClipId?: string,
 ) {
   const normalGroups = getNormalPlaybackSequenceGroups(model);
+
+  /** Null is the explicit editor-only All Elements View, not a stale request. */
+  if (requestedSequenceId === null) {
+    return null;
+  }
 
   if (
     requestedSequenceId &&

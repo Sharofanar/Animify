@@ -201,6 +201,7 @@ type SlideCanvasProps = {
     content: string,
     style?: Partial<SlideElement["style"]>,
   ) => void;
+  onRequestTextEditing?: (elementId: string) => void;
   slideSurfaceRef?: { current: HTMLDivElement | null };
   animationPreviewKey?: number;
 
@@ -259,6 +260,7 @@ export function SlideCanvas({
   onBeginElementChange,
   onFinishElementChange,
   onUpdateElementContent,
+  onRequestTextEditing,
   slideSurfaceRef,
   animationPreviewKey = 0,
   animationTimelineTimeMs,
@@ -830,7 +832,15 @@ export function SlideCanvas({
             onBeginChange={readOnly ? undefined : onBeginElementChange}
             onFinishChange={readOnly ? undefined : onFinishElementChange}
             onStartEditing={
-              bare || readOnly ? undefined : setEditingElementId
+              bare || readOnly
+                ? undefined
+                : (elementId) => {
+                    if (element.type === "text") {
+                      onRequestTextEditing?.(elementId);
+                    }
+
+                    setEditingElementId(elementId);
+                  }
             }
             onStopEditing={() => setEditingElementId(null)}
             onUpdateContent={readOnly ? undefined : onUpdateElementContent}

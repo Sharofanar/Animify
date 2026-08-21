@@ -12,6 +12,7 @@ import {
 import { ComponentLibrary } from "./components/editor/ComponentLibrary";
 import { AnimationFloatingPanel } from "./components/editor/AnimationFloatingPanel";
 import { AnimationTimeline } from "./components/editor/AnimationTimeline";
+import { AnimationWorkspaceLayout } from "./components/editor/AnimationWorkspaceLayout";
 import { PropertyPanel } from "./components/editor/PropertyPanel";
 import { ResourceCenter } from "./components/editor/ResourceCenter";
 import { DuplicateResourceReviewPanel } from "./components/editor/DuplicateResourceReviewPanel";
@@ -239,6 +240,7 @@ function hasFullscreenMediaElement() {
 }
 
 const PRESENTATION_WHEEL_TRIGGER_PX = 24;
+const MIN_EDITOR_CANVAS_SCALE = 0.24;
 const PRESENTATION_WHEEL_GESTURE_END_MS = 240;
 
 type PresentationWheelDirection = 1 | -1;
@@ -814,8 +816,8 @@ function App() {
    * presentation document and remains separate from active Clip navigation.
    */
   const [activeAnimationSequenceId, setActiveAnimationSequenceId] = useState<
-    string | null
-  >(null);
+    string | null | undefined
+  >(undefined);
 
   /** One transient Region bound to the current Slide + normal Sequence only. */
   const [animationTimelineRegion, setAnimationTimelineRegion] =
@@ -991,7 +993,7 @@ function App() {
       committedAnimationTimelineViewModel,
       activeSequenceStateBelongsToSlide
         ? activeAnimationSequenceId
-        : null,
+        : undefined,
       activeSequenceStateBelongsToSlide
         ? effectiveActiveAnimationContext?.clipId
         : undefined,
@@ -2181,6 +2183,9 @@ function App() {
 
   const slideCanvasHorizontalChrome = mode === "animation" ? 96 : 88;
   const slideCanvasVerticalChrome = mode === "animation" ? 142 : 132;
+  const canvasRequiredFitHeight = Math.ceil(
+    slideCanvasVerticalChrome + project.height * MIN_EDITOR_CANVAS_SCALE,
+  );
 
   const availableCanvasWidth = Math.max(
     1,
@@ -2201,7 +2206,7 @@ function App() {
   const fallbackCanvasScale = mode === "animation" ? 0.58 : 0.68;
 
   const canvasScale = Number.isFinite(fitScale)
-    ? Math.max(0.24, Math.min(maxCanvasScale, fitScale))
+    ? Math.max(MIN_EDITOR_CANVAS_SCALE, Math.min(maxCanvasScale, fitScale))
     : fallbackCanvasScale;
 
   function handleAddElement(
@@ -4807,6 +4812,24 @@ function App() {
   }
 
   /**
+   * Leave every Sequence-local animation context while preserving the user's
+   * independent Canvas and property-target selections.
+   */
+  function handleShowAllAnimationElements() {
+    if (resolvedActiveAnimationSequenceId === null) {
+      return;
+    }
+
+    clearAnimationClipPreview();
+    setAnimationTimelineTimingEditSession(null);
+    setAnimationTimelineRegion(null);
+    setActiveAnimationContext(null);
+    setAnimationTimelineSelection(null);
+    setAnimationTimelineRevealRequest(null);
+    setActiveAnimationSequenceId(null);
+  }
+
+  /**
    * A successful trigger/Step relocation may move the active Clip to another
    * normal Sequence while leaving its old Sequence alive. Re-read the committed
    * document so that explicit Clip intent follows the new owner immediately.
@@ -5240,6 +5263,28 @@ function App() {
   }
 
   /**
+   * Text content remains Canvas-owned. Animation mode only coordinates the
+   * playback boundary before the same double-click continues into local editing.
+   */
+  function handleRequestAnimationTextEditing(elementId: string) {
+    const targetElement = activeSlide?.elements.find(
+      (element) => element.id === elementId,
+    );
+
+    if (mode !== "animation" || targetElement?.type !== "text") {
+      return;
+    }
+
+    if (effectiveAnimationClipPreview) {
+      clearAnimationClipPreview();
+    } else if (timelinePlayback.status === "playing") {
+      timelinePlayback.pause();
+    }
+
+    setMode("edit");
+  }
+
+  /**
    * Change the local advanced-editor visibility preference.
    */
   function handleAnimationWorkspaceDisplayModeChange(
@@ -5561,8 +5606,12 @@ function App() {
             <div className="flex min-h-0 min-w-0 flex-col gap-3">
               <div className="mb-2 h-0" />
 
-              <div ref={canvasAreaRef} className="min-h-0 flex-1">
-                <SlideCanvas
+              <AnimationWorkspaceLayout
+                timelineVisible={mode === "animation"}
+                minimumCanvasHeight={canvasRequiredFitHeight}
+                canvas={
+                  <div ref={canvasAreaRef} className="h-full min-h-0">
+                    <SlideCanvas
                   slide={editorAnimationSlide ?? activeSlide}
                   assets={project.assets}
                   assetSources={assetSources}
@@ -5607,6 +5656,11 @@ function App() {
                       style,
                     })
                   }
+                  onRequestTextEditing={
+                    mode === "animation"
+                      ? handleRequestAnimationTextEditing
+                      : undefined
+                  }
                   onBeginElementChange={beginProjectHistoryGroup}
                   onFinishElementChange={finishProjectHistoryGroup}
                   slideSurfaceRef={slideSurfaceRef}
@@ -5626,10 +5680,12 @@ function App() {
                       ? editorTimelineSequenceSamples
                       : undefined
                   }
-                />
-              </div>
-              {mode === "animation" ? (
-                <AnimationTimeline
+                    />
+                  </div>
+                }
+                timeline={
+                  mode === "animation" ? (
+                    <AnimationTimeline
                   viewModel={animationTimelineViewModel}
                   hierarchyContextKey={project.activeSlideId}
                   currentTimeMs={animationTimelineCurrentTimeMs}
@@ -5640,9 +5696,7 @@ function App() {
                   }
                   clipPreviewStatus={selectedClipPreviewStatus}
                   clipPreviewAvailable={Boolean(selectedClipPreviewWindow)}
-                  activeSequenceId={
-                    resolvedActiveAnimationSequenceId ?? undefined
-                  }
+                  activeSequenceId={resolvedActiveAnimationSequenceId}
                   playbackDurationMs={animationPlaybackDurationMs}
                   region={reconciledAnimationTimelineRegion ?? undefined}
                   regionDisplayDurationMs={
@@ -5659,6 +5713,7 @@ function App() {
                   selection={resolvedAnimationTimelineSelection ?? undefined}
                   revealRequest={animationTimelineRevealRequest ?? undefined}
                   onCurrentTimeChange={handleAnimationTimelineTimeChange}
+                  onShowAllElements={handleShowAllAnimationElements}
                   onSelectSequence={handleSelectAnimationTimelineSequence}
                   onSelectClip={handleFocusTimelineClip}
                   onSelectTrack={handleSelectAnimationTimelineDescendant}
@@ -5701,8 +5756,10 @@ function App() {
                   onReplayClipPreview={handleReplaySelectedAnimationClip}
                   onStopClipPreview={handleStopAnimationClipPreview}
                   onStopPlayback={handleStopTimelinePlayback}
-                />
-              ) : null}
+                    />
+                  ) : null
+                }
+              />
             </div>
             {showPropertyPanel ? (
               <div className="min-h-0 overflow-y-auto pr-1">
